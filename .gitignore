@@ -2,10 +2,16 @@
 bin/
 firmware/*.a
 firmware/*.o
+*.o
+*.obj
 *.elf
 *.bin
 *.d
+.d/
 compile_commands.json
+temp.log
+temp.errors
+*.ini
 
 # PROS CLI
 .pros/

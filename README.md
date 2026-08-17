@@ -9,7 +9,8 @@ any mix in between.
 
 ## Status
 
-🚧 Early development (Phase 0 — foundation). Not yet ready for competition use.
+🚧 Early development (Phase 0 complete — Phase 1: chassis control underway). Not yet ready for
+competition use.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phase-by-phase development plan.
 

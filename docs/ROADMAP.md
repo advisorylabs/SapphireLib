@@ -19,22 +19,28 @@ Standalone PROS library for VEX V5, custom API, rewritten from StratagemV2.0 (pr
 
 ---
 
-## Phase 0 — Foundation & Repo Setup ⬅ *current*
+## Phase 0 — Foundation & Repo Setup
 **Goal:** A clean, buildable PROS project skeleton the whole team can pull and build on day one.
 
 - [x] Repo structure: `include/sapphirelib/`, `src/sapphirelib/`, `docs/`, `examples/`
 - [x] README, LICENSE, CONTRIBUTING, issue templates
 - [x] `.gitignore`, `.clang-format`
 - [x] CI workflow skeleton (build check)
-- [ ] PROS kernel template pulled locally and merged in (`pros conduct new`)
-- [ ] Decide C++ standard + namespace, confirm they compile cleanly against kernel
-- [ ] Basic logging/telemetry macro system (used by every later phase)
+- [x] PROS kernel template pulled locally and merged in (`pros conduct new`) — kernel@4.2.2 +
+      liblvgl@9.2.0, merged into repo root alongside `include/sapphirelib/` and `src/sapphirelib/`
+- [x] Decide C++ standard + namespace, confirm they compile cleanly against kernel — `gnu++20` /
+      `gnu17` pinned explicitly in the root `Makefile` (rather than trusting the kernel template's
+      bleeding-edge default of gnu++26/gnu23), `sapphirelib` namespace confirmed. Verified with a
+      manual `arm-none-eabi-g++ -c` compile of every `.cpp` against the merged kernel headers.
+- [x] Basic logging/telemetry macro system (used by every later phase) —
+      `include/sapphirelib/util/log.hpp`, `SAPPHIRELIB_LOG_{DEBUG,INFO,WARN,ERROR}`, wired into
+      `sapphirelib::initialize()`
 
 **Deliverable:** Empty library that compiles and links into a PROS project, with CI green.
 
 ---
 
-## Phase 1 — Chassis Control (MVP core)
+## Phase 1 — Chassis Control (MVP core) ⬅ *current*
 **Goal:** Reliable closed-loop drive and turn.
 
 - Motor group abstraction (wraps `pros::MotorGroup`, handles left/right sides, gearing, brake modes)
