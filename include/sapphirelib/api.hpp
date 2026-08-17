@@ -9,12 +9,16 @@
 
 #pragma once
 
+#include "sapphirelib/util/angle.hpp"
 #include "sapphirelib/util/log.hpp"
 #include "sapphirelib/version.hpp"
 
-// Phase 1+: chassis control headers will be added here
-// #include "sapphirelib/chassis/drivetrain.hpp"
-// #include "sapphirelib/control/pid.hpp"
+#include "sapphirelib/chassis/drivetrain_config.hpp"
+#include "sapphirelib/chassis/holonomic_drivetrain.hpp"
+#include "sapphirelib/chassis/motor_group.hpp"
+#include "sapphirelib/chassis/tank_drivetrain.hpp"
+#include "sapphirelib/control/joystick_curve.hpp"
+#include "sapphirelib/control/pid.hpp"
 
 // Phase 2+: odometry headers
 // #include "sapphirelib/odom/odometry.hpp"
