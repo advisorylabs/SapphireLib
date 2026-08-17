@@ -3,8 +3,7 @@
 namespace sapphirelib {
 
 void initialize() {
-    // Reserved for future setup as later phases land (logging init,
-    // background task startup, etc.)
+    SAPPHIRELIB_LOG_INFO("core", "SapphireLib v%s initialized", version());
 }
 
 } // namespace sapphirelib

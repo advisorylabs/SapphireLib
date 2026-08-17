@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "sapphirelib/util/log.hpp"
 #include "sapphirelib/version.hpp"
 
 // Phase 1+: chassis control headers will be added here
