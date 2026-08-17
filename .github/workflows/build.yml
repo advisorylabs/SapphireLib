@@ -31,3 +31,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y clang-format
           find include/sapphirelib src/sapphirelib -name '*.hpp' -o -name '*.cpp' \
             | xargs clang-format --dry-run --Werror
+
+      - name: Run host-side unit tests
+        run: |
+          for test in tests/*/*_test.cpp; do
+            name=$(basename "$test" .cpp)
+            src="src/sapphirelib/$(dirname "${test#tests/}")/$(basename "$test" _test.cpp).cpp"
+            g++ -std=c++20 -Wall -Iinclude "$test" "$src" -o "/tmp/$name"
+            "/tmp/$name"
+          done

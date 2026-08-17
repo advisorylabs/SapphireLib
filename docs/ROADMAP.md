@@ -43,13 +43,27 @@ Standalone PROS library for VEX V5, custom API, rewritten from StratagemV2.0 (pr
 ## Phase 1 — Chassis Control (MVP core) ⬅ *current*
 **Goal:** Reliable closed-loop drive and turn.
 
-- Motor group abstraction (wraps `pros::MotorGroup`, handles left/right sides, gearing, brake modes)
-- Generic PID controller class (kP/kI/kD, integral windup guard, derivative-on-measurement option, slew rate limiting)
-- Drivetrain class: `driveDistance()`, `turnToHeading()`, configurable exit conditions, timeout failsafe
-- Tank + arcade driver control modes with joystick curve/expo scaling
-- Unit-testable PID module
+- [x] Motor group abstraction (wraps `pros::MotorGroup`, handles per-side/per-corner grouping, gearing,
+      brake modes) — `sapphirelib::chassis::MotorGroup`
+- [x] Generic PID controller class (kP/kI/kD, integral windup guard, derivative-on-measurement option,
+      slew rate limiting) — `sapphirelib::PID`, unit tests in `tests/control/pid_test.cpp`
+- [x] Drivetrain classes: `driveDistance()`, `turnToHeading()`, configurable exit conditions, timeout
+      failsafe — `sapphirelib::chassis::TankDrivetrain` (2-side differential) and
+      `sapphirelib::chassis::HolonomicDrivetrain` (4-corner mecanum/X-drive), sharing
+      `DrivetrainConfig`/`ExitConditions`
+- [x] Tank + arcade + holonomic driver control modes with joystick curve/expo scaling —
+      `TankDrivetrain::tank()`/`arcade()`, `HolonomicDrivetrain::holonomic()`,
+      `sapphirelib::curveJoystick()` (cubic curve), unit tests in
+      `tests/control/joystick_curve_test.cpp`
+- [x] Unit-testable PID module (and angle-wrapping helper — `sapphirelib::wrapDegrees180`, unit tests in
+      `tests/util/angle_test.cpp`)
 
-**Deliverable:** Robot drives straight and turns to heading using only IMU + drive encoders — no tracking wheels required.
+**Deliverable:** Robot drives straight and turns to heading using only IMU + drive encoders — no tracking
+wheels required — on either a differential or a holonomic chassis. Implementation compiles cleanly
+against the kernel (verified via manual `arm-none-eabi-g++ -c`); **on-bot tuning and validation
+(drivePID/turnPID gains, headingCorrectionKP, wheel diameter/gear ratio for the actual chassis) is still
+outstanding** before this phase is truly done — see `examples/tank_chassis.cpp` and
+`examples/holonomic_chassis.cpp` for wiring examples to start from.
 
 ---
 
