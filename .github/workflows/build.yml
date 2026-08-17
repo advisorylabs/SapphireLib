@@ -1,0 +1,33 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PROS CLI
+        run: pip install pros-cli
+
+      - name: Pull PROS kernel + build
+        run: |
+          pros conduct new . --no-default-libs --force
+          pros make
+
+      - name: Check formatting
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang-format
+          find include/sapphirelib src/sapphirelib -name '*.hpp' -o -name '*.cpp' \
+            | xargs clang-format --dry-run --Werror

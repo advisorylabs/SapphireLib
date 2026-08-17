@@ -1,0 +1,28 @@
+# PROS / VEX build artifacts
+bin/
+firmware/*.a
+firmware/*.o
+*.elf
+*.bin
+*.d
+compile_commands.json
+
+# PROS CLI
+.pros/
+project.pros.bak
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build systems
+build/
+CMakeFiles/
+CMakeCache.txt
+
+# clangd
+.cache/
+compile_commands.json
