@@ -62,6 +62,10 @@ public:
 
     void stop(BrakeMode mode = BrakeMode::brake);
 
+    /// Current IMU heading in degrees (0-360, clockwise-positive), for
+    /// callers implementing field-centric ("headless") driver control.
+    double headingDeg() const;
+
 private:
     MotorGroup frontLeft_;
     MotorGroup frontRight_;
