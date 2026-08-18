@@ -40,7 +40,7 @@ Standalone PROS library for VEX V5, custom API, rewritten from StratagemV2.0 (pr
 
 ---
 
-## Phase 1 — Chassis Control (MVP core) ⬅ *current*
+## Phase 1 — Chassis Control (MVP core) — released as `v0.1.0`
 **Goal:** Reliable closed-loop drive and turn.
 
 - [x] Motor group abstraction (wraps `pros::MotorGroup`, handles per-side/per-corner grouping, gearing,
@@ -67,7 +67,7 @@ outstanding** before this phase is truly done — see `examples/tank_chassis.cpp
 
 ---
 
-## Phase 2 — Sensor Abstraction & Odometry
+## Phase 2 — Sensor Abstraction & Odometry ⬅ *current*
 **Goal:** Flexible, swappable localization system.
 
 - Sensor interface layer: `TrackingWheel` (optional, vertical or horizontal), `Imu`, drive encoders as fallback

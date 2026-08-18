@@ -46,6 +46,36 @@ pros make
 pros upload
 ```
 
+## Building the distributable template (release)
+
+The root `Makefile` is configured as a PROS library project (`IS_LIBRARY=1`, `LIBNAME=sapphirelib`),
+which enables PROS's built-in templating target. From a repo checkout with the kernel already pulled in
+(steps 1–3 above):
+
+```bash
+pros make template
+```
+
+This compiles `src/sapphirelib/**` into `bin/sapphirelib.a` and runs `pros c create-template` to stage a
+`template/` directory containing the public headers (`include/sapphirelib/**/*.hpp`) plus the compiled
+archive — this is what a consumer's `pros conduct apply` pulls in, so `src/sapphirelib/**` itself is never
+shipped. Zip the contents of the resulting `template/` directory and attach it to a GitHub Release (tag
+`v<version>`, matching `SAPPHIRELIB_VERSION` in `include/sapphirelib/version.hpp` and `VERSION` in the
+root `Makefile`) so others can download it and run:
+
+```bash
+pros conduct fetch path/to/sapphirelib@<version>.zip
+pros conduct apply sapphirelib
+```
+
+inside their own kernel project. Exact flag names can drift between PROS CLI versions — check
+`pros conduct --help` (or `pros c --help`) against what you have installed if a command above doesn't
+match.
+
+Since Phase 2+ isn't implemented yet, whatever is currently in `include/sapphirelib/` and
+`src/sapphirelib/` at release time — chassis, control, and util only — is the whole template. There's
+nothing extra to strip out to get a "drivetrain-only" release; that's just what exists right now.
+
 ## Updating the kernel later
 
 ```bash
