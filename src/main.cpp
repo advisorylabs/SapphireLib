@@ -1,5 +1,26 @@
+#include <cmath>
+
 #include "main.h"
 #include "sapphirelib/api.hpp"
+
+using sapphirelib::PID;
+using sapphirelib::chassis::DrivetrainConfig;
+using sapphirelib::chassis::ExitConditions;
+using sapphirelib::chassis::Gearset;
+using sapphirelib::chassis::HolonomicDrivetrain;
+
+namespace {
+
+constexpr std::uint8_t kImuPort = 10;
+constexpr double kJoystickCurve = 0.3;  // 0 = linear, 1 = full cubic
+constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+
+HolonomicDrivetrain* drivetrain = nullptr;
+
+// Heading at initialize() time, i.e. "field 0 degrees" for headless control.
+double startHeadingDeg = 0.0;
+
+}  // namespace
 
 /**
  * A callback function for LLEMU's center button.
@@ -30,6 +51,17 @@ void initialize() {
 	pros::lcd::register_btn1_cb(on_center_button);
 
 	sapphirelib::initialize();
+
+	static HolonomicDrivetrain chassis(
+	    /*frontLeftPort=*/-7, /*frontRightPort=*/4, /*backLeftPort=*/-8, /*backRightPort=*/3,
+	    Gearset::green, kImuPort,
+	    DrivetrainConfig{.wheelDiameterIn = 4.0, .externalGearRatio = 1.0, .headingCorrectionKP = 0.4},
+	    /*drivePIDConfig=*/
+	    PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.1}, .outputLimit = 12.0},
+	    /*turnPIDConfig=*/
+	    PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.02}, .outputLimit = 12.0});
+	drivetrain = &chassis;
+	startHeadingDeg = drivetrain->headingDeg();
 }
 
 /**
@@ -78,20 +110,33 @@ void autonomous() {}
  */
 void opcontrol() {
 	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::MotorGroup left_mg({1, -2, 3});    // Creates a motor group with forwards ports 1 & 3 and reversed port 2
-	pros::MotorGroup right_mg({-4, 5, -6});  // Creates a motor group with forwards port 5 and reversed ports 4 & 6
-
 
 	while (true) {
 		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
 
-		// Arcade control scheme
-		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
-		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		left_mg.move(dir - turn);                      // Sets left motor voltage
-		right_mg.move(dir + turn);                     // Sets right motor voltage
-		pros::delay(20);                               // Run for 20 ms then update
+		// Field-relative stick input: "forward" always means field 0 degrees
+		// (the heading captured in initialize()), not the robot's nose.
+		const double fieldThrottle =
+		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_Y) / 127.0, kJoystickCurve);
+		const double fieldStrafe =
+		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_X) / 127.0, kJoystickCurve);
+		const double turn =
+		    sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
+
+		// Rotate the field-relative stick vector into the robot's current
+		// frame by the heading it has picked up since initialize() — see
+		// HolonomicDrivetrain::headingDeg() for the clockwise-positive
+		// convention this matches.
+		const double headingDeltaRad =
+		    sapphirelib::wrapDegrees180(drivetrain->headingDeg() - startHeadingDeg) * kDegToRad;
+		const double cosHeading = std::cos(headingDeltaRad);
+		const double sinHeading = std::sin(headingDeltaRad);
+		const double throttle = fieldThrottle * cosHeading + fieldStrafe * sinHeading;
+		const double strafe = -fieldThrottle * sinHeading + fieldStrafe * cosHeading;
+
+		drivetrain->holonomic(throttle, strafe, turn);
+		pros::delay(20);
 	}
 }

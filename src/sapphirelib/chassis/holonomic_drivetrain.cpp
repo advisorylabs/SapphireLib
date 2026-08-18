@@ -42,7 +42,13 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
       imu_(imuPort),
       config_(config),
       drivePID_(drivePIDConfig),
-      turnPID_(turnPIDConfig) {}
+      turnPID_(turnPIDConfig) {
+    // Block until calibration finishes so get_heading() (used here and by
+    // driveDistance()/turnToHeading()/headingDeg()) is valid as soon as the
+    // constructor returns, instead of reading 0 until calibration happens to
+    // finish on its own.
+    imu_.reset(true);
+}
 
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
                                             double backRight) {
@@ -150,6 +156,8 @@ void HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) 
 
     stop();
 }
+
+double HolonomicDrivetrain::headingDeg() const { return imu_.get_heading(); }
 
 void HolonomicDrivetrain::stop(BrakeMode mode) {
     frontLeft_.setBrakeMode(mode);

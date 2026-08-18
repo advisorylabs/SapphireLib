@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make)",
+      "Read(//c/Users/**)",
+      "Read(//c/Users/Cody/AppData/Roaming/PROS/templates/**)",
+      "Bash(pros --version)",
+      "Bash(pros c *)",
+      "WebSearch",
+      "WebFetch(domain:www.vexforum.com)",
+      "Bash(pros upload *)",
+      "Bash(gh issue *)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
