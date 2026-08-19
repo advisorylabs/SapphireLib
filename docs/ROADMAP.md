@@ -70,14 +70,27 @@ outstanding** before this phase is truly done — see `examples/tank_chassis.cpp
 ## Phase 2 — Sensor Abstraction & Odometry ⬅ *current*
 **Goal:** Flexible, swappable localization system.
 
-- Sensor interface layer: `TrackingWheel` (optional, vertical or horizontal), `Imu`, drive encoders as fallback
-- Odometry configuration struct for each supported sensor combination
-- Odometry math per configuration (custom-written, not assuming tracking wheels are standard)
-- Pose class (x, y, heading) with documented field-coordinate convention
-- Background odometry task (PROS task at fixed Hz, thread-safe pose access)
-- Odometry calibration/tuning routine
+- [x] Sensor interface layer: `sapphirelib::odom::TrackingWheel` (abstract), implemented by
+      `RotationTrackingWheel` (dedicated tracking wheel via `pros::Rotation`) and
+      `MotorGroupTrackingWheel` (drive-encoder fallback, adapts `chassis::MotorGroup`)
+- [x] Odometry configuration struct for each supported sensor combination — `OdometryConfig`
+      (`verticalOffsetIn`/`horizontalOffsetIn`); which of the four combos is active is purely a
+      function of which `TrackingWheel` pointers are passed to `Odometry::Sensors`
+- [x] Odometry math per configuration (custom-written, not assuming tracking wheels are standard) —
+      `sapphirelib::odom::computeOdometryDelta()`, the standard tracking-wheel-and-IMU ("arc") method,
+      framework-agnostic and unit-tested in `tests/odom/odometry_math_test.cpp`
+- [x] Pose class (x, y, heading) with documented field-coordinate convention — `sapphirelib::odom::Pose`
+- [x] Background odometry task (PROS task at fixed Hz, thread-safe pose access) — `Odometry::startTask()`,
+      pose guarded by `pros::MutexVar<Pose>`
+- [x] Odometry calibration/tuning routine — `calibrateTrackingWheelOffsetIn()` (spin-in-place
+      calibration for a tracking wheel's offset from the tracking center)
 
-**Deliverable:** Accurate pose tracking on any supported sensor config, verified against a taped-out field.
+**Deliverable:** Accurate pose tracking on any supported sensor config, verified against a taped-out
+field. The odometry math is implemented and unit-tested for all four sensor configs (IMU + drive
+encoders only, IMU + vertical wheel, IMU + horizontal wheel, IMU + both), and compiles cleanly against
+the kernel; **on-bot verification against a taped-out field is still outstanding** for every config —
+the current test robot (`src/main.cpp`) has no tracking wheels wired up yet, so only the IMU +
+drive-encoder-fallback config can even be exercised on real hardware right now.
 
 ---
 
