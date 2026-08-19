@@ -20,8 +20,13 @@
 #include "sapphirelib/control/joystick_curve.hpp"
 #include "sapphirelib/control/pid.hpp"
 
-// Phase 2+: odometry headers
-// #include "sapphirelib/odom/odometry.hpp"
+#include "sapphirelib/odom/motor_group_tracking_wheel.hpp"
+#include "sapphirelib/odom/odometry.hpp"
+#include "sapphirelib/odom/odometry_config.hpp"
+#include "sapphirelib/odom/odometry_math.hpp"
+#include "sapphirelib/odom/pose.hpp"
+#include "sapphirelib/odom/rotation_tracking_wheel.hpp"
+#include "sapphirelib/odom/tracking_wheel.hpp"
 
 namespace sapphirelib {
 

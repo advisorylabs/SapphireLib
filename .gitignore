@@ -10,6 +10,7 @@
 bin/
 firmware/*.a
 firmware/*.o
+*.zip
 .vscode/
 .cache/
 compile_commands.json
