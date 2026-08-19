@@ -17,6 +17,9 @@
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/control/pid.hpp"
+#include "sapphirelib/motion/motion_config.hpp"
+#include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/odom/odometry.hpp"
 
 namespace sapphirelib::chassis {
 
@@ -63,6 +66,30 @@ public:
     /// "throttle" direction for holonomicFieldCentric(). Typically bound to a
     /// driver button so they can redefine "forward" mid-match.
     void resetFieldHeading();
+
+    /// Drives to field point (`xIn`, `yIn`), reading pose from `odometry`.
+    /// Doesn't control heading — a holonomic chassis can translate and
+    /// rotate independently, so if you also need a specific final heading,
+    /// use moveToPose() instead rather than chaining a turnToHeading()
+    /// after this. Blocks until settled or timed out, then stops.
+    void moveToPoint(double xIn, double yIn, const odom::Odometry& odometry, ExitConditions exit);
+
+    /// Drives to field pose (`xIn`, `yIn`, `headingDeg`), reading pose from
+    /// `odometry`. Unlike TankDrivetrain's boomerang controller, this just
+    /// runs moveToPoint()'s translation control and turnToHeading()'s
+    /// heading control at the same time — a holonomic chassis doesn't need
+    /// the carrot-point trick since translation and rotation don't
+    /// interfere with each other. Blocks until settled or timed out, then
+    /// stops.
+    void moveToPose(double xIn, double yIn, double headingDeg, const odom::Odometry& odometry,
+                     motion::PoseExitConditions exit);
+
+    /// Follows `path` using pure pursuit: repeatedly drives toward a point
+    /// `config.lookaheadIn` ahead on the path, at constant cruise voltage,
+    /// until within `config.finalApproachIn` of the path's last waypoint —
+    /// then hands off to moveToPoint() for a controlled, settled stop
+    /// there. Blocks until that final moveToPoint() settles or times out.
+    void followPath(const motion::Path& path, const odom::Odometry& odometry, motion::PursuitConfig config);
 
     /// Drives straight for `inches` (signed: negative reverses) using
     /// drive-encoder position PID with IMU-based heading correction. Only
