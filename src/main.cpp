@@ -1,5 +1,3 @@
-#include <cmath>
-
 #include "main.h"
 #include "sapphirelib/api.hpp"
 
@@ -13,12 +11,8 @@ namespace {
 
 constexpr std::uint8_t kImuPort = 10;
 constexpr double kJoystickCurve = 0.3;  // 0 = linear, 1 = full cubic
-constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 
 HolonomicDrivetrain* drivetrain = nullptr;
-
-// Heading at initialize() time, i.e. "field 0 degrees" for headless control.
-double startHeadingDeg = 0.0;
 
 }  // namespace
 
@@ -61,7 +55,8 @@ void initialize() {
 	    /*turnPIDConfig=*/
 	    PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.02}, .outputLimit = 12.0});
 	drivetrain = &chassis;
-	startHeadingDeg = drivetrain->headingDeg();
+	// HolonomicDrivetrain zeros its field heading at construction time, so
+	// holonomicFieldCentric() below is already field-centric from here on.
 }
 
 /**
@@ -116,8 +111,14 @@ void opcontrol() {
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
 
-		// Field-relative stick input: "forward" always means field 0 degrees
-		// (the heading captured in initialize()), not the robot's nose.
+		if (master.get_digital_new_press(DIGITAL_A)) {
+			// Redefine "forward" as whichever way the chassis is facing now.
+			drivetrain->resetFieldHeading();
+		}
+
+		// Field-relative stick input: "forward" always means the field
+		// heading captured at initialize() (or the last resetFieldHeading()
+		// press above), not the robot's nose.
 		const double fieldThrottle =
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_Y) / 127.0, kJoystickCurve);
 		const double fieldStrafe =
@@ -125,18 +126,7 @@ void opcontrol() {
 		const double turn =
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
 
-		// Rotate the field-relative stick vector into the robot's current
-		// frame by the heading it has picked up since initialize() — see
-		// HolonomicDrivetrain::headingDeg() for the clockwise-positive
-		// convention this matches.
-		const double headingDeltaRad =
-		    sapphirelib::wrapDegrees180(drivetrain->headingDeg() - startHeadingDeg) * kDegToRad;
-		const double cosHeading = std::cos(headingDeltaRad);
-		const double sinHeading = std::sin(headingDeltaRad);
-		const double throttle = fieldThrottle * cosHeading + fieldStrafe * sinHeading;
-		const double strafe = -fieldThrottle * sinHeading + fieldStrafe * cosHeading;
-
-		drivetrain->holonomic(throttle, strafe, turn);
+		drivetrain->holonomicFieldCentric(fieldThrottle, fieldStrafe, turn);
 		pros::delay(20);
 	}
 }

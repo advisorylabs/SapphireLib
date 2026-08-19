@@ -44,8 +44,25 @@ public:
     /// `turn` are each normalized [-1, 1], already curved by the caller if
     /// desired (see sapphirelib::curveJoystick()). The mix is normalized so
     /// no wheel exceeds full voltage without distorting the requested
-    /// direction.
+    /// direction. Robot-centric: `throttle`/`strafe` are relative to the
+    /// chassis's own nose. For field-centric ("headless") control, see
+    /// holonomicFieldCentric() instead.
     void holonomic(double throttle, double strafe, double turn);
+
+    /// Field-centric ("headless") driver control: `throttle`/`strafe` are
+    /// relative to the field, not the chassis — "throttle" always drives
+    /// toward the heading captured at construction time (or by the last
+    /// resetFieldHeading() call), regardless of which way the chassis is
+    /// currently facing. Internally rotates (throttle, strafe) into the
+    /// chassis's current frame by the heading delta, then mixes exactly like
+    /// holonomic(). `turn` is unaffected (rotation rate is frame-independent).
+    void holonomicFieldCentric(double throttle, double strafe, double turn);
+
+    /// Re-zeros the field-centric reference heading to the chassis's current
+    /// IMU heading — whichever way the chassis is facing now becomes the new
+    /// "throttle" direction for holonomicFieldCentric(). Typically bound to a
+    /// driver button so they can redefine "forward" mid-match.
+    void resetFieldHeading();
 
     /// Drives straight for `inches` (signed: negative reverses) using
     /// drive-encoder position PID with IMU-based heading correction. Only
@@ -75,6 +92,11 @@ private:
     DrivetrainConfig config_;
     PID drivePID_;
     PID turnPID_;
+
+    /// Field-centric reference heading — see resetFieldHeading(). Set to the
+    /// IMU heading at construction time, so holonomicFieldCentric() works out
+    /// of the box without callers needing to call resetFieldHeading() first.
+    double fieldHeadingZeroDeg_;
 
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);

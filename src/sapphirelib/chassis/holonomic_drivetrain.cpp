@@ -48,6 +48,7 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
     // constructor returns, instead of reading 0 until calibration happens to
     // finish on its own.
     imu_.reset(true);
+    fieldHeadingZeroDeg_ = imu_.get_heading();
 }
 
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
@@ -70,6 +71,22 @@ void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn)
     setWheelVoltages(mix.frontLeft / largest * 12.0, mix.frontRight / largest * 12.0,
                       mix.backLeft / largest * 12.0, mix.backRight / largest * 12.0);
 }
+
+void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, double turn) {
+    // Rotate the field-relative stick vector into the robot's current frame
+    // by the heading it has picked up since the last field-heading zero —
+    // matches pros::Imu::get_heading()'s clockwise-positive convention.
+    const double headingDeltaRad =
+        wrapDegrees180(imu_.get_heading() - fieldHeadingZeroDeg_) * (kPi / 180.0);
+    const double cosHeading = std::cos(headingDeltaRad);
+    const double sinHeading = std::sin(headingDeltaRad);
+    const double robotThrottle = throttle * cosHeading + strafe * sinHeading;
+    const double robotStrafe = -throttle * sinHeading + strafe * cosHeading;
+
+    holonomic(robotThrottle, robotStrafe, turn);
+}
+
+void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.get_heading(); }
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {
     const double wheelCircumferenceIn = config_.wheelDiameterIn * kPi;
