@@ -49,6 +49,13 @@ void opcontrol() {
     pros::Controller master(pros::E_CONTROLLER_MASTER);
 
     while (true) {
+        if (master.get_digital_new_press(DIGITAL_A)) {
+            // Redefine "forward" as whichever way the chassis is facing now
+            // — handy after defense spins the robot, or to re-square against
+            // a wall. Only relevant to holonomicFieldCentric() below.
+            drivetrain->resetFieldHeading();
+        }
+
         const double throttle =
             sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_Y) / 127.0, kJoystickCurve);
         const double strafe =
@@ -56,7 +63,11 @@ void opcontrol() {
         const double turn =
             sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
 
-        drivetrain->holonomic(throttle, strafe, turn);
+        // Field-centric ("headless") driver control: throttle/strafe always
+        // mean the same field direction regardless of chassis orientation.
+        // For robot-centric control instead, call drivetrain->holonomic(...)
+        // directly with the same arguments.
+        drivetrain->holonomicFieldCentric(throttle, strafe, turn);
         pros::delay(20);
     }
 }
