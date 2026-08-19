@@ -33,6 +33,9 @@
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
 
+#include "sapphirelib/sensors/imu.hpp"
+#include "sapphirelib/sensors/imu_scale_math.hpp"
+
 namespace sapphirelib {
 
 /**

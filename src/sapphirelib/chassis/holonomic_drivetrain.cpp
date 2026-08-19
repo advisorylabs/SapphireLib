@@ -35,22 +35,23 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
                                           std::int8_t backLeftPort, std::int8_t backRightPort,
                                           Gearset gearset, std::uint8_t imuPort,
                                           DrivetrainConfig config, PID::Config drivePIDConfig,
-                                          PID::Config turnPIDConfig)
+                                          PID::Config turnPIDConfig, double imuHeadingScale)
     : frontLeft_({frontLeftPort}, gearset),
       frontRight_({frontRightPort}, gearset),
       backLeft_({backLeftPort}, gearset),
       backRight_({backRightPort}, gearset),
-      imu_(imuPort),
+      imu_(imuPort, imuHeadingScale),
       config_(config),
       drivePID_(drivePIDConfig),
       turnPID_(turnPIDConfig) {
-    // Block until calibration finishes so get_heading() (used here and by
-    // driveDistance()/turnToHeading()/headingDeg()) is valid as soon as the
-    // constructor returns, instead of reading 0 until calibration happens to
-    // finish on its own.
-    imu_.reset(true);
-    fieldHeadingZeroDeg_ = imu_.get_heading();
+    // sensors::Imu's constructor already blocks until IMU calibration
+    // finishes, so getHeadingDeg() (used here and by
+    // driveDistance()/turnToHeading()/headingDeg()) is valid as soon as
+    // this constructor returns.
+    fieldHeadingZeroDeg_ = imu_.getHeadingDeg();
 }
+
+sensors::Imu& HolonomicDrivetrain::imu() { return imu_; }
 
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
                                             double backRight) {
@@ -78,7 +79,7 @@ void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, 
     // by the heading it has picked up since the last field-heading zero —
     // matches pros::Imu::get_heading()'s clockwise-positive convention.
     const double headingDeltaRad =
-        wrapDegrees180(imu_.get_heading() - fieldHeadingZeroDeg_) * (kPi / 180.0);
+        wrapDegrees180(imu_.getHeadingDeg() - fieldHeadingZeroDeg_) * (kPi / 180.0);
     const double cosHeading = std::cos(headingDeltaRad);
     const double sinHeading = std::sin(headingDeltaRad);
     const double robotThrottle = throttle * cosHeading + strafe * sinHeading;
@@ -87,7 +88,7 @@ void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, 
     holonomic(robotThrottle, robotStrafe, turn);
 }
 
-void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.get_heading(); }
+void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.getHeadingDeg(); }
 
 void HolonomicDrivetrain::moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
                                        ExitConditions exit) {
@@ -200,7 +201,7 @@ double HolonomicDrivetrain::degreesToInches(double degrees) const {
 }
 
 void HolonomicDrivetrain::driveDistance(double inches, ExitConditions exit) {
-    const double startHeading = imu_.get_heading();
+    const double startHeading = imu_.getHeadingDeg();
 
     frontLeft_.tarePosition();
     frontRight_.tarePosition();
@@ -224,7 +225,7 @@ void HolonomicDrivetrain::driveDistance(double inches, ExitConditions exit) {
 
         double correction = 0.0;
         if (config_.headingCorrectionKP != 0.0) {
-            const double headingError = wrapDegrees180(startHeading - imu_.get_heading());
+            const double headingError = wrapDegrees180(startHeading - imu_.getHeadingDeg());
             correction = config_.headingCorrectionKP * headingError;
         }
 
@@ -255,7 +256,7 @@ void HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) 
     const std::uint32_t start = lastTick;
 
     while (true) {
-        const double error = wrapDegrees180(headingDeg - imu_.get_heading());
+        const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
 
         // Same target/measurement=0 trick as TankDrivetrain::turnToHeading —
         // see that function's comment for why.
@@ -280,7 +281,7 @@ void HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) 
     stop();
 }
 
-double HolonomicDrivetrain::headingDeg() const { return imu_.get_heading(); }
+double HolonomicDrivetrain::headingDeg() { return imu_.getHeadingDeg(); }
 
 void HolonomicDrivetrain::stop(BrakeMode mode) {
     frontLeft_.setBrakeMode(mode);

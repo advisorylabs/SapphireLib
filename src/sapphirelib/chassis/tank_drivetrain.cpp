@@ -38,13 +38,16 @@ SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg) {
 TankDrivetrain::TankDrivetrain(std::initializer_list<std::int8_t> leftPorts,
                                 std::initializer_list<std::int8_t> rightPorts, Gearset gearset,
                                 std::uint8_t imuPort, DrivetrainConfig config,
-                                PID::Config drivePIDConfig, PID::Config turnPIDConfig)
+                                PID::Config drivePIDConfig, PID::Config turnPIDConfig,
+                                double imuHeadingScale)
     : left_(leftPorts, gearset),
       right_(rightPorts, gearset),
-      imu_(imuPort),
+      imu_(imuPort, imuHeadingScale),
       config_(config),
       drivePID_(drivePIDConfig),
       turnPID_(turnPIDConfig) {}
+
+sensors::Imu& TankDrivetrain::imu() { return imu_; }
 
 void TankDrivetrain::tank(double left, double right) {
     left_.moveVoltage(left * 12.0);
@@ -61,7 +64,7 @@ double TankDrivetrain::degreesToInches(double degrees) const {
 }
 
 void TankDrivetrain::driveDistance(double inches, ExitConditions exit) {
-    const double startHeading = imu_.get_heading();
+    const double startHeading = imu_.getHeadingDeg();
 
     left_.tarePosition();
     right_.tarePosition();
@@ -81,7 +84,7 @@ void TankDrivetrain::driveDistance(double inches, ExitConditions exit) {
 
         double correction = 0.0;
         if (config_.headingCorrectionKP != 0.0) {
-            const double headingError = wrapDegrees180(startHeading - imu_.get_heading());
+            const double headingError = wrapDegrees180(startHeading - imu_.getHeadingDeg());
             correction = config_.headingCorrectionKP * headingError;
         }
 
@@ -112,7 +115,7 @@ void TankDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) {
     const std::uint32_t start = lastTick;
 
     while (true) {
-        const double error = wrapDegrees180(headingDeg - imu_.get_heading());
+        const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
 
         // Feed the pre-wrapped error in as `target` against a fixed
         // `measurement` of 0, since PID doesn't know heading wraps at 360.

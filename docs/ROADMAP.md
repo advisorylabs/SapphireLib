@@ -94,7 +94,7 @@ drive-encoder-fallback config can even be exercised on real hardware right now.
 
 ---
 
-## Phase 3 — Motion Algorithms ⬅ *current*
+## Phase 3 — Motion Algorithms
 **Goal:** Pose-aware autonomous motion.
 
 - [x] `moveToPose()` — boomerang-style controller on `TankDrivetrain` (carrot-point curve into the final
@@ -121,16 +121,31 @@ defaults shipped here.
 
 ---
 
-## Phase 4 — Tuning & Developer Tools
+## Phase 4 — Tuning & Developer Tools ⬅ *current*
 **Goal:** Usable and debuggable by the whole team.
 
-- PID auto-tuning / live-tuning helper
-- Telemetry/logging to SD card or brain screen
-- Odometry visualization on brain screen
-- Autonomous selector (LVGL-based)
-- Startup diagnostic checks (sensor connectivity, motor faults)
+- [x] IMU multi-turn drift correction — `sapphirelib::sensors::Imu` wraps `pros::Imu`, tracking
+      cumulative (unwrapped) rotation and applying a calibrated `headingScale` before re-wrapping to a
+      0-360 heading (raw 0-360 readings can't be scaled directly — there's no sane way to "scale" a value
+      that wraps). `calibrateHeadingScale()` derives the scale from a known number of physical turns vs.
+      what the IMU measured over them; the cumulative-tracking math is pure and unit-tested in
+      `tests/sensors/imu_scale_math_test.cpp`. `TankDrivetrain`, `HolonomicDrivetrain`, and
+      `odom::Odometry` all take/use a `sensors::Imu` now instead of a raw `pros::Imu`, so the correction
+      applies everywhere heading is read, not just in one place — both drivetrains gained an
+      `imuHeadingScale` constructor parameter (default `1.0`, so this is non-breaking) and an `imu()`
+      accessor so an externally-built `Odometry` can share the same calibrated instance instead of
+      opening a second sensor object on the same physical port.
+- [ ] PID auto-tuning / live-tuning helper
+- [ ] Telemetry/logging to SD card or brain screen
+- [ ] Odometry visualization on brain screen
+- [ ] Autonomous selector (LVGL-based)
+- [ ] Startup diagnostic checks (sensor connectivity, motor faults)
 
-**Deliverable:** Tools that make tuning and debugging fast during practice.
+**Deliverable:** Tools that make tuning and debugging fast during practice. IMU drift correction is
+implemented and compiles clean against the kernel, but **the scale factor itself still needs to be
+calibrated on the real robot** (spin it a known number of turns, run `calibrateHeadingScale()`) before
+it does anything — the default `1.0` is a no-op. The rest of Phase 4 (auto-tune, telemetry, brain-screen
+odometry visualization, the LVGL autonomous selector, startup diagnostics) hasn't been started.
 
 ---
 

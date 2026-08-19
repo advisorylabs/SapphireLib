@@ -13,11 +13,11 @@
 #include <cstdint>
 #include <memory>
 
-#include "pros/imu.hpp"
 #include "pros/rtos.hpp"
 #include "sapphirelib/odom/odometry_config.hpp"
 #include "sapphirelib/odom/pose.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
+#include "sapphirelib/sensors/imu.hpp"
 
 namespace sapphirelib::odom {
 
@@ -32,8 +32,13 @@ namespace sapphirelib::odom {
 class Odometry {
 public:
     struct Sensors {
-        /// Required — every config needs a heading source.
-        pros::Imu* imu;
+        /// Required — every config needs a heading source. Pass a
+        /// sensors::Imu (not a raw pros::Imu) so heading readings get the
+        /// same multi-turn drift correction as the rest of SapphireLib — if
+        /// you're also using a TankDrivetrain/HolonomicDrivetrain, share its
+        /// imu() rather than constructing a second sensors::Imu on the same
+        /// port.
+        sensors::Imu* imu;
 
         /// Forward/back distance source. nullptr means no forward tracking
         /// at all (not a supported config — pass a MotorGroupTrackingWheel

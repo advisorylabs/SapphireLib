@@ -13,13 +13,13 @@
 
 #include <cstdint>
 
-#include "pros/imu.hpp"
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/control/pid.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/odom/odometry.hpp"
+#include "sapphirelib/sensors/imu.hpp"
 
 namespace sapphirelib::chassis {
 
@@ -32,16 +32,19 @@ namespace sapphirelib::chassis {
 class HolonomicDrivetrain {
 public:
     /// Constructs the drivetrain's motor groups and IMU directly from ports
-    /// (rather than accepting already-built MotorGroup/pros::Imu objects) —
-    /// pros::MotorGroup holds a non-copyable, non-movable mutex, so it can
-    /// only be constructed in place, never passed by value. Unlike
-    /// TankDrivetrain's per-side ports, corners take a single port each:
-    /// multi-motor mecanum/X-drive corners are rare in VRC, so a single
-    /// port keeps the common case simple.
+    /// (rather than accepting already-built MotorGroup/sensors::Imu
+    /// objects) — pros::MotorGroup holds a non-copyable, non-movable mutex,
+    /// so it can only be constructed in place, never passed by value.
+    /// Unlike TankDrivetrain's per-side ports, corners take a single port
+    /// each: multi-motor mecanum/X-drive corners are rare in VRC, so a
+    /// single port keeps the common case simple. `imuHeadingScale` corrects
+    /// for the V5 IMU's multi-turn drift — see sensors::Imu's class
+    /// comment; leave at the default 1.0 until you've run
+    /// sensors::calibrateHeadingScale() for this robot.
     HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t frontRightPort,
                          std::int8_t backLeftPort, std::int8_t backRightPort, Gearset gearset,
                          std::uint8_t imuPort, DrivetrainConfig config, PID::Config drivePIDConfig,
-                         PID::Config turnPIDConfig);
+                         PID::Config turnPIDConfig, double imuHeadingScale = 1.0);
 
     /// Driver control: `throttle` (forward/back), `strafe` (left/right), and
     /// `turn` are each normalized [-1, 1], already curved by the caller if
@@ -107,15 +110,22 @@ public:
     void stop(BrakeMode mode = BrakeMode::brake);
 
     /// Current IMU heading in degrees (0-360, clockwise-positive), for
-    /// callers implementing field-centric ("headless") driver control.
-    double headingDeg() const;
+    /// callers implementing field-centric ("headless") driver control. Not
+    /// const — see sensors::Imu::getHeadingDeg()'s call-frequency caveat.
+    double headingDeg();
+
+    /// The drivetrain's own calibrated IMU — exposed so you can share it
+    /// with an externally-constructed odom::Odometry (via
+    /// Odometry::Sensors::imu) instead of opening a second sensor object on
+    /// the same physical port.
+    sensors::Imu& imu();
 
 private:
     MotorGroup frontLeft_;
     MotorGroup frontRight_;
     MotorGroup backLeft_;
     MotorGroup backRight_;
-    pros::Imu imu_;
+    sensors::Imu imu_;
     DrivetrainConfig config_;
     PID drivePID_;
     PID turnPID_;
