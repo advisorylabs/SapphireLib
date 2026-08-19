@@ -49,6 +49,10 @@ TankDrivetrain::TankDrivetrain(std::initializer_list<std::int8_t> leftPorts,
 
 sensors::Imu& TankDrivetrain::imu() { return imu_; }
 
+PID& TankDrivetrain::drivePID() { return drivePID_; }
+
+PID& TankDrivetrain::turnPID() { return turnPID_; }
+
 void TankDrivetrain::tank(double left, double right) {
     left_.moveVoltage(left * 12.0);
     right_.moveVoltage(right * 12.0);

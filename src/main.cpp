@@ -1,3 +1,7 @@
+#include <cmath>
+#include <memory>
+#include <vector>
+
 #include "main.h"
 #include "sapphirelib/api.hpp"
 
@@ -6,31 +10,90 @@ using sapphirelib::chassis::DrivetrainConfig;
 using sapphirelib::chassis::ExitConditions;
 using sapphirelib::chassis::Gearset;
 using sapphirelib::chassis::HolonomicDrivetrain;
+using sapphirelib::chassis::MotorGroup;
+using sapphirelib::diag::DeviceKind;
+using sapphirelib::diag::SensorCheck;
+using sapphirelib::gui::AutonSelectorPage;
+using sapphirelib::gui::DiagnosticsPage;
+using sapphirelib::gui::Gui;
+using sapphirelib::gui::HomePage;
+using sapphirelib::gui::OdometryPage;
+using sapphirelib::gui::PidTunerPage;
+using sapphirelib::odom::MotorGroupTrackingWheel;
+using sapphirelib::odom::Odometry;
+using sapphirelib::odom::OdometryConfig;
+using sapphirelib::odom::Pose;
+using sapphirelib::tuning::autoTuneCost;
+using sapphirelib::tuning::measureOvershoot;
+using sapphirelib::tuning::runAndSample;
 
 namespace {
 
 constexpr std::uint8_t kImuPort = 10;
 constexpr double kJoystickCurve = 0.3;  // 0 = linear, 1 = full cubic
+constexpr double kWheelDiameterIn = 4.0;
 
 HolonomicDrivetrain* drivetrain = nullptr;
+Odometry* odometry = nullptr;
+AutonSelectorPage* autonSelector = nullptr;
+
+void doNothingAuton() {}
+
+void driveForwardAuton() { drivetrain->driveDistance(24.0); }
+
+// Round-trip test motions for PidTunerPage — repeated "Run Test" taps don't
+// walk the robot off the field, since each one returns to where it started.
+void driveTuningTest() {
+	drivetrain->driveDistance(24.0);
+	drivetrain->driveDistance(-24.0);
+}
+
+void turnTuningTest() {
+	drivetrain->turnToHeading(90.0);
+	drivetrain->turnToHeading(0.0);
+}
+
+// --- Auto-tune cost callbacks for PidTunerPage ---
+//
+// Each "leg" runs one bounded motion while sampling odometry, measures how
+// far it overshot the target (plus how far off it finished, in case it
+// undershot instead), and turns that into a single cost the Twiddle search
+// tries to minimize. The drive/turn cycles below each alternate between two
+// legs that return to roughly where they started, so repeated auto-tune
+// trials don't walk the robot off the field or spin it away from its
+// starting heading.
+
+constexpr double kDriveTestDistanceIn = 24.0;  // ~2ft, alternating +/-
+constexpr double kTurnTestHighHeadingDeg = 90.0;
+constexpr double kTurnTestLowHeadingDeg = 30.0;  // stays clear of the 0/360 seam
+constexpr double kAutoTuneFinalErrorWeight = 4.0;
+
+double measureDriveLegCost(double distanceIn) {
+	const Pose start = odometry->getPose();
+	const std::vector<double> samples = runAndSample(
+	    [&] { drivetrain->driveDistance(distanceIn); },
+	    [&] {
+		    const Pose pose = odometry->getPose();
+		    return std::hypot(pose.xIn - start.xIn, pose.yIn - start.yIn);
+	    });
+	return autoTuneCost(measureOvershoot(samples, std::fabs(distanceIn)), kAutoTuneFinalErrorWeight);
+}
+
+double driveAutoTuneCost() {
+	return measureDriveLegCost(kDriveTestDistanceIn) + measureDriveLegCost(-kDriveTestDistanceIn);
+}
+
+double measureTurnLegCost(double headingDeg) {
+	const std::vector<double> samples = runAndSample([&] { drivetrain->turnToHeading(headingDeg); },
+	                                                  [&] { return odometry->getPose().headingDeg; });
+	return autoTuneCost(measureOvershoot(samples, headingDeg), kAutoTuneFinalErrorWeight);
+}
+
+double turnAutoTuneCost() {
+	return measureTurnLegCost(kTurnTestHighHeadingDeg) + measureTurnLegCost(kTurnTestLowHeadingDeg);
+}
 
 }  // namespace
-
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
-	} else {
-		pros::lcd::clear_line(2);
-	}
-}
 
 /**
  * Runs initialization code. This occurs as soon as the program is started.
@@ -39,11 +102,6 @@ void on_center_button() {
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
-	pros::lcd::initialize();
-	pros::lcd::set_text(1, "Hello Sapphire User!");
-
-	pros::lcd::register_btn1_cb(on_center_button);
-
 	sapphirelib::initialize();
 
 	static HolonomicDrivetrain chassis(
@@ -57,6 +115,61 @@ void initialize() {
 	drivetrain = &chassis;
 	// HolonomicDrivetrain zeros its field heading at construction time, so
 	// holonomicFieldCentric() below is already field-centric from here on.
+
+	// Odometry needs a forward-distance source of its own — since
+	// HolonomicDrivetrain doesn't expose its internal motor groups, this
+	// reads the front-left drive motor a second time (safe: reading a
+	// motor's position from more than one object is fine, only *commanding*
+	// it from more than one would conflict) as the "IMU + drive encoders
+	// only" fallback config. Swap in a RotationTrackingWheel instead if you
+	// wire up a dedicated tracking wheel — see docs/ROADMAP.md Phase 2.
+	static MotorGroup forwardEncoder({-7}, Gearset::green);
+	static MotorGroupTrackingWheel forwardWheel(forwardEncoder, kWheelDiameterIn);
+	static Odometry odom(
+	    Odometry::Sensors{.imu = &chassis.imu(), .vertical = &forwardWheel, .horizontal = nullptr},
+	    OdometryConfig{.verticalOffsetIn = 0.0}, Pose{.xIn = 0.0, .yIn = 0.0, .headingDeg = 0.0});
+	odometry = &odom;
+	odometry->startTask();
+
+	// SapphireLib's default brain-screen GUI — fully replaces LLEMU (which
+	// wasn't loading here anyway). This is entirely opt-in: if you'd rather
+	// build your own UI, just don't construct a Gui — nothing else in the
+	// library depends on it. See sapphirelib::gui::Gui's class comment.
+	static Gui gui("SapphireLib - 96671H");
+
+	gui.addPage(std::make_unique<HomePage>(&chassis.imu()));
+
+	auto autonSelectorPage = std::make_unique<AutonSelectorPage>();
+	autonSelector = autonSelectorPage.get();
+	autonSelector->addRoutine("Do Nothing", &doNothingAuton);
+	autonSelector->addRoutine("Drive Forward", &driveForwardAuton);
+	gui.addPage(std::move(autonSelectorPage));
+
+	// Re-checks these every tick (not just at startup) — a sensor that
+	// works at power-on but gets knocked loose mid-match should still show
+	// up. Ports here must match the ones passed to the chassis above.
+	gui.addPage(std::make_unique<DiagnosticsPage>(
+	    std::vector<SensorCheck>{
+	        SensorCheck{.label = "Front-left drive motor", .port = -7, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Front-right drive motor", .port = 4, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Back-left drive motor", .port = -8, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Back-right drive motor", .port = 3, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "IMU", .port = static_cast<std::int8_t>(kImuPort), .expected = DeviceKind::imu},
+	    },
+	    &gui));
+
+	auto pidTunerPage = std::make_unique<PidTunerPage>();
+	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, &driveAutoTuneCost);
+	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, &turnAutoTuneCost);
+	gui.addPage(std::move(pidTunerPage));
+
+	// fieldWidthIn/fieldHeightIn default to a 144x144in (12x12ft) VRC field
+	// — pass your own for a different game/field size.
+	gui.addPage(std::make_unique<OdometryPage>(*odometry));
+
+	// Add your own pages here too — gui.addPage(std::make_unique<MyPage>(...))
+
+	gui.start();
 }
 
 /**
@@ -88,7 +201,9 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() {}
+void autonomous() {
+	if (autonSelector) autonSelector->run();
+}
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -107,10 +222,6 @@ void opcontrol() {
 	pros::Controller master(pros::E_CONTROLLER_MASTER);
 
 	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
-
 		if (master.get_digital_new_press(DIGITAL_A)) {
 			// Redefine "forward" as whichever way the chassis is facing now.
 			drivetrain->resetFieldHeading();
