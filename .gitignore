@@ -8,6 +8,8 @@
 
 # PROS
 bin/
+firmware/*.a
+firmware/*.o
 .vscode/
 .cache/
 compile_commands.json
@@ -15,3 +17,6 @@ temp.log
 temp.errors
 *.ini
 .d/
+
+# PROS CLI local state (machine-specific template cache paths)
+project.pros
