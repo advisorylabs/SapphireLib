@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/motion/pure_pursuit_math.hpp"
 #include "sapphirelib/util/angle.hpp"
 
 namespace sapphirelib::chassis {
@@ -11,6 +12,26 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kLoopDelayMs = 10;
+
+/// Heading error to steer toward `targetBearingDeg`, and which direction to
+/// drive: reverses instead of turning more than 90 degrees to face the
+/// target, same as driveDistance() accepting negative inches. Shared by
+/// moveToPoint() and moveToPose(), which only differ in how they compute
+/// targetBearingDeg (straight at the point vs. at a boomerang carrot point).
+struct SteeringError {
+    double headingErrorDeg;
+    double direction; // +1 forward, -1 reverse
+};
+
+SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg) {
+    double headingError = wrapDegrees180(targetBearingDeg - currentHeadingDeg);
+    double direction = 1.0;
+    if (std::fabs(headingError) > 90.0) {
+        headingError = wrapDegrees180(headingError - 180.0);
+        direction = -1.0;
+    }
+    return SteeringError{headingError, direction};
+}
 
 } // namespace
 
@@ -116,6 +137,127 @@ void TankDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) {
     }
 
     stop();
+}
+
+void TankDrivetrain::moveToPoint(double xIn, double yIn, const odom::Odometry& odometry, ExitConditions exit) {
+    drivePID_.reset();
+    turnPID_.reset();
+
+    std::uint32_t settledForMs = 0;
+    std::uint32_t lastTick = pros::millis();
+    const std::uint32_t start = lastTick;
+
+    while (true) {
+        const odom::Pose pose = odometry.getPose();
+        const double dxIn = xIn - pose.xIn;
+        const double dyIn = yIn - pose.yIn;
+        const double distanceIn = std::hypot(dxIn, dyIn);
+        const double targetBearingDeg = std::atan2(dxIn, dyIn) / kPi * 180.0;
+
+        const SteeringError steer = steerToward(targetBearingDeg, pose.headingDeg);
+        const double forwardOutput = steer.direction * drivePID_.update(distanceIn, 0.0);
+        const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
+
+        left_.moveVoltage(forwardOutput + turnOutput);
+        right_.moveVoltage(forwardOutput - turnOutput);
+
+        const std::uint32_t now = pros::millis();
+        if (distanceIn <= exit.errorThreshold) {
+            settledForMs += now - lastTick;
+            if (settledForMs >= exit.settleTimeMs) break;
+        } else {
+            settledForMs = 0;
+        }
+        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+
+        lastTick = now;
+        pros::delay(kLoopDelayMs);
+    }
+
+    stop();
+}
+
+void TankDrivetrain::moveToPose(double xIn, double yIn, double headingDeg, const odom::Odometry& odometry,
+                                 motion::PoseExitConditions exit) {
+    drivePID_.reset();
+    turnPID_.reset();
+
+    const double targetHeadingRad = headingDeg * kPi / 180.0;
+
+    std::uint32_t settledForMs = 0;
+    std::uint32_t lastTick = pros::millis();
+    const std::uint32_t start = lastTick;
+
+    while (true) {
+        const odom::Pose pose = odometry.getPose();
+        const double distanceToTargetIn = std::hypot(xIn - pose.xIn, yIn - pose.yIn);
+
+        // Boomerang carrot point: placed behind the target along its facing
+        // direction, receding toward the target itself as the chassis
+        // closes in — so it naturally curves into the target heading
+        // instead of driving straight in and point-turning at the end.
+        const double carrotOffsetIn = distanceToTargetIn * exit.boomerangLeadPct;
+        const double carrotXIn = xIn - carrotOffsetIn * std::sin(targetHeadingRad);
+        const double carrotYIn = yIn - carrotOffsetIn * std::cos(targetHeadingRad);
+
+        const double dxIn = carrotXIn - pose.xIn;
+        const double dyIn = carrotYIn - pose.yIn;
+        const double targetBearingDeg = std::atan2(dxIn, dyIn) / kPi * 180.0;
+
+        const SteeringError steer = steerToward(targetBearingDeg, pose.headingDeg);
+        const double forwardOutput = steer.direction * drivePID_.update(distanceToTargetIn, 0.0);
+        const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
+
+        left_.moveVoltage(forwardOutput + turnOutput);
+        right_.moveVoltage(forwardOutput - turnOutput);
+
+        const double headingErrorToFinalDeg = std::fabs(wrapDegrees180(headingDeg - pose.headingDeg));
+        const std::uint32_t now = pros::millis();
+        if (distanceToTargetIn <= exit.positionErrorThresholdIn &&
+            headingErrorToFinalDeg <= exit.headingErrorThresholdDeg) {
+            settledForMs += now - lastTick;
+            if (settledForMs >= exit.settleTimeMs) break;
+        } else {
+            settledForMs = 0;
+        }
+        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+
+        lastTick = now;
+        pros::delay(kLoopDelayMs);
+    }
+
+    stop();
+}
+
+void TankDrivetrain::followPath(const motion::Path& path, const odom::Odometry& odometry,
+                                 motion::PursuitConfig config) {
+    turnPID_.reset();
+
+    std::size_t segmentIndex = 0;
+    const motion::Waypoint& finalPoint = path.waypoints().back();
+
+    while (true) {
+        const odom::Pose pose = odometry.getPose();
+        const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
+        if (distToFinalIn <= config.finalApproachIn) break;
+
+        const motion::LookaheadResult lookahead =
+            motion::findLookaheadPoint(pose.xIn, pose.yIn, path, config.lookaheadIn, segmentIndex);
+        segmentIndex = lookahead.segmentIndex;
+
+        const double dxIn = lookahead.point.xIn - pose.xIn;
+        const double dyIn = lookahead.point.yIn - pose.yIn;
+        const double targetBearingDeg = std::atan2(dxIn, dyIn) / kPi * 180.0;
+        const double headingError = wrapDegrees180(targetBearingDeg - pose.headingDeg);
+        const double turnOutput = turnPID_.update(headingError, 0.0);
+
+        left_.moveVoltage(config.cruiseVoltage + turnOutput);
+        right_.moveVoltage(config.cruiseVoltage - turnOutput);
+
+        pros::delay(kLoopDelayMs);
+    }
+
+    moveToPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit);
 }
 
 void TankDrivetrain::stop(BrakeMode mode) {

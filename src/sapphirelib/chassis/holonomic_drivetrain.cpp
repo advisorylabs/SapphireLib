@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/motion/pure_pursuit_math.hpp"
 #include "sapphirelib/util/angle.hpp"
 
 namespace sapphirelib::chassis {
@@ -87,6 +88,111 @@ void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, 
 }
 
 void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.get_heading(); }
+
+void HolonomicDrivetrain::moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
+                                       ExitConditions exit) {
+    drivePID_.reset();
+
+    std::uint32_t settledForMs = 0;
+    std::uint32_t lastTick = pros::millis();
+    const std::uint32_t start = lastTick;
+
+    while (true) {
+        const odom::Pose pose = odometry.getPose();
+        const double dxIn = xIn - pose.xIn;
+        const double dyIn = yIn - pose.yIn;
+        const double distanceIn = std::hypot(dxIn, dyIn);
+
+        const double outputVolts = drivePID_.update(distanceIn, 0.0);
+        const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
+        const double scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
+
+        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, /*turn=*/0.0);
+
+        const std::uint32_t now = pros::millis();
+        if (distanceIn <= exit.errorThreshold) {
+            settledForMs += now - lastTick;
+            if (settledForMs >= exit.settleTimeMs) break;
+        } else {
+            settledForMs = 0;
+        }
+        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+
+        lastTick = now;
+        pros::delay(kLoopDelayMs);
+    }
+
+    stop();
+}
+
+void HolonomicDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
+                                      const odom::Odometry& odometry, motion::PoseExitConditions exit) {
+    drivePID_.reset();
+    turnPID_.reset();
+
+    std::uint32_t settledForMs = 0;
+    std::uint32_t lastTick = pros::millis();
+    const std::uint32_t start = lastTick;
+
+    while (true) {
+        const odom::Pose pose = odometry.getPose();
+        const double dxIn = xIn - pose.xIn;
+        const double dyIn = yIn - pose.yIn;
+        const double distanceIn = std::hypot(dxIn, dyIn);
+
+        const double outputVolts = drivePID_.update(distanceIn, 0.0);
+        const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
+        const double scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
+
+        const double headingError = wrapDegrees180(headingDeg - pose.headingDeg);
+        const double turnOutput = turnPID_.update(headingError, 0.0);
+
+        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, turnOutput / 12.0);
+
+        const std::uint32_t now = pros::millis();
+        if (distanceIn <= exit.positionErrorThresholdIn &&
+            std::fabs(headingError) <= exit.headingErrorThresholdDeg) {
+            settledForMs += now - lastTick;
+            if (settledForMs >= exit.settleTimeMs) break;
+        } else {
+            settledForMs = 0;
+        }
+        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+
+        lastTick = now;
+        pros::delay(kLoopDelayMs);
+    }
+
+    stop();
+}
+
+void HolonomicDrivetrain::followPath(const motion::Path& path, const odom::Odometry& odometry,
+                                      motion::PursuitConfig config) {
+    std::size_t segmentIndex = 0;
+    const motion::Waypoint& finalPoint = path.waypoints().back();
+
+    while (true) {
+        const odom::Pose pose = odometry.getPose();
+        const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
+        if (distToFinalIn <= config.finalApproachIn) break;
+
+        const motion::LookaheadResult lookahead =
+            motion::findLookaheadPoint(pose.xIn, pose.yIn, path, config.lookaheadIn, segmentIndex);
+        segmentIndex = lookahead.segmentIndex;
+
+        const double dxIn = lookahead.point.xIn - pose.xIn;
+        const double dyIn = lookahead.point.yIn - pose.yIn;
+        const double distanceIn = std::hypot(dxIn, dyIn);
+        const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
+        const double scale = distanceIn > 1e-6 ? config.cruiseVoltage / distanceIn : 0.0;
+
+        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, /*turn=*/0.0);
+
+        pros::delay(kLoopDelayMs);
+    }
+
+    moveToPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit);
+}
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {
     const double wheelCircumferenceIn = config_.wheelDiameterIn * kPi;

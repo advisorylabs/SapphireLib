@@ -28,6 +28,11 @@
 #include "sapphirelib/odom/rotation_tracking_wheel.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
 
+#include "sapphirelib/motion/motion_config.hpp"
+#include "sapphirelib/motion/motion_queue.hpp"
+#include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/motion/pure_pursuit_math.hpp"
+
 namespace sapphirelib {
 
 /**

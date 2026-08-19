@@ -67,7 +67,7 @@ outstanding** before this phase is truly done — see `examples/tank_chassis.cpp
 
 ---
 
-## Phase 2 — Sensor Abstraction & Odometry ⬅ *current*
+## Phase 2 — Sensor Abstraction & Odometry
 **Goal:** Flexible, swappable localization system.
 
 - [x] Sensor interface layer: `sapphirelib::odom::TrackingWheel` (abstract), implemented by
@@ -94,16 +94,30 @@ drive-encoder-fallback config can even be exercised on real hardware right now.
 
 ---
 
-## Phase 3 — Motion Algorithms
+## Phase 3 — Motion Algorithms ⬅ *current*
 **Goal:** Pose-aware autonomous motion.
 
-- `moveToPose()` — boomerang-style controller
-- `moveToPoint()` — simpler odom-based point drive
-- Path following (pure pursuit) for multi-point paths, if scope allows
-- Motion chaining / queuing
-- Async, non-blocking motion execution
+- [x] `moveToPose()` — boomerang-style controller on `TankDrivetrain` (carrot-point curve into the final
+      heading); on `HolonomicDrivetrain` it's just moveToPoint()'s translation control plus
+      turnToHeading()'s heading control running together, since a holonomic chassis doesn't need the
+      carrot trick — translation and rotation don't interfere with each other
+- [x] `moveToPoint()` — simpler odom-based point drive, on both drivetrains
+- [x] Path following (pure pursuit) for multi-point paths — `sapphirelib::motion::Path`/`PursuitConfig`,
+      `followPath()` on both drivetrains, lookahead-circle math unit-tested in
+      `tests/motion/pure_pursuit_math_test.cpp`
+- [x] Motion chaining / queuing — `sapphirelib::motion::MotionQueue`, runs any sequence of blocking
+      motions (driveDistance/turnToHeading/moveToPoint/moveToPose/followPath) one after another
+- [x] Async, non-blocking motion execution — `MotionQueue::run()` processes the queue on a background
+      PROS task; `autonomous()` can enqueue a full routine and keep running (e.g. to manage a mechanism)
+      instead of blocking
 
-**Deliverable:** Full odometry-driven autonomous motion.
+**Deliverable:** Full odometry-driven autonomous motion. Implemented and compiles cleanly against the
+kernel for all three motion primitives on both drivetrains, with the pure geometry (local-frame rotation,
+pure-pursuit lookahead search) unit-tested; **on-bot tuning and verification is still outstanding** —
+none of this has been driven on a real chassis yet, and depends on Phase 2's odometry also getting
+on-bot verification first (see Phase 2's caveat above). The boomerang lead percentage, pursuit lookahead
+distance, and the reused drive/turn PID gains in particular will need real tuning, not just the
+defaults shipped here.
 
 ---
 

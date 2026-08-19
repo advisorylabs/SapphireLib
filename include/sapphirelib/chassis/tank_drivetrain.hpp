@@ -17,6 +17,9 @@
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/control/pid.hpp"
+#include "sapphirelib/motion/motion_config.hpp"
+#include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/odom/odometry.hpp"
 
 namespace sapphirelib::chassis {
 
@@ -52,6 +55,32 @@ public:
     /// pros::Imu::get_heading()'s 0-360 range) using IMU heading PID.
     /// Blocks until settled or timed out, then stops.
     void turnToHeading(double headingDeg, ExitConditions exit = ExitConditions{2.0});
+
+    /// Drives to field point (`xIn`, `yIn`), reading pose from `odometry`.
+    /// Doesn't control final heading — arrives facing whatever direction the
+    /// approach left it (for that, see moveToPose()). Since a differential
+    /// chassis can't strafe, it turns to face the point (or, if the point is
+    /// behind it by more than 90 degrees, reverses instead of spinning all
+    /// the way around) while driving, rather than turning first and then
+    /// driving. Blocks until settled or timed out, then stops.
+    void moveToPoint(double xIn, double yIn, const odom::Odometry& odometry, ExitConditions exit);
+
+    /// Drives to field pose (`xIn`, `yIn`, `headingDeg`), reading pose from
+    /// `odometry`. Uses a boomerang controller: aims at a "carrot" point
+    /// placed behind the target along its facing direction (see
+    /// motion::PoseExitConditions::boomerangLeadPct) so the chassis curves
+    /// smoothly into the final heading instead of driving straight at the
+    /// point and point-turning at the end. Blocks until settled or timed
+    /// out, then stops.
+    void moveToPose(double xIn, double yIn, double headingDeg, const odom::Odometry& odometry,
+                     motion::PoseExitConditions exit);
+
+    /// Follows `path` using pure pursuit: repeatedly steers toward a point
+    /// `config.lookaheadIn` ahead on the path, at constant cruise voltage,
+    /// until within `config.finalApproachIn` of the path's last waypoint —
+    /// then hands off to moveToPoint() for a controlled, settled stop
+    /// there. Blocks until that final moveToPoint() settles or times out.
+    void followPath(const motion::Path& path, const odom::Odometry& odometry, motion::PursuitConfig config);
 
     void stop(BrakeMode mode = BrakeMode::brake);
 
