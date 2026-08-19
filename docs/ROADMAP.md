@@ -135,17 +135,83 @@ defaults shipped here.
       `imuHeadingScale` constructor parameter (default `1.0`, so this is non-breaking) and an `imu()`
       accessor so an externally-built `Odometry` can share the same calibrated instance instead of
       opening a second sensor object on the same physical port.
-- [ ] PID auto-tuning / live-tuning helper
-- [ ] Telemetry/logging to SD card or brain screen
-- [ ] Odometry visualization on brain screen
-- [ ] Autonomous selector (LVGL-based)
-- [ ] Startup diagnostic checks (sensor connectivity, motor faults)
+- [x] Brain-screen GUI system — `sapphirelib::gui`, a branded, tab-based UI built directly on the
+      vendored liblvgl (bypassing LLEMU, which is deprecated upstream and wasn't rendering for us
+      anyway). `Gui` owns a persistent branding header plus an `lv_tabview`; `Page` is the extension
+      point — implement `title()`/`build()`/`update()` to add a tab, whether it's one of SapphireLib's
+      own default pages or a team's custom one. Entirely opt-in: `sapphirelib::initialize()` never
+      touches the screen, so a team that wants their own UI (or none) just never constructs a `Gui` —
+      that's the whole "easy to disable/replace" story. Refresh runs on an `lv_timer`, not a `pros::Task`
+      — LVGL isn't thread-safe, and `lv_timer` callbacks are guaranteed to run on the same context LVGL's
+      own display task already drives, where a raw background task wouldn't be.
+  - [x] Odometry visualization on brain screen — `gui::OdometryPage`: numeric x/y/heading readout plus a
+        live position dot and heading line on a scaled field rectangle. The field/screen pixel-mapping
+        math is pure and unit-tested in `tests/gui/field_view_math_test.cpp`; the field size defaults to
+        a 144x144in (12x12ft) VRC field and is overridable per game.
+  - [x] Autonomous selector — `gui::AutonSelectorPage`: register named routines with `addRoutine()`, tap
+        one on the brain screen to select it, `autonomous()` calls `run()`. Built on `lv_list`, not a
+        hand-rolled layout.
+  - [x] Telemetry to brain screen (partial) — `gui::HomePage` shows battery %, competition
+        connection/mode status, and (if given an IMU) heading. SD-card logging is still open.
+  - [x] SapphireLib's own default pages plug into the same `addPage()` a team's custom pages use — the
+        requested "~2 custom pages, easy to expand" story is just calling `addPage()` a couple more
+        times; nothing about the framework caps or special-cases the built-in ones.
+- [x] PID tuning helper — `gui::PidTunerPage`, both manual and automatic:
+  - Manual: adjust a registered `PID`'s kP/kI/kD with +/- touch buttons and immediately re-run a bound
+    test motion to see the effect, no re-flashing. The entry selector (Drive/Turn/...) lives in a static
+    right-hand column of buttons, not a scrolling list — touch-scrolling on the brain screen proved
+    "incredibly hard" to use reliably in testing, so nothing on this page requires it.
+  - Automatic: `sapphirelib::tuning`, a Twiddle (coordinate-ascent hill-climbing) search over the three
+    gains — not automatic relay/Ziegler-Nichols tuning, which works by deliberately driving the system
+    into sustained oscillation; Twiddle instead just tries nearby gains and keeps whatever measurably
+    did better, so every trial is an ordinary bounded test motion. `measureOvershoot()` turns a series of
+    odometry samples taken during one test motion into an overshoot/final-error pair;
+    `tuning::runAndSample()` is what collects those samples (runs the motion on a background task while
+    polling odometry from the caller); `autoTuneCost()` combines them into the scalar Twiddle minimizes.
+    The Twiddle state machine itself, the cost function, and convergence are all pure and unit-tested in
+    `tests/tuning/auto_tune_math_test.cpp` — including a synthetic-cost-landscape test that actually
+    checks the search converges toward a known minimum, not just that it runs. `src/main.cpp` wires the
+    drive controller's test cycle to alternate forward/backward ~2ft (so repeated trials don't walk the
+    robot away) and the turn controller's to two safely-off-seam headings (90°/30°) since turning in
+    place doesn't accumulate drift the way driving does. Once a search finishes (or hits its 40-trial
+    cap), the tuned gains are applied immediately *and* displayed on the page so they can be copied into
+    source — this only tunes what's live in memory; it does not persist or hardcode anything itself.
+  - Gain adjustments, entry selection, and new test/auto-tune launches are all locked out while a run is
+    in progress, since a run and the tuning UI would otherwise read/write the same `PID` object
+    concurrently. Every run (manual test or auto-tune trial) happens on a background `pros::Task`, never
+    the LVGL-owning context, so it can't freeze the screen — and that task only ever writes to
+    `std::atomic` state (a running flag, or the gains it just tried), never an LVGL widget directly;
+    `update()` is the only thing that turns those atomics into label text. (An earlier draft of the
+    auto-tune path called into a label-setting helper directly from the background task — caught and
+    fixed before it shipped, by rereading the same thread-safety rule the rest of the page already
+    followed.) Both drivetrains gained `drivePID()`/`turnPID()` accessors (same pattern as `imu()`) so the
+    page can reach the controllers to tune.
+- [ ] Telemetry/logging to SD card
+- [x] Startup diagnostic checks (sensor connectivity) — `sapphirelib::diag`: `SensorCheck` (label + port +
+      expected `DeviceKind`) checked against PROS's device registry (`pros::c::registry_get_plugged_type`)
+      via `runCheck()`/`runChecks()`, without needing the device to already be constructed. `gui::
+      DiagnosticsPage` re-runs every registered check on every refresh tick — not just at startup, so a
+      sensor knocked loose mid-match shows up too — and lists failures with what's actually plugged in
+      instead; optionally raises a red header banner via `Gui::showWarning()`/`clearWarning()` so a bad
+      sensor is visible from any tab. Motor *fault* checking (stalls/over-temp, as opposed to wrong-port
+      detection) is still open — `MotorGroup` doesn't currently expose per-motor fault flags.
 
-**Deliverable:** Tools that make tuning and debugging fast during practice. IMU drift correction is
-implemented and compiles clean against the kernel, but **the scale factor itself still needs to be
-calibrated on the real robot** (spin it a known number of turns, run `calibrateHeadingScale()`) before
-it does anything — the default `1.0` is a no-op. The rest of Phase 4 (auto-tune, telemetry, brain-screen
-odometry visualization, the LVGL autonomous selector, startup diagnostics) hasn't been started.
+**Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
+been confirmed working on real hardware** — tab bar height has been bumped twice in response to that
+testing (28 → 31 → 43px total). `src/main.cpp` wires up `Gui` with `HomePage` + `AutonSelectorPage` +
+`DiagnosticsPage` + `PidTunerPage` + `OdometryPage` against the real test chassis, now including a real
+`odom::Odometry` (drive-encoder fallback) so the auto-tune and odometry pages have live data to work
+with. IMU drift correction, PID tuning (manual and automatic), and sensor-port diagnostics are all
+implemented and compile clean against the kernel, and — critically, now that a host compiler is available
+in this environment — every pure-math module's unit tests (`odom`, `motion`, `sensors`, `gui`, `tuning`)
+have actually been *run*, not just type-checked; that pass also caught and fixed a real bug where CI was
+failing to link three of them due to unlisted cross-module dependencies (see
+`.github/workflows/build.yml`). Still outstanding: the IMU scale factor needs calibrating on the real
+robot (default `1.0` is a no-op); the new `DiagnosticsPage`/`PidTunerPage` widgets, and the auto-tune flow
+specifically, haven't had on-hardware time yet the way the rest of the GUI has — the Twiddle search itself
+is verified against a synthetic cost function, but nothing about how well it performs against *real*
+overshoot noise, sensor lag, or the drive-encoder-fallback odometry's own accuracy has been checked; SD-card
+telemetry and motor-fault diagnostics haven't been started.
 
 ---
 

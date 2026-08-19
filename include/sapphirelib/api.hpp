@@ -36,6 +36,20 @@
 #include "sapphirelib/sensors/imu.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 
+#include "sapphirelib/diag/sensor_check.hpp"
+
+#include "sapphirelib/tuning/auto_tune_math.hpp"
+#include "sapphirelib/tuning/auto_tune_runner.hpp"
+
+#include "sapphirelib/gui/auton_selector_page.hpp"
+#include "sapphirelib/gui/diagnostics_page.hpp"
+#include "sapphirelib/gui/field_view_math.hpp"
+#include "sapphirelib/gui/gui.hpp"
+#include "sapphirelib/gui/home_page.hpp"
+#include "sapphirelib/gui/odometry_page.hpp"
+#include "sapphirelib/gui/page.hpp"
+#include "sapphirelib/gui/pid_tuner_page.hpp"
+
 namespace sapphirelib {
 
 /**

@@ -53,6 +53,10 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
 
 sensors::Imu& HolonomicDrivetrain::imu() { return imu_; }
 
+PID& HolonomicDrivetrain::drivePID() { return drivePID_; }
+
+PID& HolonomicDrivetrain::turnPID() { return turnPID_; }
+
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
                                             double backRight) {
     frontLeft_.moveVoltage(frontLeft);

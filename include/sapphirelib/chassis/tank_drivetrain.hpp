@@ -93,6 +93,14 @@ public:
     /// the same physical port.
     sensors::Imu& imu();
 
+    /// Exposes the internal drive/turn PID controllers for live tuning
+    /// (see gui::PidTunerPage) — adjusting gains through these takes effect
+    /// immediately on the next driveDistance()/turnToHeading()/moveTo*()
+    /// call, since they read gains fresh each update() rather than caching
+    /// them at construction.
+    PID& drivePID();
+    PID& turnPID();
+
 private:
     MotorGroup left_;
     MotorGroup right_;

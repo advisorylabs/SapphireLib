@@ -37,6 +37,17 @@ jobs:
           for test in tests/*/*_test.cpp; do
             name=$(basename "$test" .cpp)
             src="src/sapphirelib/$(dirname "${test#tests/}")/$(basename "$test" _test.cpp).cpp"
-            g++ -std=c++20 -Wall -Iinclude "$test" "$src" -o "/tmp/$name"
+            # Most tests are self-contained (test + its one matching source
+            # file), but a few pure-math modules call into another module
+            # (e.g. odometry_math.cpp calls sapphirelib::wrapDegrees180) —
+            # list those extra source files here, matching each test's own
+            # "Build & run" doc comment.
+            extra=""
+            case "$test" in
+              tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
+              tests/sensors/imu_scale_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
+              tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
+            esac
+            g++ -std=c++20 -Wall -Iinclude "$test" "$src" $extra -o "/tmp/$name"
             "/tmp/$name"
           done
