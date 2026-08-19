@@ -6,13 +6,13 @@
 namespace sapphirelib::odom {
 
 Odometry::Odometry(Sensors sensors, OdometryConfig config, Pose startPose)
-    : sensors_(sensors), config_(config), pose_(startPose), lastHeadingDeg_(sensors_.imu->get_heading()) {
+    : sensors_(sensors), config_(config), pose_(startPose), lastHeadingDeg_(sensors_.imu->getHeadingDeg()) {
     if (sensors_.vertical) lastVerticalIn_ = sensors_.vertical->getDistanceIn();
     if (sensors_.horizontal) lastHorizontalIn_ = sensors_.horizontal->getDistanceIn();
 }
 
 void Odometry::update() {
-    const double headingDeg = sensors_.imu->get_heading();
+    const double headingDeg = sensors_.imu->getHeadingDeg();
     const double verticalIn = sensors_.vertical ? sensors_.vertical->getDistanceIn() : lastVerticalIn_;
     const double horizontalIn =
         sensors_.horizontal ? sensors_.horizontal->getDistanceIn() : lastHorizontalIn_;
