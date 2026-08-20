@@ -81,7 +81,7 @@
                 "version": "4.2.2"
             },
             "liblvgl": {
-                "location": "C:\\Users\\codyp\\AppData\\Roaming\\PROS\\templates\\liblvgl@9.2.0",
+                "location": "C:\\Users\\Cody\\AppData\\Roaming\\PROS\\templates\\liblvgl@9.2.0",
                 "metadata": {
                     "origin": "pros-mainline"
                 },

@@ -35,7 +35,8 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
                                           std::int8_t backLeftPort, std::int8_t backRightPort,
                                           Gearset gearset, std::uint8_t imuPort,
                                           DrivetrainConfig config, PID::Config drivePIDConfig,
-                                          PID::Config turnPIDConfig, double imuHeadingScale)
+                                          PID::Config turnPIDConfig, double imuHeadingScale,
+                                          std::optional<AsteriskConfig> asterisk)
     : frontLeft_({frontLeftPort}, gearset),
       frontRight_({frontRightPort}, gearset),
       backLeft_({backLeftPort}, gearset),
@@ -43,7 +44,20 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
       imu_(imuPort, imuHeadingScale),
       config_(config),
       drivePID_(drivePIDConfig),
-      turnPID_(turnPIDConfig) {
+      turnPID_(turnPIDConfig),
+      asterisk_(asterisk) {
+    if (asterisk_) {
+        const std::initializer_list<std::int8_t> middleLeftPorts{asterisk_->middleLeftPort};
+        const std::initializer_list<std::int8_t> middleRightPorts{asterisk_->middleRightPort};
+        middleLeft_.emplace(middleLeftPorts, gearset);
+        middleRight_.emplace(middleRightPorts, gearset);
+
+        // Center wheels always coast when they're not actively driving
+        // straight or correcting drift — see setWheelVoltages().
+        middleLeft_->setBrakeMode(BrakeMode::coast);
+        middleRight_->setBrakeMode(BrakeMode::coast);
+    }
+
     // sensors::Imu's constructor already blocks until IMU calibration
     // finishes, so getHeadingDeg() (used here and by
     // driveDistance()/turnToHeading()/headingDeg()) is valid as soon as
@@ -57,12 +71,59 @@ PID& HolonomicDrivetrain::drivePID() { return drivePID_; }
 
 PID& HolonomicDrivetrain::turnPID() { return turnPID_; }
 
+void HolonomicDrivetrain::setDriftSource(const odom::TrackingWheel* verticalWheel) {
+    driftSource_ = verticalWheel;
+    if (driftSource_ != nullptr) {
+        lastDriftVerticalIn_ = driftSource_->getDistanceIn();
+        lastDriftTickMs_ = pros::millis();
+    }
+}
+
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
                                             double backRight) {
     frontLeft_.moveVoltage(frontLeft);
     frontRight_.moveVoltage(frontRight);
     backLeft_.moveVoltage(backLeft);
     backRight_.moveVoltage(backRight);
+
+    if (!asterisk_) return;
+
+    // Recover the pure throttle/strafe components from the four already-
+    // mixed corner voltages (see mixHolonomic()): summing all four cancels
+    // strafe and turn, leaving 4x throttle; this cross-combination cancels
+    // throttle and turn instead, leaving 4x strafe. This lets the center
+    // wheels react correctly no matter which call site produced the mix
+    // (holonomic() driver input, driveDistance()'s heading-corrected drive,
+    // or turnToHeading()'s turn-only mix, where both components are ~0 and
+    // the center wheels naturally coast).
+    const double throttleVolts = (frontLeft + frontRight + backLeft + backRight) / 4.0;
+    const double strafeVolts = (frontLeft - frontRight - backLeft + backRight) / 4.0;
+
+    double centerVolts = throttleVolts;
+
+    const bool strafingDominant = std::fabs(strafeVolts) > std::fabs(throttleVolts);
+    if (asterisk_->driftCorrectionKP != 0.0 && strafingDominant && driftSource_ != nullptr) {
+        const std::uint32_t now = pros::millis();
+        const double currentVerticalIn = driftSource_->getDistanceIn();
+        const double dtS = (now - lastDriftTickMs_) / 1000.0;
+        // Skip a zero/negative dt (first call) and unusually long gaps
+        // (e.g. a paused motion) rather than treat them as a drift spike.
+        if (dtS > 1e-3 && dtS < 1.0) {
+            const double driftRateInPerSec = (currentVerticalIn - lastDriftVerticalIn_) / dtS;
+            centerVolts -= asterisk_->driftCorrectionKP * driftRateInPerSec;
+        }
+        lastDriftVerticalIn_ = currentVerticalIn;
+        lastDriftTickMs_ = now;
+    } else if (driftSource_ != nullptr) {
+        // Not strafing-dominant right now — keep the baseline fresh so a
+        // stale gap doesn't read as a bogus drift spike next time we are.
+        lastDriftVerticalIn_ = driftSource_->getDistanceIn();
+        lastDriftTickMs_ = pros::millis();
+    }
+
+    centerVolts = std::clamp(centerVolts, -12.0, 12.0);
+    middleLeft_->moveVoltage(centerVolts);
+    middleRight_->moveVoltage(centerVolts);
 }
 
 void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn) {
@@ -296,6 +357,13 @@ void HolonomicDrivetrain::stop(BrakeMode mode) {
     frontRight_.brake();
     backLeft_.brake();
     backRight_.brake();
+
+    // Center wheels keep their own permanent coast brake mode (set at
+    // construction) regardless of `mode` — see AsteriskConfig.
+    if (asterisk_) {
+        middleLeft_->brake();
+        middleRight_->brake();
+    }
 }
 
 } // namespace sapphirelib::chassis

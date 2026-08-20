@@ -1,4 +1,3 @@
-#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -6,11 +5,11 @@
 #include "sapphirelib/api.hpp"
 
 using sapphirelib::PID;
+using sapphirelib::chassis::AsteriskConfig;
 using sapphirelib::chassis::DrivetrainConfig;
 using sapphirelib::chassis::ExitConditions;
 using sapphirelib::chassis::Gearset;
 using sapphirelib::chassis::HolonomicDrivetrain;
-using sapphirelib::chassis::MotorGroup;
 using sapphirelib::diag::DeviceKind;
 using sapphirelib::diag::SensorCheck;
 using sapphirelib::gui::AutonSelectorPage;
@@ -19,27 +18,39 @@ using sapphirelib::gui::Gui;
 using sapphirelib::gui::HomePage;
 using sapphirelib::gui::OdometryPage;
 using sapphirelib::gui::PidTunerPage;
-using sapphirelib::odom::MotorGroupTrackingWheel;
+using sapphirelib::motion::LocalOffset;
+using sapphirelib::motion::toLocalFrame;
 using sapphirelib::odom::Odometry;
 using sapphirelib::odom::OdometryConfig;
 using sapphirelib::odom::Pose;
-using sapphirelib::tuning::autoTuneCost;
-using sapphirelib::tuning::measureOvershoot;
-using sapphirelib::tuning::runAndSample;
+using sapphirelib::odom::RotationTrackingWheel;
+using sapphirelib::tuning::RelayTuneConfig;
 
 namespace {
 
-constexpr std::uint8_t kImuPort = 10;
+constexpr std::uint8_t kImuPort = 7;
 constexpr double kJoystickCurve = 0.3;  // 0 = linear, 1 = full cubic
-constexpr double kWheelDiameterIn = 4.0;
+
+// TODO: measure your actual tracking wheels and set this to their real
+// diameter (2.75in is just a common off-the-shelf omni size) — odometry
+// distance is directly proportional to this value.
+constexpr double kTrackingWheelDiameterIn = 2.75;
+constexpr std::int8_t kVerticalTrackingPort = 13;
+constexpr std::int8_t kHorizontalTrackingPort = 14;
 
 HolonomicDrivetrain* drivetrain = nullptr;
 Odometry* odometry = nullptr;
 AutonSelectorPage* autonSelector = nullptr;
+OdometryPage* odometryPage = nullptr;
+PidTunerPage* pidTunerPage = nullptr;
 
 void doNothingAuton() {}
 
 void driveForwardAuton() { drivetrain->driveDistance(24.0); }
+
+void turnTestingAuton() { drivetrain->turnToHeading(90.0);
+						  pros::delay(1000);
+						  drivetrain->turnToHeading(0.0); }
 
 // Round-trip test motions for PidTunerPage — repeated "Run Test" taps don't
 // walk the robot off the field, since each one returns to where it started.
@@ -53,44 +64,68 @@ void turnTuningTest() {
 	drivetrain->turnToHeading(0.0);
 }
 
-// --- Auto-tune cost callbacks for PidTunerPage ---
+// --- Ziegler-Nichols relay auto-tune configs for PidTunerPage ---
 //
-// Each "leg" runs one bounded motion while sampling odometry, measures how
-// far it overshot the target (plus how far off it finished, in case it
-// undershot instead), and turns that into a single cost the Twiddle search
-// tries to minimize. The drive/turn cycles below each alternate between two
-// legs that return to roughly where they started, so repeated auto-tune
-// trials don't walk the robot off the field or spin it away from its
-// starting heading.
+// Each factory below is called fresh every time "Auto-Tune" is tapped (not
+// once at startup) — see PidTunerPage::addController()'s
+// buildAutoTuneConfig doc comment for why: it lets `driveRelayConfig()`
+// capture the chassis's current pose/heading as the relay experiment's
+// reference frame each time, rather than a frame frozen at registration.
+//
+// TODO: relayAmplitude/setpointDelta/hysteresis below are conservative
+// starting points, not measured for this robot — a relay amplitude too
+// small to overcome friction/static load will make Auto-Tune report
+// "no clean oscillation"; too large risks a rougher, more aggressive
+// oscillation than necessary. Nudge them on the real robot and re-run.
 
-constexpr double kDriveTestDistanceIn = 24.0;  // ~2ft, alternating +/-
-constexpr double kTurnTestHighHeadingDeg = 90.0;
-constexpr double kTurnTestLowHeadingDeg = 30.0;  // stays clear of the 0/360 seam
-constexpr double kAutoTuneFinalErrorWeight = 4.0;
+constexpr double kDriveRelayAmplitudeVolts = 4.0;
+constexpr double kDriveRelaySetpointIn = 12.0;
+constexpr double kDriveRelayHysteresisIn = 0.5;
 
-double measureDriveLegCost(double distanceIn) {
-	const Pose start = odometry->getPose();
-	const std::vector<double> samples = runAndSample(
-	    [&] { drivetrain->driveDistance(distanceIn); },
-	    [&] {
-		    const Pose pose = odometry->getPose();
-		    return std::hypot(pose.xIn - start.xIn, pose.yIn - start.yIn);
-	    });
-	return autoTuneCost(measureOvershoot(samples, std::fabs(distanceIn)), kAutoTuneFinalErrorWeight);
+constexpr double kTurnRelayAmplitudeVolts = 4.0;
+constexpr double kTurnRelaySetpointDeg = 90.0;
+constexpr double kTurnRelayHysteresisDeg = 2.0;
+
+constexpr std::uint32_t kAutoTuneTimeoutMs = 8000;
+
+RelayTuneConfig driveRelayConfig() {
+	// Captured by value into `measure` below, so every sample during this
+	// one experiment reads distance traveled along *this* run's starting
+	// heading — not the live heading, which open-loop relay driving (no
+	// heading correction while the relay bypasses drivePID_) can let drift
+	// slightly over the experiment.
+	const Pose reference = odometry->getPose();
+
+	return RelayTuneConfig{
+	    .actuate = [](double v) { drivetrain->holonomic(v / 12.0, 0.0, 0.0); },
+	    .measure =
+	        [reference] {
+		        const Pose pose = odometry->getPose();
+		        const LocalOffset local = toLocalFrame(pose.xIn - reference.xIn, pose.yIn - reference.yIn,
+		                                               reference.headingDeg);
+		        return local.forwardIn;
+	        },
+	    .relayAmplitude = kDriveRelayAmplitudeVolts,
+	    .setpointDelta = kDriveRelaySetpointIn,
+	    .hysteresis = kDriveRelayHysteresisIn,
+	    .timeoutMs = kAutoTuneTimeoutMs,
+	};
 }
 
-double driveAutoTuneCost() {
-	return measureDriveLegCost(kDriveTestDistanceIn) + measureDriveLegCost(-kDriveTestDistanceIn);
-}
-
-double measureTurnLegCost(double headingDeg) {
-	const std::vector<double> samples = runAndSample([&] { drivetrain->turnToHeading(headingDeg); },
-	                                                  [&] { return odometry->getPose().headingDeg; });
-	return autoTuneCost(measureOvershoot(samples, headingDeg), kAutoTuneFinalErrorWeight);
-}
-
-double turnAutoTuneCost() {
-	return measureTurnLegCost(kTurnTestHighHeadingDeg) + measureTurnLegCost(kTurnTestLowHeadingDeg);
+RelayTuneConfig turnRelayConfig() {
+	return RelayTuneConfig{
+	    .actuate = [](double v) { drivetrain->holonomic(0.0, 0.0, v / 12.0); },
+	    // Cumulative (unwrapped) heading, not getHeadingDeg()'s 0-360
+	    // reading — so "start + setpointDelta" stays a simple, always-
+	    // reachable linear target regardless of where the chassis happens
+	    // to be pointed when Auto-Tune is tapped, instead of needing to
+	    // dodge the 0/360 seam by hand.
+	    .measure = [] { return drivetrain->imu().getCumulativeHeadingDeg(); },
+	    .relayAmplitude = kTurnRelayAmplitudeVolts,
+	    .setpointDelta = kTurnRelaySetpointDeg,
+	    .hysteresis = kTurnRelayHysteresisDeg,
+	    .timeoutMs = kAutoTuneTimeoutMs,
+	};
 }
 
 }  // namespace
@@ -104,32 +139,56 @@ double turnAutoTuneCost() {
 void initialize() {
 	sapphirelib::initialize();
 
+	// Asterisk drivetrain: the standard 4 mecanum/X-drive corners plus a
+	// straight-facing 5th/6th center wheel pair (middle-left/middle-right)
+	// that add power during forward/backward driving and correct forward/
+	// back drift while strafing — see AsteriskConfig and setDriftSource()
+	// below. All right-side motors are physically mounted reversed.
 	static HolonomicDrivetrain chassis(
-	    /*frontLeftPort=*/-7, /*frontRightPort=*/4, /*backLeftPort=*/-8, /*backRightPort=*/3,
+	    /*frontLeftPort=*/-3, /*frontRightPort=*/8, /*backLeftPort=*/-17, /*backRightPort=*/10,
 	    Gearset::green, kImuPort,
 	    DrivetrainConfig{.wheelDiameterIn = 4.0, .externalGearRatio = 1.0, .headingCorrectionKP = 0.4},
 	    /*drivePIDConfig=*/
 	    PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.1}, .outputLimit = 12.0},
 	    /*turnPIDConfig=*/
-	    PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.02}, .outputLimit = 12.0});
+	    PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.02}, .outputLimit = 12.0},
+	    /*imuHeadingScale=*/1.0,
+	    /*asterisk=*/
+	    // TODO: driftCorrectionKP starts conservative (volts per in/sec of
+	    // sensed drift) — tune it up on the real robot until sideways drift
+	    // is corrected without the center wheels fighting an intentional
+	    // strafe.
+	    AsteriskConfig{.middleLeftPort = -2, .middleRightPort = 9, .driftCorrectionKP = 0.5});
 	drivetrain = &chassis;
 	// HolonomicDrivetrain zeros its field heading at construction time, so
 	// holonomicFieldCentric() below is already field-centric from here on.
 
-	// Odometry needs a forward-distance source of its own — since
-	// HolonomicDrivetrain doesn't expose its internal motor groups, this
-	// reads the front-left drive motor a second time (safe: reading a
-	// motor's position from more than one object is fine, only *commanding*
-	// it from more than one would conflict) as the "IMU + drive encoders
-	// only" fallback config. Swap in a RotationTrackingWheel instead if you
-	// wire up a dedicated tracking wheel — see docs/ROADMAP.md Phase 2.
-	static MotorGroup forwardEncoder({-7}, Gearset::green);
-	static MotorGroupTrackingWheel forwardWheel(forwardEncoder, kWheelDiameterIn);
+	// Dedicated tracking wheels on their own rotation sensors — the "IMU +
+	// both wheels" odometry config (see Odometry's class comment).
+	//
+	// Vertical is reversed (negative port): on this chassis, the sensor's
+	// raw positive direction is backward — confirmed by driving forward and
+	// watching Y decrease instead of increase on the Odom page — so this
+	// negation isn't a stylistic choice, it's required for Odometry's
+	// forward/backward sign to actually match the chassis's forward
+	// direction. If you re-mount or swap this sensor, re-check this.
+	static RotationTrackingWheel verticalWheel(-kVerticalTrackingPort, kTrackingWheelDiameterIn);
+	static RotationTrackingWheel horizontalWheel(kHorizontalTrackingPort, kTrackingWheelDiameterIn);
 	static Odometry odom(
-	    Odometry::Sensors{.imu = &chassis.imu(), .vertical = &forwardWheel, .horizontal = nullptr},
-	    OdometryConfig{.verticalOffsetIn = 0.0}, Pose{.xIn = 0.0, .yIn = 0.0, .headingDeg = 0.0});
+	    Odometry::Sensors{.imu = &chassis.imu(), .vertical = &verticalWheel, .horizontal = &horizontalWheel},
+	    // TODO: verticalOffsetIn/horizontalOffsetIn default to 0 — measure
+	    // (or run calibrateTrackingWheelOffsetIn()) for the real mounting
+	    // offsets from the tracking center.
+	    OdometryConfig{.verticalOffsetIn = 3.59, .horizontalOffsetIn = 4.18},
+	    Pose{.xIn = 0.0, .yIn = 0.0, .headingDeg = 0.0});
 	odometry = &odom;
 	odometry->startTask();
+
+	// Center wheels read the same vertical tracking wheel Odometry uses to
+	// detect forward/back drift while strafing — reading a sensor from two
+	// places is safe, only commanding a motor from two places would
+	// conflict.
+	chassis.setDriftSource(&verticalWheel);
 
 	// SapphireLib's default brain-screen GUI — fully replaces LLEMU (which
 	// wasn't loading here anyway). This is entirely opt-in: if you'd rather
@@ -143,6 +202,7 @@ void initialize() {
 	autonSelector = autonSelectorPage.get();
 	autonSelector->addRoutine("Do Nothing", &doNothingAuton);
 	autonSelector->addRoutine("Drive Forward", &driveForwardAuton);
+	autonSelector->addRoutine("Turn Testing", &turnTestingAuton);
 	gui.addPage(std::move(autonSelectorPage));
 
 	// Re-checks these every tick (not just at startup) — a sensor that
@@ -150,22 +210,38 @@ void initialize() {
 	// up. Ports here must match the ones passed to the chassis above.
 	gui.addPage(std::make_unique<DiagnosticsPage>(
 	    std::vector<SensorCheck>{
-	        SensorCheck{.label = "Front-left drive motor", .port = -7, .expected = DeviceKind::motor},
-	        SensorCheck{.label = "Front-right drive motor", .port = 4, .expected = DeviceKind::motor},
-	        SensorCheck{.label = "Back-left drive motor", .port = -8, .expected = DeviceKind::motor},
-	        SensorCheck{.label = "Back-right drive motor", .port = 3, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Front-left drive motor", .port = -3, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Front-right drive motor", .port = 8, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Back-left drive motor", .port = -17, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Back-right drive motor", .port = 10, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Middle-left drive motor", .port = -2, .expected = DeviceKind::motor},
+	        SensorCheck{.label = "Middle-right drive motor", .port = 9, .expected = DeviceKind::motor},
 	        SensorCheck{.label = "IMU", .port = static_cast<std::int8_t>(kImuPort), .expected = DeviceKind::imu},
+	        SensorCheck{.label = "Vertical tracking wheel", .port = kVerticalTrackingPort, .expected = DeviceKind::rotation},
+	        SensorCheck{.label = "Horizontal tracking wheel", .port = kHorizontalTrackingPort, .expected = DeviceKind::rotation},
 	    },
 	    &gui));
 
-	auto pidTunerPage = std::make_unique<PidTunerPage>();
-	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, &driveAutoTuneCost);
-	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, &turnAutoTuneCost);
-	gui.addPage(std::move(pidTunerPage));
+	auto pidTunerPageOwned = std::make_unique<PidTunerPage>();
+	pidTunerPage = pidTunerPageOwned.get();
+	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, &driveRelayConfig);
+	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, &turnRelayConfig);
+	gui.addPage(std::move(pidTunerPageOwned));
 
 	// fieldWidthIn/fieldHeightIn default to a 144x144in (12x12ft) VRC field
 	// — pass your own for a different game/field size.
-	gui.addPage(std::make_unique<OdometryPage>(*odometry));
+	auto odometryPageOwned = std::make_unique<OdometryPage>(*odometry);
+	odometryPage = odometryPageOwned.get();
+	// "Calibrate Offsets" button: spins the chassis in place (via the
+	// drivetrain's own holonomic() turn axis, so it stays robot-centric
+	// regardless of field heading) and derives verticalOffsetIn/
+	// horizontalOffsetIn from how far the tracking wheels move over a known
+	// rotation — replaces the hand-measured 3.5/5.5 placeholders above with
+	// a calibrated value applied straight to the running Odometry.
+	odometryPage->enableOffsetCalibration(
+	    chassis.imu(), &verticalWheel, &horizontalWheel,
+	    [](double turn) { drivetrain->holonomic(0.0, 0.0, turn); });
+	gui.addPage(std::move(odometryPageOwned));
 
 	// Add your own pages here too — gui.addPage(std::make_unique<MyPage>(...))
 
@@ -226,6 +302,9 @@ void opcontrol() {
 			// Redefine "forward" as whichever way the chassis is facing now.
 			drivetrain->resetFieldHeading();
 		}
+		if ((master.get_digital_new_press(DIGITAL_B)) && (master.get_digital_new_press(DIGITAL_DOWN))) {
+			autonSelector->run();
+		}
 
 		// Field-relative stick input: "forward" always means the field
 		// heading captured at initialize() (or the last resetFieldHeading()
@@ -236,6 +315,21 @@ void opcontrol() {
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_X) / 127.0, kJoystickCurve);
 		const double turn =
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
+
+		// Skip driving from the sticks while a background GUI routine
+		// (OdometryPage's offset calibration, or a PidTunerPage test/auto-
+		// tune run) is driving the chassis on its own — otherwise this
+		// loop's every-tick call below would immediately overwrite that
+		// routine's commanded voltage with whatever the (likely centered)
+		// sticks read, breaking the routine (see
+		// OdometryPage::isCalibrating()'s comment for the failure mode in
+		// detail).
+		const bool backgroundRoutineActive = (odometryPage && odometryPage->isCalibrating()) ||
+		                                     (pidTunerPage && pidTunerPage->isRunning());
+		if (backgroundRoutineActive) {
+			pros::delay(20);
+			continue;
+		}
 
 		drivetrain->holonomicFieldCentric(fieldThrottle, fieldStrafe, turn);
 		pros::delay(20);

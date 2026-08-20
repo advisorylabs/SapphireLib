@@ -1,33 +1,37 @@
 #include "sapphirelib/tuning/auto_tune_runner.hpp"
 
-#include <atomic>
-
 #include "pros/rtos.hpp"
 
 namespace sapphirelib::tuning {
 
-std::vector<double> runAndSample(const std::function<void()>& motion, const std::function<double()>& sample,
-                                 std::uint32_t samplePeriodMs) {
-    std::atomic<bool> done{false};
+std::vector<RelaySample> runRelayExperiment(const RelayTuneConfig& config) {
+    std::vector<RelaySample> samples;
 
-    // Safe to capture motion/done by reference: this function blocks below
-    // until the task signals done, so its stack frame — and everything on
-    // it — outlives the task.
-    pros::Task task([&motion, &done] {
-        motion();
-        done.store(true);
-    });
+    const std::uint32_t startMs = pros::millis();
+    const double target = config.measure() + config.setpointDelta;
+    double relayOutput = 0.0;
 
-    std::vector<double> samples;
-    samples.push_back(sample());
-    while (!done.load()) {
-        pros::delay(samplePeriodMs);
-        samples.push_back(sample());
+    while (pros::millis() - startMs < config.timeoutMs) {
+        const double measurement = config.measure();
+        const double error = target - measurement;
+
+        // Only flip the relay once error crosses to the opposite side of
+        // the hysteresis band — inside the band, keep whatever sign it
+        // last had (matters most right at startup, before the relay has
+        // picked a side at all, and at each crossing, where sensor noise
+        // would otherwise cause rapid re-switching).
+        if (error > config.hysteresis) {
+            relayOutput = config.relayAmplitude;
+        } else if (error < -config.hysteresis) {
+            relayOutput = -config.relayAmplitude;
+        }
+
+        config.actuate(relayOutput);
+        samples.push_back(RelaySample{.timeMs = pros::millis() - startMs, .value = measurement});
+        pros::delay(config.samplePeriodMs);
     }
-    // One last sample right after completion, in case the motion settled
-    // between the final periodic sample and done becoming visible here.
-    samples.push_back(sample());
 
+    config.actuate(0.0);
     return samples;
 }
 

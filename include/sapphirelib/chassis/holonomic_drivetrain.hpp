@@ -3,8 +3,9 @@
  *
  * Closed-loop holonomic (mecanum / X-drive) drivetrain: four independently
  * driven corner wheels mixed for forward/strafe/turn. Built on IMU heading +
- * drive motor encoders — no tracking wheels required. For a 2-side
- * differential chassis, see TankDrivetrain instead.
+ * drive motor encoders — no tracking wheels required. Optionally adds a
+ * 5th/6th "Asterisk" pair of center wheels — see AsteriskConfig. For a
+ * 2-side differential chassis, see TankDrivetrain instead.
  *
  * Team 96671H — Hitmen
  */
@@ -12,6 +13,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
@@ -19,6 +21,7 @@
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/odom/odometry.hpp"
+#include "sapphirelib/odom/tracking_wheel.hpp"
 #include "sapphirelib/sensors/imu.hpp"
 
 namespace sapphirelib::chassis {
@@ -41,10 +44,14 @@ public:
     /// for the V5 IMU's multi-turn drift — see sensors::Imu's class
     /// comment; leave at the default 1.0 until you've run
     /// sensors::calibrateHeadingScale() for this robot.
+    /// `asterisk` adds the 5th/6th center wheels described on
+    /// AsteriskConfig — leave at std::nullopt for a standard 4-motor
+    /// holonomic chassis.
     HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t frontRightPort,
                          std::int8_t backLeftPort, std::int8_t backRightPort, Gearset gearset,
                          std::uint8_t imuPort, DrivetrainConfig config, PID::Config drivePIDConfig,
-                         PID::Config turnPIDConfig, double imuHeadingScale = 1.0);
+                         PID::Config turnPIDConfig, double imuHeadingScale = 1.0,
+                         std::optional<AsteriskConfig> asterisk = std::nullopt);
 
     /// Driver control: `throttle` (forward/back), `strafe` (left/right), and
     /// `turn` are each normalized [-1, 1], already curved by the caller if
@@ -128,6 +135,15 @@ public:
     PID& drivePID();
     PID& turnPID();
 
+    /// Attaches the forward/back TrackingWheel (typically the same
+    /// RotationTrackingWheel passed to Odometry::Sensors::vertical) that the
+    /// Asterisk center wheels use to detect drift while strafing — see
+    /// AsteriskConfig::driftCorrectionKP. No-op if the drivetrain wasn't
+    /// constructed with an `asterisk` config. Reading a TrackingWheel from
+    /// more than one object is safe (only *commanding* a device from more
+    /// than one place would conflict).
+    void setDriftSource(const odom::TrackingWheel* verticalWheel);
+
 private:
     MotorGroup frontLeft_;
     MotorGroup frontRight_;
@@ -142,6 +158,17 @@ private:
     /// IMU heading at construction time, so holonomicFieldCentric() works out
     /// of the box without callers needing to call resetFieldHeading() first.
     double fieldHeadingZeroDeg_;
+
+    /// Asterisk center wheels — unset (std::nullopt/empty) for a standard
+    /// 4-motor holonomic chassis. See AsteriskConfig.
+    std::optional<AsteriskConfig> asterisk_;
+    std::optional<MotorGroup> middleLeft_;
+    std::optional<MotorGroup> middleRight_;
+
+    /// Drift-correction state — see setDriftSource() and setWheelVoltages().
+    const odom::TrackingWheel* driftSource_ = nullptr;
+    double lastDriftVerticalIn_ = 0.0;
+    std::uint32_t lastDriftTickMs_ = 0;
 
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);

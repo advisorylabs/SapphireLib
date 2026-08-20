@@ -12,6 +12,7 @@ Odometry::Odometry(Sensors sensors, OdometryConfig config, Pose startPose)
 }
 
 void Odometry::update() {
+    const OdometryConfig config = *config_.lock();
     const double headingDeg = sensors_.imu->getHeadingDeg();
     const double verticalIn = sensors_.vertical ? sensors_.vertical->getDistanceIn() : lastVerticalIn_;
     const double horizontalIn =
@@ -19,7 +20,7 @@ void Odometry::update() {
 
     const PoseDelta delta = computeOdometryDelta(
         lastHeadingDeg_, headingDeg, verticalIn - lastVerticalIn_, horizontalIn - lastHorizontalIn_,
-        config_.verticalOffsetIn, config_.horizontalOffsetIn);
+        config.verticalOffsetIn, config.horizontalOffsetIn);
 
     lastHeadingDeg_ = headingDeg;
     lastVerticalIn_ = verticalIn;
@@ -34,6 +35,10 @@ void Odometry::update() {
 Pose Odometry::getPose() const { return *pose_.lock(); }
 
 void Odometry::setPose(Pose pose) { *pose_.lock() = pose; }
+
+OdometryConfig Odometry::getConfig() const { return *config_.lock(); }
+
+void Odometry::setConfig(OdometryConfig config) { *config_.lock() = config; }
 
 void Odometry::startTask(std::uint32_t periodMs) {
     task_ = std::make_unique<pros::Task>(

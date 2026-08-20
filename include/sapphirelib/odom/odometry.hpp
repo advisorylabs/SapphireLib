@@ -67,13 +67,23 @@ public:
     /// position/heading before autonomous.
     void setPose(Pose pose);
 
+    /// Thread-safe config read — e.g. to preserve one axis's offset while
+    /// recalibrating the other.
+    OdometryConfig getConfig() const;
+
+    /// Thread-safe config overwrite — e.g. to apply a freshly calibrated
+    /// tracking wheel offset (see odom::calibrateTrackingWheelOffsetIn() /
+    /// gui::OdometryPage::enableOffsetCalibration()) without reconstructing
+    /// Odometry. Takes effect on the next update().
+    void setConfig(OdometryConfig config);
+
     /// Starts a background pros::Task that calls update() every `periodMs`.
     /// Call at most once per Odometry instance.
     void startTask(std::uint32_t periodMs = 10);
 
 private:
     Sensors sensors_;
-    OdometryConfig config_;
+    mutable pros::MutexVar<OdometryConfig> config_;
     mutable pros::MutexVar<Pose> pose_;
     double lastHeadingDeg_;
     double lastVerticalIn_ = 0.0;

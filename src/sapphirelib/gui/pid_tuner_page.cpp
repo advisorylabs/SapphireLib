@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <limits>
 #include <utility>
 
 #include "pros/rtos.hpp"
@@ -31,18 +30,6 @@ constexpr std::int32_t kSelectorButtonW = 88;
 constexpr std::int32_t kSelectorButtonH = 32;
 constexpr std::int32_t kSelectorRowHeight = 36;
 
-// Auto-tune search bounds — a hard cap on trials matters more than
-// Twiddle's own step-size convergence check, since a flat or noisy cost
-// landscape (plausible on real hardware, where every trial is a physical
-// motion with sensor noise) could otherwise keep the search running
-// indefinitely.
-constexpr int kMaxAutoTuneIterations = 40;
-constexpr double kAutoTuneStepTolerance = 1e-3;
-constexpr double kAutoTuneStepFraction = 0.3;
-constexpr double kAutoTuneMinStepP = 0.05;
-constexpr double kAutoTuneMinStepI = 0.01;
-constexpr double kAutoTuneMinStepD = 0.01;
-
 lv_obj_t* makeIconButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, const char* text,
                          lv_event_cb_t cb, void* userData) {
     lv_obj_t* button = lv_button_create(parent);
@@ -61,6 +48,8 @@ void styleSelectorButton(lv_obj_t* button) {
 }
 
 } // namespace
+
+bool PidTunerPage::isRunning() const { return testRunning_.load(); }
 
 const char* PidTunerPage::title() const { return "PID"; }
 
@@ -128,12 +117,12 @@ void PidTunerPage::build(lv_obj_t* container) {
 }
 
 void PidTunerPage::addController(std::string name, PID& pid, std::function<void()> runTest,
-                                 std::function<double()> autoTuneCost) {
+                                 std::function<tuning::RelayTuneConfig()> buildAutoTuneConfig) {
     auto entry = std::make_unique<Entry>();
     entry->name = std::move(name);
     entry->pid = &pid;
     entry->runTest = std::move(runTest);
-    entry->autoTuneCost = std::move(autoTuneCost);
+    entry->buildAutoTuneConfig = std::move(buildAutoTuneConfig);
 
     if (container_) {
         entry->selectorButton = lv_button_create(container_);
@@ -223,60 +212,42 @@ void PidTunerPage::runSelectedAutoTune() {
     if (entries_.empty() || testRunning_.load()) return;
 
     Entry* entry = entries_[selectedIndex_].get();
-    if (!entry->autoTuneCost) return;
+    if (!entry->buildAutoTuneConfig) return;
 
     testRunning_.store(true);
     autoTuneActive_.store(true);
     resultsReady_.store(false);
+    autoTuneFailed_.store(false);
 
     pros::Task([this, entry] {
-        const PIDGains startGains = entry->pid->gains();
-        const PIDGains stepSizes{
-            .kP = std::max(kAutoTuneMinStepP, startGains.kP * kAutoTuneStepFraction),
-            .kI = std::max(kAutoTuneMinStepI, startGains.kI * kAutoTuneStepFraction),
-            .kD = std::max(kAutoTuneMinStepD, startGains.kD * kAutoTuneStepFraction),
-        };
-        tuning::TwiddleState state = tuning::makeTwiddleState(startGains, stepSizes);
+        // Built fresh on this task, not at registration time — lets the
+        // caller's factory capture "here" (current position/heading) as
+        // the relay experiment's reference frame each time this runs.
+        const tuning::RelayTuneConfig config = entry->buildAutoTuneConfig();
+        const std::vector<tuning::RelaySample> samples = tuning::runRelayExperiment(config);
+        const tuning::RelayOscillation oscillation = tuning::analyzeRelayOscillation(samples);
 
-        // Twiddle's internal `params` can hold an as-yet-unconfirmed trial
-        // right after reportCost() returns (it always perturbs ahead for
-        // the *next* index before coming back to us) — so the gains it's
-        // holding when the loop ends aren't necessarily the best ones it
-        // found. Track the best (gains, cost) pair independently instead
-        // of trusting the search state's final snapshot.
-        PIDGains bestGains = startGains;
-        double bestCost = std::numeric_limits<double>::infinity();
+        if (oscillation.ok) {
+            const tuning::UltimateParams ultimate =
+                tuning::ultimateParamsFromRelay(config.relayAmplitude, oscillation);
+            const PIDGains gains = tuning::zieglerNicholsGains(ultimate);
 
-        const auto testCurrent = [&] {
-            const PIDGains testedGains = tuning::currentGains(state);
-            entry->pid->setGains(testedGains);
-            // Only writer of displayed*_ while this task is running (see
-            // the class comment above testRunning_) — safe alongside
-            // update()'s concurrent reads of the same atomics.
-            this->setDisplayedGains(testedGains);
-            const double cost = entry->autoTuneCost();
-            if (cost < bestCost) {
-                bestCost = cost;
-                bestGains = testedGains;
-            }
-            tuning::reportCost(state, cost);
-        };
-
-        testCurrent(); // baseline
-        int iteration = 0;
-        while (tuning::totalStepSize(state) > kAutoTuneStepTolerance &&
-              iteration < kMaxAutoTuneIterations) {
-            testCurrent();
-            ++iteration;
+            entry->pid->setGains(gains);
+            // Only writer of displayed*_/tuned*_ while this task is
+            // running (see the class comment above testRunning_) — safe
+            // alongside update()'s concurrent reads of the same atomics.
+            this->setDisplayedGains(gains);
+            this->tunedP_.store(gains.kP);
+            this->tunedI_.store(gains.kI);
+            this->tunedD_.store(gains.kD);
+            this->tunedUltimateGain_.store(ultimate.ultimateGain);
+            this->tunedUltimatePeriodMs_.store(ultimate.ultimatePeriodMs);
+            this->resultsReady_.store(true);
+        } else {
+            // Left the PID's gains untouched — nothing measured well enough
+            // to trust, so nothing gets applied.
+            this->autoTuneFailed_.store(true);
         }
-
-        entry->pid->setGains(bestGains);
-        this->setDisplayedGains(bestGains);
-
-        this->tunedP_.store(bestGains.kP);
-        this->tunedI_.store(bestGains.kI);
-        this->tunedD_.store(bestGains.kD);
-        this->resultsReady_.store(true);
 
         this->autoTuneActive_.store(false);
         this->testRunning_.store(false);
@@ -285,11 +256,18 @@ void PidTunerPage::runSelectedAutoTune() {
 
 void PidTunerPage::update() {
     if (resultsReady_.load()) {
-        char buf[72];
-        std::snprintf(buf, sizeof(buf), "Tuned - kP: %.3f  kI: %.3f  kD: %.3f  (hardcode these)",
-                      tunedP_.load(), tunedI_.load(), tunedD_.load());
+        char buf[96];
+        std::snprintf(buf, sizeof(buf),
+                      "Tuned - kP: %.3f  kI: %.3f  kD: %.3f  (Ku=%.3f Tu=%.0fms, hardcode these)",
+                      tunedP_.load(), tunedI_.load(), tunedD_.load(), tunedUltimateGain_.load(),
+                      tunedUltimatePeriodMs_.load());
         lv_label_set_text(resultLabel_, buf);
         resultsReady_.store(false);
+    }
+    if (autoTuneFailed_.load()) {
+        lv_label_set_text(resultLabel_,
+                          "Auto-Tune failed: no clean oscillation - try a bigger relay amplitude");
+        autoTuneFailed_.store(false);
     }
 
     if (testRunning_.load()) {

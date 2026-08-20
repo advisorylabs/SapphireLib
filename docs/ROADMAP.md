@@ -161,21 +161,31 @@ defaults shipped here.
     test motion to see the effect, no re-flashing. The entry selector (Drive/Turn/...) lives in a static
     right-hand column of buttons, not a scrolling list — touch-scrolling on the brain screen proved
     "incredibly hard" to use reliably in testing, so nothing on this page requires it.
-  - Automatic: `sapphirelib::tuning`, a Twiddle (coordinate-ascent hill-climbing) search over the three
-    gains — not automatic relay/Ziegler-Nichols tuning, which works by deliberately driving the system
-    into sustained oscillation; Twiddle instead just tries nearby gains and keeps whatever measurably
-    did better, so every trial is an ordinary bounded test motion. `measureOvershoot()` turns a series of
-    odometry samples taken during one test motion into an overshoot/final-error pair;
-    `tuning::runAndSample()` is what collects those samples (runs the motion on a background task while
-    polling odometry from the caller); `autoTuneCost()` combines them into the scalar Twiddle minimizes.
-    The Twiddle state machine itself, the cost function, and convergence are all pure and unit-tested in
-    `tests/tuning/auto_tune_math_test.cpp` — including a synthetic-cost-landscape test that actually
-    checks the search converges toward a known minimum, not just that it runs. `src/main.cpp` wires the
-    drive controller's test cycle to alternate forward/backward ~2ft (so repeated trials don't walk the
-    robot away) and the turn controller's to two safely-off-seam headings (90°/30°) since turning in
-    place doesn't accumulate drift the way driving does. Once a search finishes (or hits its 40-trial
-    cap), the tuned gains are applied immediately *and* displayed on the page so they can be copied into
-    source — this only tunes what's live in memory; it does not persist or hardcode anything itself.
+  - Automatic: `sapphirelib::tuning`, a Ziegler-Nichols relay-feedback auto-tune (replaced an earlier
+    Twiddle/coordinate-ascent search — dropped for not converging reliably and, per team preference, for
+    not being the algorithm wanted here). Tapping "Auto-Tune" drives the bound controller's plant
+    open-loop with a small, *bounded* relay (`tuning::runRelayExperiment()`) instead of the controller's
+    own PID, forcing a sustained oscillation; `tuning::analyzeRelayOscillation()` finds that oscillation's
+    period/amplitude from the recorded samples via a noise-floored zig-zag extrema finder;
+    `tuning::ultimateParamsFromRelay()` derives the plant's ultimate gain/period from those via the
+    Åström–Hägglund describing-function approximation; `tuning::zieglerNicholsGains()` applies the classic
+    closed-loop ZN formulas (kP=0.6·Ku, Ti=Tu/2, Td=Tu/8) to get final gains. Unlike a naive "keep raising
+    kP until it oscillates" gain sweep — the textbook criticism of automatic Ziegler-Nichols tuning — the
+    relay's output magnitude is fixed up front rather than climbing toward instability, so the experiment
+    can't run away even on an unexpectedly aggressive plant; each `PidTunerPage::addController()` caller
+    picks that amplitude explicitly. All the oscillation math is pure and unit-tested against a synthetic
+    triangle-wave signal (with and without injected noise) in `tests/tuning/auto_tune_math_test.cpp`.
+    `src/main.cpp` wires the drive controller's relay experiment to a signed forward-distance measurement
+    (odometry position projected onto the heading captured at the start of that run, via
+    `motion::toLocalFrame()`) and the turn controller's to `sensors::Imu::getCumulativeHeadingDeg()` —
+    unwrapped, so the relay's "start + setpointDelta" target math never has to dodge the 0/360 seam the
+    way the old Twiddle test headings (90°/30°) did. Each `addController()` auto-tune callback is now a
+    *factory* (`std::function<tuning::RelayTuneConfig()>`), called fresh on every tap rather than once at
+    registration, specifically so it can capture that reference frame at the moment the run actually
+    starts. If a relay experiment never oscillates cleanly (e.g. its amplitude is too small to overcome
+    friction), the page reports failure and leaves the existing gains untouched rather than applying
+    garbage. Applied gains are shown alongside the measured Ku/Tu so they can be copied into source — this
+    only tunes what's live in memory; it does not persist or hardcode anything itself.
   - Gain adjustments, entry selection, and new test/auto-tune launches are all locked out while a run is
     in progress, since a run and the tuning UI would otherwise read/write the same `PID` object
     concurrently. Every run (manual test or auto-tune trial) happens on a background `pros::Task`, never
@@ -208,10 +218,12 @@ have actually been *run*, not just type-checked; that pass also caught and fixed
 failing to link three of them due to unlisted cross-module dependencies (see
 `.github/workflows/build.yml`). Still outstanding: the IMU scale factor needs calibrating on the real
 robot (default `1.0` is a no-op); the new `DiagnosticsPage`/`PidTunerPage` widgets, and the auto-tune flow
-specifically, haven't had on-hardware time yet the way the rest of the GUI has — the Twiddle search itself
-is verified against a synthetic cost function, but nothing about how well it performs against *real*
-overshoot noise, sensor lag, or the drive-encoder-fallback odometry's own accuracy has been checked; SD-card
-telemetry and motor-fault diagnostics haven't been started.
+specifically, haven't had on-hardware time yet the way the rest of the GUI has — the relay-oscillation
+math itself is verified against a synthetic triangle wave, but the `relayAmplitude`/`setpointDelta`/
+`hysteresis` starting points wired up in `src/main.cpp` are unmeasured placeholders, and nothing about how
+the relay experiment performs against *real* sensor noise, mechanical friction, or the drive-encoder-
+fallback odometry's own accuracy has been checked; SD-card telemetry and motor-fault diagnostics haven't
+been started.
 
 ---
 
