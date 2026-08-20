@@ -1,87 +1,87 @@
 /**
  * \file sapphirelib/tuning/auto_tune_math.hpp
  *
- * Overshoot measurement and the Twiddle (coordinate-ascent) search that
- * drives automatic PID tuning — pure math, no PROS dependency, so it can be
- * unit-tested on a desktop compiler (see
- * tests/tuning/auto_tune_math_test.cpp). tuning::runAndSample() and the
- * gui::PidTunerPage auto-tune flow wrap this with the actual sensor
- * sampling and motion commands.
+ * Ziegler-Nichols relay-feedback auto-tuning — pure math, no PROS
+ * dependency, so it can be unit-tested on a desktop compiler (see
+ * tests/tuning/auto_tune_math_test.cpp). tuning::runRelayExperiment() and
+ * the gui::PidTunerPage auto-tune flow wrap this with the actual relay
+ * actuation and sensor sampling.
  *
  * Team 96671H — Hitmen
  */
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "sapphirelib/control/pid.hpp"
 
 namespace sapphirelib::tuning {
 
-/// The result of measuring one test motion's response against its target.
-struct OvershootResult {
-    /// How far past `target` the signal peaked, in the direction of travel
-    /// (0 if it never overshot).
-    double overshoot = 0.0;
-
-    /// Absolute error between `target` and the signal's last sample —
-    /// non-zero if the motion didn't actually reach the target (e.g. it
-    /// timed out short), which overshoot alone wouldn't catch.
-    double finalError = 0.0;
+/// One sample from a relay-feedback auto-tune experiment: the process
+/// variable's reading (e.g. distance traveled, or heading) at a given
+/// millisecond timestamp, both relative to the experiment's own start.
+struct RelaySample {
+    std::uint32_t timeMs = 0;
+    double value = 0.0;
 };
 
-/// Measures overshoot/final error from a time-ordered series of samples of
-/// one signal (e.g. distance traveled, or heading) taken during a test
-/// motion toward `target`. `samples` should start at (approximately) the
-/// pre-motion value and end at the post-motion value; direction of travel
-/// is inferred from `samples.front()` vs `target`, so this works whether
-/// the target is above or below the starting value. `samples` must be
-/// non-empty.
-OvershootResult measureOvershoot(const std::vector<double>& samples, double target);
-
-/// Combines an OvershootResult into a single scalar cost for the Twiddle
-/// search to minimize — lower is better. `finalErrorWeight` controls how
-/// much a motion that didn't reach its target counts against it, relative
-/// to overshoot; without this term the degenerate "never move" response
-/// would score as a perfect (zero-overshoot) result.
-double autoTuneCost(const OvershootResult& result, double finalErrorWeight);
-
-/// State for one Twiddle (coordinate-ascent hill-climbing) search over a
-/// PID's three gains. Not meant to be inspected directly — construct with
-/// makeTwiddleState(), and drive it entirely through currentGains()/
-/// reportCost()/totalStepSize().
-struct TwiddleState {
-    double params[3];
-    double stepSizes[3];
-    int index = 0;
-    bool triedDecrease = false;
-    double bestCost = -1.0; // -1 = no measurement recorded yet
+/// Averaged oscillation parameters extracted from a relay experiment's
+/// samples by analyzeRelayOscillation(). `ok` is false if too few complete
+/// cycles were found to trust periodMs/amplitude/cycleCount.
+struct RelayOscillation {
+    bool ok = false;
+    double periodMs = 0.0;
+    double amplitude = 0.0; // half the peak-to-peak swing
+    int cycleCount = 0;
 };
 
-/// Starts a search from `initial`, with each gain's search step starting at
-/// `stepSizes` (bigger = explores faster but coarser; the search shrinks a
-/// gain's step whenever neither direction helps, and grows it whenever a
-/// direction does, so the exact starting value mostly just affects how many
-/// iterations convergence takes).
-TwiddleState makeTwiddleState(PIDGains initial, PIDGains stepSizes);
+/// Finds complete oscillation cycles in `samples` (a time-ordered series of
+/// the process variable recorded during a relay experiment — see
+/// runRelayExperiment()) and averages their period/amplitude. A relay
+/// experiment should run for several oscillation cycles; averaging across
+/// all complete ones found evens out sensor noise and the settling
+/// transient the first half-cycle usually includes.
+///
+/// Extrema (peaks and troughs) are found with a simple noise-floor filter:
+/// a reversal only counts once the signal has moved at least `noiseFloor`
+/// from the running extremum candidate, so single-sample sensor jitter
+/// doesn't get mistaken for a real direction change. The default is
+/// intentionally tiny (a hundredth of an inch or degree) — a relay
+/// experiment's forced oscillation should swing far more than that
+/// regardless of which axis (distance or heading) it's tuning.
+///
+/// Needs at least `minCycles` complete cycles to return ok=true — a relay
+/// experiment that never oscillates (e.g. relay amplitude too small to
+/// overcome friction, so the plant just sits at one relay extreme) can't
+/// identify Ku/Tu at all, and this reports that honestly rather than
+/// guessing from noise.
+RelayOscillation analyzeRelayOscillation(const std::vector<RelaySample>& samples, int minCycles = 3,
+                                         double noiseFloor = 0.01);
 
-/// The gains to test next. Test these (run the motion, measure its cost),
-/// then call reportCost() with the result before asking again.
-PIDGains currentGains(const TwiddleState& state);
+/// A plant's ultimate gain (Ku) and ultimate period (Tu) — the classic
+/// Ziegler-Nichols closed-loop tuning method's two inputs.
+struct UltimateParams {
+    double ultimateGain = 0.0;
+    double ultimatePeriodMs = 0.0;
+};
 
-/// Reports the cost measured using the gains currentGains() most recently
-/// returned, and advances the search. Never proposes a negative gain
-/// (clamped to 0) — a negative PID gain flips the controller's correction
-/// direction, which isn't a "worse" result to search past, it's unsafe to
-/// ever apply.
-void reportCost(TwiddleState& state, double cost);
+/// Derives Ku/Tu from one relay experiment via the Åström–Hägglund
+/// describing-function approximation: a relay of amplitude `relayAmplitude`
+/// forces a roughly sinusoidal oscillation of amplitude
+/// `oscillation.amplitude`, at which point the plant's effective gain at
+/// that oscillation's frequency is `oscillation.amplitude / (4 *
+/// relayAmplitude / pi)` — Ku is that gain's reciprocal, the proportional
+/// gain at which pure-P control would sustain the same oscillation.
+/// `oscillation` must be ok (see analyzeRelayOscillation()); returns a
+/// zeroed UltimateParams otherwise.
+UltimateParams ultimateParamsFromRelay(double relayAmplitude, const RelayOscillation& oscillation);
 
-/// Sum of the search's current step sizes — shrinks as the search
-/// converges. Twiddle traditionally stops once this drops below a small
-/// tolerance; callers should also cap the number of iterations
-/// independently, since a noisy or flat cost landscape can keep some step
-/// sizes from ever shrinking below a fixed tolerance.
-double totalStepSize(const TwiddleState& state);
+/// Classic Ziegler-Nichols closed-loop PID tuning formulas: kP = 0.6*Ku,
+/// Ti = Tu/2 (so kI = kP/Ti = 1.2*Ku/Tu), Td = Tu/8 (so kD = kP*Td =
+/// 0.075*Ku*Tu). Returns a zeroed PIDGains if `ultimate.ultimatePeriodMs`
+/// is 0 (no valid period to derive kI/kD from).
+PIDGains zieglerNicholsGains(UltimateParams ultimate);
 
 } // namespace sapphirelib::tuning

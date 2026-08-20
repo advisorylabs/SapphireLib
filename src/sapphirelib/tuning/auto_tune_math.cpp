@@ -1,107 +1,119 @@
 #include "sapphirelib/tuning/auto_tune_math.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 namespace sapphirelib::tuning {
 
 namespace {
-constexpr double kGrowFactor = 1.1;
-constexpr double kShrinkFactor = 0.9;
 
-void clampNonNegative(double (&params)[3]) {
-    for (double& p : params) p = std::max(0.0, p);
-}
-} // namespace
+constexpr double kPi = 3.14159265358979323846;
 
-OvershootResult measureOvershoot(const std::vector<double>& samples, double target) {
-    const double start = samples.front();
-    const double direction = (target >= start) ? 1.0 : -1.0;
+struct Extremum {
+    std::uint32_t timeMs;
+    double value;
+    bool isPeak;
+};
 
-    double peak = start;
-    for (double sample : samples) {
-        if (direction > 0.0) {
-            peak = std::max(peak, sample);
+/// Zig-zag extrema finder: tracks the running high (while rising) or low
+/// (while falling) and commits it as a peak/trough once the signal reverses
+/// by at least `noiseFloor`. Extrema returned strictly alternate peak/
+/// trough by construction.
+std::vector<Extremum> findExtrema(const std::vector<RelaySample>& samples, double noiseFloor) {
+    std::vector<Extremum> extrema;
+    if (samples.size() < 2) return extrema;
+
+    std::size_t extremeIdx = 0;
+    bool directionKnown = false;
+    bool rising = false;
+
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+        if (!directionKnown) {
+            const double delta = samples[i].value - samples[extremeIdx].value;
+            if (std::fabs(delta) < noiseFloor) continue;
+            rising = delta > 0.0;
+            directionKnown = true;
+            extremeIdx = i;
+            continue;
+        }
+
+        if (rising) {
+            if (samples[i].value >= samples[extremeIdx].value) {
+                extremeIdx = i;
+            } else if (samples[extremeIdx].value - samples[i].value >= noiseFloor) {
+                extrema.push_back(Extremum{
+                    samples[extremeIdx].timeMs, samples[extremeIdx].value, /*isPeak=*/true});
+                rising = false;
+                extremeIdx = i;
+            }
         } else {
-            peak = std::min(peak, sample);
+            if (samples[i].value <= samples[extremeIdx].value) {
+                extremeIdx = i;
+            } else if (samples[i].value - samples[extremeIdx].value >= noiseFloor) {
+                extrema.push_back(Extremum{
+                    samples[extremeIdx].timeMs, samples[extremeIdx].value, /*isPeak=*/false});
+                rising = true;
+                extremeIdx = i;
+            }
         }
     }
 
-    return OvershootResult{
-        .overshoot = std::max(0.0, direction * (peak - target)),
-        .finalError = std::fabs(target - samples.back()),
+    return extrema;
+}
+
+} // namespace
+
+RelayOscillation analyzeRelayOscillation(const std::vector<RelaySample>& samples, int minCycles,
+                                         double noiseFloor) {
+    const std::vector<Extremum> extrema = findExtrema(samples, noiseFloor);
+
+    RelayOscillation result;
+
+    // Each same-side extremum pair (peak-to-peak or trough-to-trough) with
+    // the opposite-side extremum between them gives one full cycle's period
+    // and amplitude.
+    int cycles = 0;
+    double periodSumMs = 0.0;
+    double amplitudeSum = 0.0;
+    for (std::size_t i = 2; i < extrema.size(); ++i) {
+        const double periodMs = static_cast<double>(extrema[i].timeMs - extrema[i - 2].timeMs);
+        const double swing1 = std::fabs(extrema[i - 1].value - extrema[i - 2].value);
+        const double swing2 = std::fabs(extrema[i].value - extrema[i - 1].value);
+        // Average of the two half-swings (peak-to-trough, trough-to-peak),
+        // halved again: each half-swing already spans a full peak-to-peak
+        // range, so this is the oscillation's amplitude (half its
+        // peak-to-peak extent).
+        amplitudeSum += (swing1 + swing2) / 4.0;
+        periodSumMs += periodMs;
+        ++cycles;
+    }
+
+    if (cycles < minCycles) return result;
+
+    result.ok = true;
+    result.cycleCount = cycles;
+    result.periodMs = periodSumMs / cycles;
+    result.amplitude = amplitudeSum / cycles;
+    return result;
+}
+
+UltimateParams ultimateParamsFromRelay(double relayAmplitude, const RelayOscillation& oscillation) {
+    if (!oscillation.ok || oscillation.amplitude <= 0.0) return UltimateParams{};
+    return UltimateParams{
+        .ultimateGain = (4.0 * relayAmplitude) / (kPi * oscillation.amplitude),
+        .ultimatePeriodMs = oscillation.periodMs,
     };
 }
 
-double autoTuneCost(const OvershootResult& result, double finalErrorWeight) {
-    return result.overshoot + finalErrorWeight * result.finalError;
-}
+PIDGains zieglerNicholsGains(UltimateParams ultimate) {
+    if (ultimate.ultimatePeriodMs <= 0.0) return PIDGains{};
 
-TwiddleState makeTwiddleState(PIDGains initial, PIDGains stepSizes) {
-    TwiddleState state;
-    state.params[0] = initial.kP;
-    state.params[1] = initial.kI;
-    state.params[2] = initial.kD;
-    state.stepSizes[0] = stepSizes.kP;
-    state.stepSizes[1] = stepSizes.kI;
-    state.stepSizes[2] = stepSizes.kD;
-    return state;
-}
-
-PIDGains currentGains(const TwiddleState& state) {
-    return PIDGains{.kP = state.params[0], .kI = state.params[1], .kD = state.params[2]};
-}
-
-void reportCost(TwiddleState& state, double cost) {
-    if (state.bestCost < 0.0) {
-        // First-ever measurement: this is the baseline before any
-        // perturbation. Record it, then perturb params[0] upward to set up
-        // the first trial.
-        state.bestCost = cost;
-        state.params[state.index] += state.stepSizes[state.index];
-        clampNonNegative(state.params);
-        return;
-    }
-
-    bool advance = false;
-
-    if (!state.triedDecrease) {
-        // We just tested params[index] with +stepSizes[index] applied.
-        if (cost < state.bestCost) {
-            state.bestCost = cost;
-            state.stepSizes[state.index] *= kGrowFactor;
-            advance = true;
-        } else {
-            state.params[state.index] -= 2.0 * state.stepSizes[state.index];
-            clampNonNegative(state.params);
-            state.triedDecrease = true;
-        }
-    } else {
-        // We just tested params[index] with -stepSizes[index] applied
-        // (net, relative to before we tried +).
-        if (cost < state.bestCost) {
-            state.bestCost = cost;
-            state.stepSizes[state.index] *= kGrowFactor;
-        } else {
-            // Neither direction helped — revert to the original value and
-            // search more finely next time.
-            state.params[state.index] += state.stepSizes[state.index];
-            clampNonNegative(state.params);
-            state.stepSizes[state.index] *= kShrinkFactor;
-        }
-        state.triedDecrease = false;
-        advance = true;
-    }
-
-    if (advance) {
-        state.index = (state.index + 1) % 3;
-        state.params[state.index] += state.stepSizes[state.index];
-        clampNonNegative(state.params);
-    }
-}
-
-double totalStepSize(const TwiddleState& state) {
-    return state.stepSizes[0] + state.stepSizes[1] + state.stepSizes[2];
+    const double tuS = ultimate.ultimatePeriodMs / 1000.0;
+    const double kp = 0.6 * ultimate.ultimateGain;
+    return PIDGains{
+        .kP = kp,
+        .kI = 1.2 * ultimate.ultimateGain / tuS,
+        .kD = kp * (tuS / 8.0),
+    };
 }
 
 } // namespace sapphirelib::tuning

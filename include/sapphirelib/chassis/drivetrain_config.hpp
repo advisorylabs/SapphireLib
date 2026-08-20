@@ -27,6 +27,32 @@ struct DrivetrainConfig {
     double headingCorrectionKP = 0.0;
 };
 
+/// Optional 5th/6th "Asterisk" center wheels for a HolonomicDrivetrain: two
+/// motors mounted between the four corners, facing straight forward/back
+/// (not omni) rather than at the corner 45s. HolonomicDrivetrain drives them
+/// off whatever forward/back component is already present in the corner
+/// wheels' commanded voltages — so they add power during forward/backward
+/// motion and sit idle (coasting) during a pure strafe or turn — plus, while
+/// strafing, corrects any forward/back drift the vertical tracking wheel
+/// picks up (see HolonomicDrivetrain::setDriftSource()). Omit the
+/// drivetrain's `asterisk` constructor argument entirely for a standard
+/// 4-motor holonomic chassis.
+struct AsteriskConfig {
+    /// Ports for the two center motors, same sign convention as the corner
+    /// ports (negative = reversed). Both share the drivetrain's corner
+    /// gearset.
+    std::int8_t middleLeftPort;
+    std::int8_t middleRightPort;
+
+    /// Proportional gain applied to the vertical tracking wheel's drift
+    /// rate (inches/sec of unwanted forward/back motion) while strafing, to
+    /// correct it via the center wheels alone. 0 disables drift correction
+    /// (the center wheels will still drive during forward/backward motion —
+    /// this only gates the strafe-time correction). Has no effect unless
+    /// setDriftSource() has been called with a vertical TrackingWheel.
+    double driftCorrectionKP = 0.0;
+};
+
 /// Exit conditions for a blocking motion (driveDistance()/turnToHeading()).
 struct ExitConditions {
     /// The motion is "settled" once its error stays within this threshold —

@@ -2,8 +2,8 @@
  * \file sapphirelib/gui/pid_tuner_page.hpp
  *
  * SapphireLib's default PID tuning page: adjust gains by hand and re-run a
- * test motion to see the effect, or let an overshoot-driven search do it
- * automatically.
+ * test motion to see the effect, or let a Ziegler-Nichols relay-feedback
+ * auto-tune do it automatically.
  *
  * Team 96671H — Hitmen
  */
@@ -19,19 +19,25 @@
 
 #include "sapphirelib/control/pid.hpp"
 #include "sapphirelib/gui/page.hpp"
+#include "sapphirelib/tuning/auto_tune_runner.hpp"
 
 namespace sapphirelib::gui {
 
 /// Manual live tuning (+/- buttons, re-run a bound test motion) plus an
-/// optional automatic search: repeatedly runs a bound test cycle at
-/// different gains and keeps whichever minimized measured overshoot —
-/// see addController()'s autoTuneCost parameter. This is a Twiddle
-/// (coordinate-ascent hill-climbing) search over the three gains, not
-/// automatic relay/Ziegler-Nichols tuning — that family of methods works by
-/// deliberately driving the system into sustained oscillation, which isn't
-/// something to do unsupervised on a multi-pound robot. Twiddle instead
-/// just tries nearby gains and keeps whatever measurably did better, so
-/// every trial is a bounded, ordinary test motion.
+/// optional automatic search: a Ziegler-Nichols relay-feedback auto-tune —
+/// see addController()'s buildAutoTuneConfig parameter. Tapping "Auto-Tune"
+/// drives the bound controller's plant open-loop with a small, bounded
+/// relay (tuning::runRelayExperiment()) to force a sustained oscillation,
+/// measures that oscillation's period/amplitude
+/// (tuning::analyzeRelayOscillation()), and derives the controller's ultimate
+/// gain/period from it (tuning::ultimateParamsFromRelay()) to compute gains
+/// via the classic Ziegler-Nichols formulas (tuning::zieglerNicholsGains()).
+/// Unlike a naive "keep raising kP until it oscillates" gain sweep, the
+/// relay's output magnitude is fixed up front
+/// (tuning::RelayTuneConfig::relayAmplitude) rather than climbing toward
+/// instability, so the experiment can't run away even if the plant turns
+/// out to be far more aggressive than expected — pick that amplitude
+/// conservatively and it stays a bounded, ordinary test motion.
 class PidTunerPage : public Page {
 public:
     /// Registers a controller to tune.
@@ -41,17 +47,16 @@ public:
     /// watch the response to the current gains live without freezing the
     /// screen for the run's duration.
     ///
-    /// `autoTuneCost`, if given, enables "Auto-Tune": when called, it
-    /// should run one complete bounded test cycle at the PID's *current*
-    /// gains and return a cost to minimize (lower = better) — typically
-    /// built from sapphirelib::tuning::runAndSample() +
-    /// measureOvershoot() + autoTuneCost() over an odometry-sampled
-    /// distance or heading signal. For a drive controller, that cycle
-    /// should be a round trip (e.g. forward then back the same distance)
-    /// so repeated trials don't walk the robot away; for a turn
-    /// controller, whatever round trip is convenient (e.g. turn to a
-    /// heading and back), since turning in place doesn't accumulate
-    /// position drift the way driving does.
+    /// `buildAutoTuneConfig`, if given, enables "Auto-Tune": called fresh
+    /// each time the driver taps it (not once at registration), so it can
+    /// capture "here" — current position, current heading — as the relay
+    /// experiment's reference frame. Should return a
+    /// tuning::RelayTuneConfig whose `actuate` drives the same plant `pid`
+    /// closes the loop on (bypassing `pid` itself — the relay experiment
+    /// replaces it for the experiment's duration) and whose `measure`
+    /// reads that plant's process variable relative to the reading at the
+    /// moment `measure` is first called. See RelayTuneConfig's own field
+    /// comments for the rest (relay amplitude, setpoint, timeout).
     ///
     /// Only one test or auto-tune run happens at a time across the whole
     /// page; gain adjustments, entry selection, and new runs are all
@@ -59,7 +64,19 @@ public:
     /// would otherwise read/write the same PID object concurrently. Safe
     /// to call before or after build().
     void addController(std::string name, PID& pid, std::function<void()> runTest = nullptr,
-                       std::function<double()> autoTuneCost = nullptr);
+                       std::function<tuning::RelayTuneConfig()> buildAutoTuneConfig = nullptr);
+
+    /// True from the moment "Run Test" or "Auto-Tune" is tapped until that
+    /// run finishes. Driver-control code (e.g. opcontrol()'s joystick loop)
+    /// should skip calling holonomic()/holonomicFieldCentric() (or a
+    /// TankDrivetrain equivalent) while this is true — those calls
+    /// unconditionally command the same motors the bound runTest/
+    /// autoTuneCost callback is driving via driveDistance()/turnToHeading(),
+    /// so a concurrent driver-control loop (which keeps running whenever
+    /// there's no competition switch, even with centered sticks) will fight
+    /// it — see gui::OdometryPage::isCalibrating()'s comment for the same
+    /// failure mode in more detail.
+    bool isRunning() const;
 
     const char* title() const override;
     void build(lv_obj_t* container) override;
@@ -70,7 +87,7 @@ private:
         std::string name;
         PID* pid;
         std::function<void()> runTest;
-        std::function<double()> autoTuneCost;
+        std::function<tuning::RelayTuneConfig()> buildAutoTuneConfig;
         lv_obj_t* selectorButton = nullptr;
     };
 
@@ -104,9 +121,12 @@ private:
     std::atomic<bool> testRunning_{false};
     std::atomic<bool> autoTuneActive_{false};
     std::atomic<bool> resultsReady_{false};
+    std::atomic<bool> autoTuneFailed_{false};
     std::atomic<double> tunedP_{0.0};
     std::atomic<double> tunedI_{0.0};
     std::atomic<double> tunedD_{0.0};
+    std::atomic<double> tunedUltimateGain_{0.0};
+    std::atomic<double> tunedUltimatePeriodMs_{0.0};
 
     lv_obj_t* container_ = nullptr;
     lv_obj_t* kpLabel_ = nullptr;
