@@ -31,7 +31,8 @@ namespace sapphirelib::gui {
 /// measures that oscillation's period/amplitude
 /// (tuning::analyzeRelayOscillation()), and derives the controller's ultimate
 /// gain/period from it (tuning::ultimateParamsFromRelay()) to compute gains
-/// via the classic Ziegler-Nichols formulas (tuning::zieglerNicholsGains()).
+/// via a closed-loop tuning rule (tuning::gainsFromUltimate(); pick which
+/// one with setTuningRule()).
 /// Unlike a naive "keep raising kP until it oscillates" gain sweep, the
 /// relay's output magnitude is fixed up front
 /// (tuning::RelayTuneConfig::relayAmplitude) rather than climbing toward
@@ -78,6 +79,13 @@ public:
     /// failure mode in more detail.
     bool isRunning() const;
 
+    /// Which closed-loop tuning rule "Auto-Tune" applies to the Ku/Tu it
+    /// measures. Defaults to tuning::TuningRule::noOvershoot — see that
+    /// enum's comment for why the classic Ziegler-Nichols rule isn't the
+    /// default despite being the one this flow is named after. Applies to
+    /// every registered controller; call it before an auto-tune run starts.
+    void setTuningRule(tuning::TuningRule rule);
+
     const char* title() const override;
     void build(lv_obj_t* container) override;
     void update() override;
@@ -110,6 +118,7 @@ private:
 
     std::vector<std::unique_ptr<Entry>> entries_;
     std::size_t selectedIndex_ = 0;
+    std::atomic<tuning::TuningRule> tuningRule_{tuning::TuningRule::noOvershoot};
 
     // The only source of truth refreshGainLabels() reads from — see the
     // comment in runSelectedAutoTune() for why direct PID::gains() reads
