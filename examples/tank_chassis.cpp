@@ -38,9 +38,9 @@ void initialize() {
         DrivetrainConfig{.wheelDiameterIn = 3.25, .externalGearRatio = 1.0,
                           .headingCorrectionKP = 0.4},
         /*drivePIDConfig=*/
-        PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.1}, .outputLimit = 12.0},
+        PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.001}, .outputLimit = 12.0},
         /*turnPIDConfig=*/
-        PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.02}, .outputLimit = 12.0});
+        PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.0002}, .outputLimit = 12.0});
     drivetrain = &chassis;
 }
 

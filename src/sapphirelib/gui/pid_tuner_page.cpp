@@ -30,6 +30,22 @@ constexpr std::int32_t kSelectorButtonW = 88;
 constexpr std::int32_t kSelectorButtonH = 32;
 constexpr std::int32_t kSelectorRowHeight = 36;
 
+// Status/results column, to the right of the controller selector buttons
+// (which end at kSelectorColumnX + kSelectorButtonW = 328).
+//
+// This page has 480x179 to work with: LVGL's surface on the V5 is 480x240
+// (LV_HOR_RES_MAX/LV_VER_RES_MAX in lv_conf.h — not the panel's full 272),
+// less Gui's 18px header and its 43px tab bar. That's tight enough that a
+// results readout stacked *under* the controls doesn't fit on screen at
+// all, and the brain's touchscreen makes scrolling to reach it painful
+// enough not to rely on — hence a column beside them, and a narrow
+// one-value-per-line format instead of a single wide line that would run
+// off the right edge.
+constexpr std::int32_t kReadoutX = 336;
+constexpr std::int32_t kReadoutW = 140;
+constexpr std::int32_t kStatusY = 4;
+constexpr std::int32_t kResultY = 26;
+
 lv_obj_t* makeIconButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, const char* text,
                          lv_event_cb_t cb, void* userData) {
     lv_obj_t* button = lv_button_create(parent);
@@ -51,6 +67,8 @@ void styleSelectorButton(lv_obj_t* button) {
 
 bool PidTunerPage::isRunning() const { return testRunning_.load(); }
 
+void PidTunerPage::setTuningRule(tuning::TuningRule rule) { tuningRule_.store(rule); }
+
 const char* PidTunerPage::title() const { return "PID"; }
 
 void PidTunerPage::build(lv_obj_t* container) {
@@ -60,6 +78,11 @@ void PidTunerPage::build(lv_obj_t* container) {
     // gesture is easy to trigger by accident on a touchscreen this small,
     // so disable it outright rather than let it fight with taps.
     lv_obj_remove_flag(container_, LV_OBJ_FLAG_SCROLLABLE);
+    // Zero padding so the positions below are exactly the 480x179 the page
+    // actually gets (see kReadoutX's comment). The readout column runs to
+    // x=476, which the theme's default content padding would otherwise push
+    // off the right edge.
+    lv_obj_set_style_pad_all(container_, 0, 0);
 
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         Entry& entry = *entries_[i];
@@ -106,10 +129,15 @@ void PidTunerPage::build(lv_obj_t* container) {
     lv_obj_add_event_cb(autoTuneButton, &PidTunerPage::autoTuneClicked, LV_EVENT_CLICKED, this);
 
     statusLabel_ = lv_label_create(container_);
-    lv_obj_set_pos(statusLabel_, 4, kRowY0 + 4 * kRowHeight + 12);
+    lv_obj_set_pos(statusLabel_, kReadoutX, kStatusY);
 
     resultLabel_ = lv_label_create(container_);
-    lv_obj_set_pos(resultLabel_, 4, kRowY0 + 5 * kRowHeight + 10);
+    lv_obj_set_pos(resultLabel_, kReadoutX, kResultY);
+    // Fixed width + wrap rather than the default grow-to-fit: the failure
+    // message is a full sentence, and letting it size itself would run it
+    // off the screen the same way the old single-line results text did.
+    lv_obj_set_width(resultLabel_, kReadoutW);
+    lv_label_set_long_mode(resultLabel_, LV_LABEL_LONG_WRAP);
     lv_label_set_text(resultLabel_, "");
 
     if (!entries_.empty()) select(0);
@@ -228,9 +256,13 @@ void PidTunerPage::runSelectedAutoTune() {
         const tuning::RelayOscillation oscillation = tuning::analyzeRelayOscillation(samples);
 
         if (oscillation.ok) {
-            const tuning::UltimateParams ultimate =
-                tuning::ultimateParamsFromRelay(config.relayAmplitude, oscillation);
-            const PIDGains gains = tuning::zieglerNicholsGains(ultimate);
+            // Passing the relay's own hysteresis in matters: a relay with a
+            // switching deadband overshoots each crossing before it flips,
+            // and without that correction the inflated swing reads as a
+            // weaker plant than it is, biasing every derived gain low.
+            const tuning::UltimateParams ultimate = tuning::ultimateParamsFromRelay(
+                config.relayAmplitude, oscillation, config.hysteresis);
+            const PIDGains gains = tuning::gainsFromUltimate(ultimate, this->tuningRule_.load());
 
             entry->pid->setGains(gains);
             // Only writer of displayed*_/tuned*_ while this task is
@@ -256,9 +288,13 @@ void PidTunerPage::runSelectedAutoTune() {
 
 void PidTunerPage::update() {
     if (resultsReady_.load()) {
-        char buf[96];
+        // One value per line — see kReadoutX's comment for the width this
+        // has to live within. Ku/Tu are worth showing next to the gains
+        // they produced: Tu is checkable against the oscillation you just
+        // watched, which is the quickest way to spot a misread experiment.
+        char buf[128];
         std::snprintf(buf, sizeof(buf),
-                      "Tuned - kP: %.3f  kI: %.3f  kD: %.3f  (Ku=%.3f Tu=%.0fms, hardcode these)",
+                      "Tuned:\nkP %.3f\nkI %.3f\nkD %.3f\nKu %.3f\nTu %.0fms\n(not saved)",
                       tunedP_.load(), tunedI_.load(), tunedD_.load(), tunedUltimateGain_.load(),
                       tunedUltimatePeriodMs_.load());
         lv_label_set_text(resultLabel_, buf);
@@ -266,7 +302,7 @@ void PidTunerPage::update() {
     }
     if (autoTuneFailed_.load()) {
         lv_label_set_text(resultLabel_,
-                          "Auto-Tune failed: no clean oscillation - try a bigger relay amplitude");
+                          "Auto-Tune failed: no clean oscillation. Raise relay amplitude.");
         autoTuneFailed_.store(false);
     }
 

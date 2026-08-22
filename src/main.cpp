@@ -46,22 +46,22 @@ PidTunerPage* pidTunerPage = nullptr;
 
 void doNothingAuton() {}
 
-void driveForwardAuton() { drivetrain->driveDistance(24.0); }
+void driveForwardAuton() { drivetrain->driveDistance(24); }
 
-void turnTestingAuton() { drivetrain->turnToHeading(90.0);
+void turnTestingAuton() { drivetrain->turnToHeading(90);
 						  pros::delay(1000);
-						  drivetrain->turnToHeading(0.0); }
+						  drivetrain->turnToHeading(0); }
 
 // Round-trip test motions for PidTunerPage — repeated "Run Test" taps don't
 // walk the robot off the field, since each one returns to where it started.
 void driveTuningTest() {
-	drivetrain->driveDistance(24.0);
-	drivetrain->driveDistance(-24.0);
+	drivetrain->driveDistance(24);
+	drivetrain->driveDistance(0);
 }
 
 void turnTuningTest() {
-	drivetrain->turnToHeading(90.0);
-	drivetrain->turnToHeading(0.0);
+	drivetrain->turnToHeading(90);
+	drivetrain->turnToHeading(0);
 }
 
 // --- Ziegler-Nichols relay auto-tune configs for PidTunerPage ---
@@ -139,6 +139,22 @@ RelayTuneConfig turnRelayConfig() {
 void initialize() {
 	sapphirelib::initialize();
 
+	// SapphireLib's default brain-screen GUI — fully replaces LLEMU (which
+	// wasn't loading here anyway). This is entirely opt-in: if you'd rather
+	// build your own UI, just don't construct a Gui — nothing else in the
+	// library depends on it. See sapphirelib::gui::Gui's class comment.
+	//
+	// Constructed first, ahead of any hardware: a Gui's constructor only
+	// touches LVGL, so the branded header paints the moment the program
+	// starts. If a device constructor below then blocks or faults (an IMU
+	// that never finishes calibrating, a sensor in the wrong port), the
+	// screen still shows that header instead of staying black — which is
+	// the difference between "the GUI itself is broken" and "initialize()
+	// never got far enough to build it". The stage logs below narrow it
+	// the rest of the way over `pros terminal`.
+	static Gui gui("SapphireLib - 96671H");
+	SAPPHIRELIB_LOG_INFO("init", "GUI shell created");
+
 	// Asterisk drivetrain: the standard 4 mecanum/X-drive corners plus a
 	// straight-facing 5th/6th center wheel pair (middle-left/middle-right)
 	// that add power during forward/backward driving and correct forward/
@@ -148,10 +164,15 @@ void initialize() {
 	    /*frontLeftPort=*/-3, /*frontRightPort=*/8, /*backLeftPort=*/-17, /*backRightPort=*/10,
 	    Gearset::green, kImuPort,
 	    DrivetrainConfig{.wheelDiameterIn = 4.0, .externalGearRatio = 1.0, .headingCorrectionKP = 0.4},
+	    // kI/kD are continuous-time gains (per second), not per control
+	    // tick — see PIDGains' comment. The kD values below are the
+	    // previous per-tick numbers (0.1 / 0.02) converted at the
+	    // drivetrain's 10ms loop period, so they behave identically; run
+	    // Auto-Tune to replace them with measured ones.
 	    /*drivePIDConfig=*/
-	    PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.1}, .outputLimit = 12.0},
+	    PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.001}, .outputLimit = 12.0},
 	    /*turnPIDConfig=*/
-	    PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.02}, .outputLimit = 12.0},
+	    PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.0002}, .outputLimit = 12.0},
 	    /*imuHeadingScale=*/1.0,
 	    /*asterisk=*/
 	    // TODO: driftCorrectionKP starts conservative (volts per in/sec of
@@ -160,6 +181,7 @@ void initialize() {
 	    // strafe.
 	    AsteriskConfig{.middleLeftPort = -2, .middleRightPort = 9, .driftCorrectionKP = 0.5});
 	drivetrain = &chassis;
+	SAPPHIRELIB_LOG_INFO("init", "chassis ready (IMU calibrated)");
 	// HolonomicDrivetrain zeros its field heading at construction time, so
 	// holonomicFieldCentric() below is already field-centric from here on.
 
@@ -183,18 +205,13 @@ void initialize() {
 	    Pose{.xIn = 0.0, .yIn = 0.0, .headingDeg = 0.0});
 	odometry = &odom;
 	odometry->startTask();
+	SAPPHIRELIB_LOG_INFO("init", "odometry task started");
 
 	// Center wheels read the same vertical tracking wheel Odometry uses to
 	// detect forward/back drift while strafing — reading a sensor from two
 	// places is safe, only commanding a motor from two places would
 	// conflict.
 	chassis.setDriftSource(&verticalWheel);
-
-	// SapphireLib's default brain-screen GUI — fully replaces LLEMU (which
-	// wasn't loading here anyway). This is entirely opt-in: if you'd rather
-	// build your own UI, just don't construct a Gui — nothing else in the
-	// library depends on it. See sapphirelib::gui::Gui's class comment.
-	static Gui gui("SapphireLib - 96671H");
 
 	gui.addPage(std::make_unique<HomePage>(&chassis.imu()));
 
@@ -226,6 +243,7 @@ void initialize() {
 	pidTunerPage = pidTunerPageOwned.get();
 	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, &driveRelayConfig);
 	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, &turnRelayConfig);
+	pidTunerPage->setTuningRule(sapphirelib::tuning::TuningRule::pdOnly);
 	gui.addPage(std::move(pidTunerPageOwned));
 
 	// fieldWidthIn/fieldHeightIn default to a 144x144in (12x12ft) VRC field
@@ -242,10 +260,12 @@ void initialize() {
 	    chassis.imu(), &verticalWheel, &horizontalWheel,
 	    [](double turn) { drivetrain->holonomic(0.0, 0.0, turn); });
 	gui.addPage(std::move(odometryPageOwned));
+	SAPPHIRELIB_LOG_INFO("init", "all pages built");
 
 	// Add your own pages here too — gui.addPage(std::make_unique<MyPage>(...))
 
 	gui.start();
+	SAPPHIRELIB_LOG_INFO("init", "initialize() complete");
 }
 
 /**

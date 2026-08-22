@@ -46,7 +46,13 @@ Standalone PROS library for VEX V5, custom API, rewritten from StratagemV2.0 (pr
 - [x] Motor group abstraction (wraps `pros::MotorGroup`, handles per-side/per-corner grouping, gearing,
       brake modes) — `sapphirelib::chassis::MotorGroup`
 - [x] Generic PID controller class (kP/kI/kD, integral windup guard, derivative-on-measurement option,
-      slew rate limiting) — `sapphirelib::PID`, unit tests in `tests/control/pid_test.cpp`
+      slew rate limiting) — `sapphirelib::PID`, unit tests in `tests/control/pid_test.cpp`. Gains are
+      *continuous-time*: `update()` scales the integral by its timestep and the derivative by its
+      reciprocal, so a gain set survives a change of loop period and textbook tuning rules apply
+      directly. (Before, both terms were raw per-tick sums, which silently made auto-tuned gains wrong
+      by the loop period in both directions at once — kI 100× too large, kD 100× too small at 10ms.)
+      Setting `outputLimit` also enables conditional-integration anti-windup, so an auto-tuned kI can't
+      accumulate charge the output can't express.
 - [x] Drivetrain classes: `driveDistance()`, `turnToHeading()`, configurable exit conditions, timeout
       failsafe — `sapphirelib::chassis::TankDrivetrain` (2-side differential) and
       `sapphirelib::chassis::HolonomicDrivetrain` (4-corner mecanum/X-drive), sharing
@@ -168,8 +174,18 @@ defaults shipped here.
     own PID, forcing a sustained oscillation; `tuning::analyzeRelayOscillation()` finds that oscillation's
     period/amplitude from the recorded samples via a noise-floored zig-zag extrema finder;
     `tuning::ultimateParamsFromRelay()` derives the plant's ultimate gain/period from those via the
-    Åström–Hägglund describing-function approximation; `tuning::zieglerNicholsGains()` applies the classic
-    closed-loop ZN formulas (kP=0.6·Ku, Ti=Tu/2, Td=Tu/8) to get final gains. Unlike a naive "keep raising
+    Åström–Hägglund describing-function approximation, corrected for the relay's own switching hysteresis
+    (which otherwise inflates the observed swing and biases every derived gain low);
+    `tuning::gainsFromUltimate()` applies a closed-loop tuning rule to get final gains. Four rules are
+    available (`tuning::TuningRule`, selected with `PidTunerPage::setTuningRule()`); the default is
+    `noOvershoot` (kP=0.2·Ku, Ti=Tu/2, Td=Tu/3) rather than the classic ZN formulas (kP=0.6·Ku, Ti=Tu/2,
+    Td=Tu/8, still available as `classicZN`/`tuning::zieglerNicholsGains()`), because classic ZN targets
+    quarter-amplitude decay — roughly 25% overshoot by design, which is the wrong trade for a positioning
+    loop where overshooting a heading and coming back costs more time than a slightly slower approach.
+    The extrema finder's noise floor adapts to the measured swing rather than being a fixed absolute
+    number: too small a floor makes sensor jitter around each flat peak read as extra reversals, which
+    shortens the reported period and shrinks the reported amplitude together — both pushing gains too
+    aggressive, and with `ok` still true, so nothing reports the problem. Unlike a naive "keep raising
     kP until it oscillates" gain sweep — the textbook criticism of automatic Ziegler-Nichols tuning — the
     relay's output magnitude is fixed up front rather than climbing toward instability, so the experiment
     can't run away even on an unexpectedly aggressive plant; each `PidTunerPage::addController()` caller

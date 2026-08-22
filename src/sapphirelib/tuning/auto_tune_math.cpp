@@ -60,17 +60,13 @@ std::vector<Extremum> findExtrema(const std::vector<RelaySample>& samples, doubl
     return extrema;
 }
 
-} // namespace
-
-RelayOscillation analyzeRelayOscillation(const std::vector<RelaySample>& samples, int minCycles,
-                                         double noiseFloor) {
-    const std::vector<Extremum> extrema = findExtrema(samples, noiseFloor);
-
+/// Averages the period/amplitude of every complete cycle in an already-
+/// extracted extrema series. Each same-side extremum pair (peak-to-peak or
+/// trough-to-trough) with the opposite-side extremum between them gives one
+/// full cycle.
+RelayOscillation averageCycles(const std::vector<Extremum>& extrema, int minCycles) {
     RelayOscillation result;
 
-    // Each same-side extremum pair (peak-to-peak or trough-to-trough) with
-    // the opposite-side extremum between them gives one full cycle's period
-    // and amplitude.
     int cycles = 0;
     double periodSumMs = 0.0;
     double amplitudeSum = 0.0;
@@ -96,24 +92,89 @@ RelayOscillation analyzeRelayOscillation(const std::vector<RelaySample>& samples
     return result;
 }
 
-UltimateParams ultimateParamsFromRelay(double relayAmplitude, const RelayOscillation& oscillation) {
+} // namespace
+
+RelayOscillation analyzeRelayOscillation(const std::vector<RelaySample>& samples, int minCycles,
+                                         double minNoiseFloor, double noiseFloorFraction) {
+    // First pass at the caller's floor, only to find out roughly how far
+    // this plant swings — see the header comment for why the floor can't
+    // just be a fixed constant.
+    const RelayOscillation coarse =
+        averageCycles(findExtrema(samples, minNoiseFloor), /*minCycles=*/1);
+
+    double noiseFloor = minNoiseFloor;
+    if (coarse.ok && noiseFloorFraction > 0.0) {
+        noiseFloor = std::fmax(minNoiseFloor, coarse.amplitude * noiseFloorFraction);
+    }
+
+    return averageCycles(findExtrema(samples, noiseFloor), minCycles);
+}
+
+UltimateParams ultimateParamsFromRelay(double relayAmplitude, const RelayOscillation& oscillation,
+                                       double relayHysteresis) {
     if (!oscillation.ok || oscillation.amplitude <= 0.0) return UltimateParams{};
+
+    // Describing-function amplitude, corrected for the relay's switching
+    // deadband (see the header comment). Falls back to the uncorrected
+    // amplitude if the hysteresis isn't consistent with the measured swing,
+    // which would otherwise put a negative number under the square root.
+    double effectiveAmplitude = oscillation.amplitude;
+    const double h = std::fabs(relayHysteresis);
+    if (h > 0.0 && h < oscillation.amplitude) {
+        effectiveAmplitude = std::sqrt(oscillation.amplitude * oscillation.amplitude - h * h);
+    }
+
     return UltimateParams{
-        .ultimateGain = (4.0 * relayAmplitude) / (kPi * oscillation.amplitude),
+        .ultimateGain = (4.0 * relayAmplitude) / (kPi * effectiveAmplitude),
         .ultimatePeriodMs = oscillation.periodMs,
     };
 }
 
-PIDGains zieglerNicholsGains(UltimateParams ultimate) {
+PIDGains gainsFromUltimate(UltimateParams ultimate, TuningRule rule) {
     if (ultimate.ultimatePeriodMs <= 0.0) return PIDGains{};
 
+    const double ku = ultimate.ultimateGain;
     const double tuS = ultimate.ultimatePeriodMs / 1000.0;
-    const double kp = 0.6 * ultimate.ultimateGain;
+
+    // Every rule below is stated as (kP factor, integral time Ti, derivative
+    // time Td), the form the tuning literature uses; the conversion to the
+    // kI/kD this library's PIDGains carries is the same for all of them.
+    double kpFactor = 0.0;
+    double tiS = 0.0; // 0 means "no integral term"
+    double tdS = 0.0;
+    switch (rule) {
+        case TuningRule::classicZN:
+            kpFactor = 0.6;
+            tiS = tuS / 2.0;
+            tdS = tuS / 8.0;
+            break;
+        case TuningRule::lessOvershoot:
+            kpFactor = 0.33;
+            tiS = tuS / 2.0;
+            tdS = tuS / 3.0;
+            break;
+        case TuningRule::noOvershoot:
+            kpFactor = 0.2;
+            tiS = tuS / 2.0;
+            tdS = tuS / 3.0;
+            break;
+        case TuningRule::pdOnly:
+            kpFactor = 0.8;
+            tiS = 0.0;
+            tdS = tuS / 8.0;
+            break;
+    }
+
+    const double kp = kpFactor * ku;
     return PIDGains{
         .kP = kp,
-        .kI = 1.2 * ultimate.ultimateGain / tuS,
-        .kD = kp * (tuS / 8.0),
+        .kI = tiS > 0.0 ? kp / tiS : 0.0,
+        .kD = kp * tdS,
     };
+}
+
+PIDGains zieglerNicholsGains(UltimateParams ultimate) {
+    return gainsFromUltimate(ultimate, TuningRule::classicZN);
 }
 
 } // namespace sapphirelib::tuning
