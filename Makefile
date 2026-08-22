@@ -50,3 +50,32 @@ TEMPLATE_FILES=$(INCDIR)/$(LIBNAME)/*.h $(INCDIR)/$(LIBNAME)/*.hpp $(INCDIR)/$(L
 ################################################################################
 ########## Nothing below this line should be edited by typical users ###########
 -include ./common.mk
+
+################################################################################
+######################## Toolchain consistency guard ###########################
+# bin/ keeps no record of which compiler produced it, and make only rebuilds
+# the objects whose sources changed — so a build from a shell with a
+# different arm-none-eabi-g++ first on PATH silently mixes objects from two
+# GCC major versions into one image. That links without complaint and then
+# faults on the brain before LVGL paints anything, which reads as a dead
+# program rather than as a build problem. Stamp the compiler version into
+# bin/ and refuse to build on a mismatch instead of shipping that image.
+#
+# clean/all are exempt: clearing bin/ is the fix, and `all` cleans first. The
+# check is skipped entirely if the version can't be read, so it can only ever
+# act on information it actually has.
+
+TOOLCHAIN_VERSION:=$(shell $(CXX) -dumpfullversion 2>/dev/null || $(CXX) -dumpversion 2>/dev/null)
+TOOLCHAIN_STAMP:=$(BINDIR)/.toolchain-version
+
+ifneq ($(TOOLCHAIN_VERSION),)
+ifeq ($(filter clean clean-template all,$(MAKECMDGOALS)),)
+STAMPED_TOOLCHAIN:=$(shell cat $(TOOLCHAIN_STAMP) 2>/dev/null)
+ifneq ($(STAMPED_TOOLCHAIN),)
+ifneq ($(STAMPED_TOOLCHAIN),$(TOOLCHAIN_VERSION))
+$(error bin/ was built with $(ARCHTUPLE)g++ $(STAMPED_TOOLCHAIN) but $(TOOLCHAIN_VERSION) is first on PATH. Mixing them links fine and then crashes on the brain. Build from a shell using $(STAMPED_TOOLCHAIN) — VS Code's PROS terminal — or run `make clean` to rebuild everything with $(TOOLCHAIN_VERSION).)
+endif
+endif
+$(shell mkdir -p $(BINDIR) && echo $(TOOLCHAIN_VERSION) > $(TOOLCHAIN_STAMP))
+endif
+endif
