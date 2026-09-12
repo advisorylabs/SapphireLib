@@ -44,6 +44,7 @@ jobs:
             # "Build & run" doc comment.
             extra=""
             case "$test" in
+              tests/control/heading_hold_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/sensors/imu_scale_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;

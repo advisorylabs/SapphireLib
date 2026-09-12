@@ -1,6 +1,7 @@
 #include "sapphirelib/chassis/motor_group.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace sapphirelib::chassis {
@@ -64,6 +65,14 @@ double MotorGroup::getVelocityRPM() const {
     if (velocities.empty()) return 0.0;
     return std::accumulate(velocities.begin(), velocities.end(), 0.0) /
            static_cast<double>(velocities.size());
+}
+
+double MotorGroup::getTemperatureC() const {
+    double hottest = 0.0;
+    for (const double tempC : motors_.get_temperature_all()) {
+        if (std::isfinite(tempC)) hottest = std::max(hottest, tempC);
+    }
+    return hottest;
 }
 
 Gearset MotorGroup::gearset() const {

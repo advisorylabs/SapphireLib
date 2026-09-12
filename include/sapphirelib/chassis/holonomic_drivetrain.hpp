@@ -17,6 +17,8 @@
 
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
+#include "sapphirelib/chassis/thermal_math.hpp"
+#include "sapphirelib/control/heading_hold.hpp"
 #include "sapphirelib/control/pid.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
@@ -71,10 +73,54 @@ public:
     /// holonomic(). `turn` is unaffected (rotation rate is frame-independent).
     void holonomicFieldCentric(double throttle, double strafe, double turn);
 
+    /// Driver control with the turn stick steering a *heading* rather than a
+    /// turn rate: `turnInput` sweeps a held heading (see HeadingHoldConfig),
+    /// and the turn PID drives the chassis onto it every tick — so releasing
+    /// the stick leaves the chassis pointed somewhere definite instead of
+    /// wherever momentum carried it, and anything that knocks it off that
+    /// heading is corrected without the driver reacting.
+    ///
+    /// Additive to driving, not instead of it: the PID's turn output is
+    /// mixed with `throttle`/`strafe` exactly the way a stick turn was, so
+    /// the chassis translates and holds its heading at the same time. That's
+    /// the real payoff on a holonomic chassis — a strafe that used to wander
+    /// off-heading now gets straightened continuously.
+    ///
+    /// Call one of these every loop iteration while driving: the held
+    /// heading advances per call, and a gap longer than a control loop's
+    /// period (an autonomous routine, a PID tuner run, a calibration spin)
+    /// re-adopts the chassis's current heading rather than snapping back to
+    /// a target from before the interruption.
+    ///
+    /// Shares turnPID_ with turnToHeading(), so the two can't run at once —
+    /// which they never do, since one is driver control and the other is
+    /// autonomous.
+    void holonomicHeadingHold(double throttle, double strafe, double turnInput);
+
+    /// holonomicHeadingHold() with field-centric translation — the
+    /// combination most drivers want. `throttle`/`strafe` are relative to
+    /// the field (see holonomicFieldCentric()) while `turnInput` steers the
+    /// held heading (see holonomicHeadingHold()).
+    void holonomicFieldCentricHeadingHold(double throttle, double strafe, double turnInput);
+
+    /// Tunes how the turn stick steers the held heading. Optional — the
+    /// defaults on HeadingHoldConfig are a sane starting point. Takes effect
+    /// on the next holonomicHeadingHold() call.
+    void setHeadingHold(HeadingHoldConfig config);
+
+    /// The heading holonomicHeadingHold() is currently holding, in degrees.
+    /// Only meaningful once one of those has been called; it tracks the
+    /// chassis within HeadingHoldConfig::maxLeadDeg, so it's a useful thing
+    /// to put on a GUI page next to the live heading.
+    double heldHeadingDeg() const;
+
     /// Re-zeros the field-centric reference heading to the chassis's current
     /// IMU heading — whichever way the chassis is facing now becomes the new
     /// "throttle" direction for holonomicFieldCentric(). Typically bound to a
     /// driver button so they can redefine "forward" mid-match.
+    ///
+    /// Doesn't disturb the held heading: redefining which way "forward"
+    /// translates has nothing to do with which way the chassis is pointed.
     void resetFieldHeading();
 
     /// Drives to field point (`xIn`, `yIn`), reading pose from `odometry`.
@@ -170,8 +216,39 @@ private:
     double lastDriftVerticalIn_ = 0.0;
     std::uint32_t lastDriftTickMs_ = 0;
 
+    /// Thermal-compensation state — see AsteriskConfig::thermalCompensation
+    /// and refreshThermalFractions(). Only the *fractions* are cached, since
+    /// motor temperature moves over tens of seconds while setWheelVoltages()
+    /// runs at 100Hz. The correction itself is recomputed every call, from
+    /// that tick's actual corner voltages — which is the whole point: the
+    /// same front-right derating means a forward/back shortfall while
+    /// driving and an unwanted drift while strafing, and only the live
+    /// command distinguishes them.
+    ///
+    /// Per corner, not averaged: a single derated corner and four evenly
+    /// derated ones need opposite responses, and an average can't tell them
+    /// apart.
+    CornerValues thermalFractions_;
+    double centerThermalFraction_ = 1.0;
+    std::uint32_t lastThermalPollMs_ = 0;
+
+    /// Heading-hold state — see holonomicHeadingHold(). lastHeadingHoldMs_
+    /// of 0 means "not holding", which is also what a long enough gap
+    /// between calls decays back to.
+    HeadingHoldConfig headingHold_;
+    double heldHeadingDeg_ = 0.0;
+    std::uint32_t lastHeadingHoldMs_ = 0;
+
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);
+
+    /// Advances the held heading by one tick of `turnInput` and returns the
+    /// turn PID's output, in volts, for getting onto it.
+    double headingHoldTurnVolts(double turnInput);
+
+    /// Re-reads corner and center motor temperatures (at most every
+    /// kThermalPollIntervalMs) into thermalFractions_/centerThermalFraction_.
+    void refreshThermalFractions();
 };
 
 } // namespace sapphirelib::chassis
