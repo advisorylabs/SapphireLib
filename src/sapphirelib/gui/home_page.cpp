@@ -25,19 +25,23 @@ void HomePage::build(lv_obj_t* container) {
 void HomePage::update() {
     char buf[48];
 
+    // Battery capacity is reported in whole percent and changes over
+    // minutes, so this formats to the same string almost every tick —
+    // setLabelText() is what keeps that from re-invalidating the label 20
+    // times a second.
     std::snprintf(buf, sizeof(buf), "Battery: %.0f%%", pros::battery::get_capacity());
-    lv_label_set_text(batteryLabel_, buf);
+    setLabelText(batteryLabel_, buf);
 
     const char* stateText = pros::competition::is_autonomous() ? "Autonomous"
                              : pros::competition::is_disabled() ? "Disabled"
                                                                  : "Driver Control";
     std::snprintf(buf, sizeof(buf), "%s%s", stateText,
                   pros::competition::is_connected() ? " (field connected)" : "");
-    lv_label_set_text(statusLabel_, buf);
+    setLabelText(statusLabel_, buf);
 
     if (imu_) {
         std::snprintf(buf, sizeof(buf), "Heading: %.1f deg", imu_->getHeadingDeg());
-        lv_label_set_text(headingLabel_, buf);
+        setLabelText(headingLabel_, buf);
     }
 }
 

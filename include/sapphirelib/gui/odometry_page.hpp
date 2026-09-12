@@ -91,6 +91,23 @@ private:
     std::int32_t fieldViewWidthPx_ = 0;
     std::int32_t fieldViewHeightPx_ = 0;
 
+    /// The heading indicator's endpoints. This has to be a member, not an
+    /// update() local: lv_line_set_points() stores only the *address* of the
+    /// array and dereferences it later, whenever LVGL next redraws the line
+    /// (see its doc comment — "the array needs to be alive while the line
+    /// exists"). Handing it a stack array left the line pointing at a dead
+    /// frame, so it drew from whatever happened to be on the stack by then.
+    lv_point_precise_t headingPoints_[2] = {};
+
+    /// Last pixel position actually pushed to robotDot_/headingLine_, so a
+    /// pose that hasn't moved far enough to change a pixel doesn't
+    /// re-invalidate them. Starts at a coordinate no field position maps to,
+    /// so the first update() always draws.
+    std::int32_t lastDotX_ = INT32_MIN;
+    std::int32_t lastDotY_ = INT32_MIN;
+    std::int32_t lastTipX_ = INT32_MIN;
+    std::int32_t lastTipY_ = INT32_MIN;
+
     // --- Offset calibration — see enableOffsetCalibration() ---
     sensors::Imu* calibImu_ = nullptr;
     const odom::TrackingWheel* calibVertical_ = nullptr;

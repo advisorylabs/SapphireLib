@@ -210,11 +210,11 @@ void PidTunerPage::adjustGain(int gainIndex, double delta) {
 void PidTunerPage::refreshGainLabels() {
     char buf[24];
     std::snprintf(buf, sizeof(buf), "kP: %.3f", displayedP_.load());
-    lv_label_set_text(kpLabel_, buf);
+    setLabelText(kpLabel_, buf);
     std::snprintf(buf, sizeof(buf), "kI: %.3f", displayedI_.load());
-    lv_label_set_text(kiLabel_, buf);
+    setLabelText(kiLabel_, buf);
     std::snprintf(buf, sizeof(buf), "kD: %.3f", displayedD_.load());
-    lv_label_set_text(kdLabel_, buf);
+    setLabelText(kdLabel_, buf);
 }
 
 void PidTunerPage::runSelectedTest() {
@@ -297,19 +297,23 @@ void PidTunerPage::update() {
                       "Tuned:\nkP %.3f\nkI %.3f\nkD %.3f\nKu %.3f\nTu %.0fms\n(not saved)",
                       tunedP_.load(), tunedI_.load(), tunedD_.load(), tunedUltimateGain_.load(),
                       tunedUltimatePeriodMs_.load());
-        lv_label_set_text(resultLabel_, buf);
+        setLabelText(resultLabel_, buf);
         resultsReady_.store(false);
     }
     if (autoTuneFailed_.load()) {
-        lv_label_set_text(resultLabel_,
-                          "Auto-Tune failed: no clean oscillation. Raise relay amplitude.");
+        setLabelText(resultLabel_,
+                     "Auto-Tune failed: no clean oscillation. Raise relay amplitude.");
         autoTuneFailed_.store(false);
     }
 
+    // "Ready" is what this reads for all but a few seconds of a session, so
+    // going through setLabelText() rather than lv_label_set_text() is the
+    // difference between invalidating this label once per state change and
+    // once per tick.
     if (testRunning_.load()) {
-        lv_label_set_text(statusLabel_, autoTuneActive_.load() ? "Auto-tuning..." : "Running...");
+        setLabelText(statusLabel_, autoTuneActive_.load() ? "Auto-tuning..." : "Running...");
     } else {
-        lv_label_set_text(statusLabel_, "Ready");
+        setLabelText(statusLabel_, "Ready");
     }
 
     // The only place gain labels actually get redrawn — see

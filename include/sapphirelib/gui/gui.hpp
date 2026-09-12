@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -39,12 +40,18 @@ public:
     /// before or after start(), and safe to call more than once.
     void addPage(std::unique_ptr<Page> page);
 
-    /// Starts refreshing every registered page's update() on an LVGL timer
-    /// — not a separate PROS task. LVGL isn't thread-safe: every callback
-    /// that touches a widget has to run from the same context LVGL's own
-    /// display task already drives its timers from, which is exactly what
+    /// Starts refreshing pages' update() on an LVGL timer — not a separate
+    /// PROS task. LVGL isn't thread-safe: every callback that touches a
+    /// widget has to run from the same context LVGL's own display task
+    /// already drives its timers from, which is exactly what
     /// lv_timer_create() guarantees and a raw pros::Task wouldn't. Call
     /// once; addPage() still works for pages added after start().
+    ///
+    /// Only the *visible* tab's page is refreshed each tick (plus any page
+    /// that opts in via Page::updatesWhenHidden()). Every registered page's
+    /// widgets stay alive whether or not its tab is showing, so refreshing
+    /// the hidden ones just burns CPU redrawing pixels nobody can see — with
+    /// SapphireLib's five default pages that was most of the GUI's cost.
     void start(std::uint32_t periodMs = 50);
 
     /// Replaces the header with a warning banner (red background, `text`
