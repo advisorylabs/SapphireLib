@@ -90,12 +90,22 @@ PID& HolonomicDrivetrain::drivePID() { return drivePID_; }
 
 PID& HolonomicDrivetrain::turnPID() { return turnPID_; }
 
-void HolonomicDrivetrain::setDriftSource(const odom::TrackingWheel* verticalWheel) {
+void HolonomicDrivetrain::setDriftSource(const odom::TrackingWheel* verticalWheel,
+                                         const odom::Odometry* odometry) {
     driftSource_ = verticalWheel;
+    driftOffsetSource_ = odometry;
     if (driftSource_ != nullptr) {
         lastDriftVerticalIn_ = driftSource_->getDistanceIn();
+        lastDriftStrafeIn_ = encoderStrafeIn();
+        lastDriftHeadingDeg_ = imu_.getCumulativeHeadingDeg();
         lastDriftTickMs_ = pros::millis();
     }
+}
+
+double HolonomicDrivetrain::encoderStrafeIn() const {
+    return degreesToInches((frontLeft_.getPositionDegrees() - frontRight_.getPositionDegrees() -
+                            backLeft_.getPositionDegrees() + backRight_.getPositionDegrees()) /
+                           4.0);
 }
 
 void HolonomicDrivetrain::refreshThermalFractions() {
@@ -157,24 +167,34 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
 
     double centerVolts = throttleVolts + thermal.commonVolts;
 
-    const bool strafingDominant = std::fabs(strafeVolts) > std::fabs(throttleVolts);
-    if (asterisk_->driftCorrectionKP != 0.0 && strafingDominant && driftSource_ != nullptr) {
+    if (driftSource_ != nullptr) {
         const std::uint32_t now = pros::millis();
-        const double currentVerticalIn = driftSource_->getDistanceIn();
+        const double verticalIn = driftSource_->getDistanceIn();
+        const double strafeIn = encoderStrafeIn();
+        const double headingDeg = imu_.getCumulativeHeadingDeg();
         const double dtS = (now - lastDriftTickMs_) / 1000.0;
-        // Skip a zero/negative dt (first call) and unusually long gaps
-        // (e.g. a paused motion) rather than treat them as a drift spike.
-        if (dtS > 1e-3 && dtS < 1.0) {
-            const double driftRateInPerSec = (currentVerticalIn - lastDriftVerticalIn_) / dtS;
-            centerVolts -= asterisk_->driftCorrectionKP * driftRateInPerSec;
+
+        // Only correct while strafing dominates — during forward/back
+        // driving the center wheels are just adding power. Skip a zero dt
+        // and unusually long gaps (e.g. a paused motion) rather than treat
+        // them as a drift spike. The baseline below refreshes on every call
+        // either way, so a stale gap never carries into the next strafe.
+        const bool strafingDominant = std::fabs(strafeVolts) > std::fabs(throttleVolts);
+        if (asterisk_->driftCorrectionKP != 0.0 && strafingDominant && dtS > 1e-3 && dtS < 1.0) {
+            const double verticalOffsetIn = driftOffsetSource_ != nullptr
+                                                ? driftOffsetSource_->getConfig().verticalOffsetIn
+                                                : 0.0;
+            const double driftIn =
+                strafeDriftIn(verticalIn - lastDriftVerticalIn_, verticalOffsetIn,
+                              headingDeg - lastDriftHeadingDeg_, strafeIn - lastDriftStrafeIn_,
+                              throttleVolts, strafeVolts);
+            centerVolts -= asterisk_->driftCorrectionKP * (driftIn / dtS);
         }
-        lastDriftVerticalIn_ = currentVerticalIn;
+
+        lastDriftVerticalIn_ = verticalIn;
+        lastDriftStrafeIn_ = strafeIn;
+        lastDriftHeadingDeg_ = headingDeg;
         lastDriftTickMs_ = now;
-    } else if (driftSource_ != nullptr) {
-        // Not strafing-dominant right now — keep the baseline fresh so a
-        // stale gap doesn't read as a bogus drift spike next time we are.
-        lastDriftVerticalIn_ = driftSource_->getDistanceIn();
-        lastDriftTickMs_ = pros::millis();
     }
 
     // Differential turn term, on top of the common forward/back term. The
@@ -278,7 +298,13 @@ void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.getH
 
 void HolonomicDrivetrain::moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
                                        ExitConditions exit) {
+    moveToPointHolding(xIn, yIn, odometry.getPose().headingDeg, odometry, exit);
+}
+
+void HolonomicDrivetrain::moveToPointHolding(double xIn, double yIn, double holdHeadingDeg,
+                                              const odom::Odometry& odometry, ExitConditions exit) {
     drivePID_.reset();
+    turnPID_.reset();
 
     std::uint32_t settledForMs = 0;
     std::uint32_t lastTick = pros::millis();
@@ -294,7 +320,13 @@ void HolonomicDrivetrain::moveToPoint(double xIn, double yIn, const odom::Odomet
         const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
         const double scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
 
-        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, /*turn=*/0.0);
+        // Hold heading the same way moveToPose() does. Translation would
+        // still arrive if the chassis yawed (toLocalFrame() uses the live
+        // heading); this just keeps it from yawing on the way.
+        const double turnOutput =
+            turnPID_.update(wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
+
+        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, turnOutput / 12.0);
 
         const std::uint32_t now = pros::millis();
         if (distanceIn <= exit.errorThreshold) {
@@ -357,6 +389,8 @@ void HolonomicDrivetrain::followPath(const motion::Path& path, const odom::Odome
                                       motion::PursuitConfig config) {
     std::size_t segmentIndex = 0;
     const motion::Waypoint& finalPoint = path.waypoints().back();
+    const double holdHeadingDeg = odometry.getPose().headingDeg;
+    turnPID_.reset();
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -372,13 +406,17 @@ void HolonomicDrivetrain::followPath(const motion::Path& path, const odom::Odome
         const double distanceIn = std::hypot(dxIn, dyIn);
         const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
         const double scale = distanceIn > 1e-6 ? config.cruiseVoltage / distanceIn : 0.0;
+        const double turnOutput =
+            turnPID_.update(wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
 
-        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, /*turn=*/0.0);
+        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, turnOutput / 12.0);
 
         pros::delay(kLoopDelayMs);
     }
 
-    moveToPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit);
+    // Keep holding the path's starting heading through the final approach,
+    // rather than re-capturing whatever the chassis yawed to on the way.
+    moveToPointHolding(finalPoint.xIn, finalPoint.yIn, holdHeadingDeg, odometry, config.finalExit);
 }
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {

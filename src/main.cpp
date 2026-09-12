@@ -231,8 +231,10 @@ void initialize() {
 	// Center wheels read the same vertical tracking wheel Odometry uses to
 	// detect forward/back drift while strafing — reading a sensor from two
 	// places is safe, only commanding a motor from two places would
-	// conflict.
-	chassis.setDriftSource(&verticalWheel);
+	// conflict. Passing odometry lets drift correction read the wheel's
+	// (live-recalibratable) verticalOffsetIn, so turning while strafing
+	// doesn't read as drift.
+	chassis.setDriftSource(&verticalWheel, &odom);
 
 	gui.addPage(std::make_unique<HomePage>(&chassis.imu()));
 

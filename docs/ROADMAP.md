@@ -295,6 +295,23 @@ defaults shipped here.
       target. Pure part unit-tested in `tests/control/heading_hold_test.cpp`, including the 0/360 seam
       and a property check that the held heading can never drift outside the cap.
 
+- [x] Drift correction measures actual drift — `driftCorrectionKP` used to treat *all* forward/back
+      motion on the vertical tracking wheel as drift whenever strafing dominated, so it fought any
+      intentional diagonal (a strafe with some throttle mixed in, or a field-centric push with the
+      chassis rotated ~45°) and fought turning while strafing, since a wheel 3.59in off center rolls
+      ~0.06in per degree of rotation. `chassis::strafeDriftIn()` now removes the wheel's rotation arc
+      (using `OdometryConfig::verticalOffsetIn`, read live via `setDriftSource()`'s new `odometry`
+      argument) and the forward travel the command asked for (the corner encoders' measured strafe
+      travel scaled by the command's throttle/strafe ratio). It deliberately does *not* subtract the
+      encoders' own forward reading — corners spinning unevenly under the same command is the most
+      common strafe drift and exactly what `thermalCompensation`'s feedforward leaves for this loop to
+      catch. Pure and unit-tested in `tests/chassis/drift_math_test.cpp`.
+- [x] `moveToPoint()`/`followPath()` hold heading — both passed a zero turn command, so a holonomic
+      chassis could yaw freely on the way (translation still arrived, since `toLocalFrame()` uses the
+      live heading). They now hold the heading the motion started with through the turn PID, the same
+      way `moveToPose()` holds its target, and `followPath()` carries its starting heading through the
+      final `moveToPoint()` approach.
+
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware** — tab bar height has been bumped twice in response to that
 testing (28 → 31 → 43px total). `src/main.cpp` wires up `Gui` with `HomePage` + `AutonSelectorPage` +
