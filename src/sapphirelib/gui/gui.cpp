@@ -46,7 +46,7 @@ void Gui::addPage(std::unique_ptr<Page> page) {
 void Gui::start(std::uint32_t periodMs) { timer_ = lv_timer_create(&Gui::timerTrampoline, periodMs, this); }
 
 void Gui::showWarning(const std::string& text) {
-    if (warningActive_ && text == std::string(lv_label_get_text(headerLabel_))) return;
+    if (warningActive_ && text == lv_label_get_text(headerLabel_)) return;
     warningActive_ = true;
     lv_obj_set_style_bg_color(header_, lv_color_hex(kWarningBgColor), 0);
     lv_obj_set_style_text_color(headerLabel_, lv_color_hex(kWarningTextColor), 0);
@@ -66,7 +66,16 @@ void Gui::timerTrampoline(lv_timer_t* timer) {
 }
 
 void Gui::tick() {
-    for (auto& page : pages_) page->update();
+    // Tab indices match pages_ order: addPage() appends a tab and a page
+    // together, and neither is ever removed.
+    const std::size_t active = lv_tabview_get_tab_active(tabview_);
+
+    for (std::size_t i = 0; i < pages_.size(); ++i) {
+        // The page that just became visible is refreshed on that same tick
+        // (it's `active` now), so switching tabs never shows a frame of
+        // whatever it last drew before being hidden.
+        if (i == active || pages_[i]->updatesWhenHidden()) pages_[i]->update();
+    }
 }
 
 } // namespace sapphirelib::gui

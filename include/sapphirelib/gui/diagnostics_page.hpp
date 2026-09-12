@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "sapphirelib/diag/sensor_check.hpp"
@@ -31,14 +32,31 @@ public:
     void build(lv_obj_t* container) override;
     void update() override;
 
+    /// True: this page keeps polling even when another tab is showing, so
+    /// the screen-wide warning banner it raises through Gui::showWarning()
+    /// stays honest no matter which tab the driver is looking at. It
+    /// throttles itself to a fixed poll interval to pay for that — see
+    /// update().
+    bool updatesWhenHidden() const override;
+
 private:
     struct Row {
         diag::SensorCheck check;
         lv_obj_t* label = nullptr;
+
+        /// The verdict whose color is currently applied to `label`, so
+        /// update() can skip restyling a row that hasn't changed. build()
+        /// establishes the invariant by painting every row failing-colored
+        /// before the first check runs.
+        bool ok = false;
     };
 
     std::vector<Row> rows_;
     Gui* gui_;
+
+    /// pros::millis() at the last actual poll — see kPollIntervalMs. 0 means
+    /// "never polled", which always polls.
+    std::uint32_t lastPollMs_ = 0;
 };
 
 } // namespace sapphirelib::gui

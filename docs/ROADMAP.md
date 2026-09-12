@@ -216,12 +216,28 @@ defaults shipped here.
 - [x] Startup diagnostic checks (sensor connectivity) — `sapphirelib::diag`: `SensorCheck` (label + port +
       expected `DeviceKind`) checked against PROS's device registry (`pros::c::registry_get_plugged_type`)
       via `runCheck()`/`runChecks()`, without needing the device to already be constructed. `gui::
-      DiagnosticsPage` re-runs every registered check on every refresh tick — not just at startup, so a
+      DiagnosticsPage` re-runs every registered check on a 250ms poll — not just at startup, so a
       sensor knocked loose mid-match shows up too — and lists failures with what's actually plugged in
       instead; optionally raises a red header banner via `Gui::showWarning()`/`clearWarning()` so a bad
       sensor is visible from any tab. Motor *fault* checking (stalls/over-temp, as opposed to wrong-port
       detection) is still open — `MotorGroup` doesn't currently expose per-motor fault flags.
 
+- [x] GUI refresh-cost pass — the default pages were cheap individually but the refresh model wasn't:
+      every registered page's `update()` ran on every tick regardless of which tab was showing, and each
+      one rewrote its labels unconditionally. `lv_label_set_text()` reallocates and invalidates even when
+      the new text is byte-identical, so five pages' worth of unchanged readouts kept LVGL redrawing the
+      whole 480x240 ARGB8888 surface at the timer rate. Now: `Gui::tick()` refreshes only the active
+      tab's page, with `Page::updatesWhenHidden()` as the opt-in for pages whose `update()` has an
+      off-tab side effect (only `DiagnosticsPage`, for its screen-wide warning banner — and it throttles
+      itself to 250ms rather than leaning on the timer period); a shared `gui::setLabelText()` compares
+      before writing, so a label invalidates on change instead of on tick; `OdometryPage` repositions its
+      robot dot and heading line only when they'd land on a different pixel. That page also carried a
+      real lifetime bug: `lv_line_set_points()` stores only the *address* of the point array, and it was
+      being handed a stack local from `update()`, so LVGL drew the heading line from a dead stack frame
+      on every refresh — the array is now a member. Its field view was also 15px taller than the tab
+      content area, putting the bottom of the field behind a scroll gesture; shrinking it to 150px lets
+      both it and the tab container drop `LV_OBJ_FLAG_SCROLLABLE`, which stops LVGL recomputing scroll
+      extents every time the dot moves.
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware** — tab bar height has been bumped twice in response to that
 testing (28 → 31 → 43px total). `src/main.cpp` wires up `Gui` with `HomePage` + `AutonSelectorPage` +
