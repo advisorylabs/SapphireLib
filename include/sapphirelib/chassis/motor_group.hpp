@@ -50,6 +50,17 @@ public:
     /// Average actual velocity across the group, in RPM.
     double getVelocityRPM() const;
 
+    /// Hottest motor in the group, in degrees Celsius — the max, not the
+    /// mean, because the V5 derates each motor on its own temperature, so
+    /// the worst one governs what the group can actually deliver.
+    ///
+    /// Motors that aren't answering are skipped (PROS reports those as
+    /// PROS_ERR_F, i.e. infinity). An empty group, or one where nothing
+    /// answered, reads 0 — cool, so nothing downstream mistakes a
+    /// disconnected cable for an overheating motor. Use diag::SensorCheck to
+    /// catch that case.
+    double getTemperatureC() const;
+
     Gearset gearset() const;
 
     /// The gearset's rated free-speed, in RPM (100 / 200 / 600).

@@ -179,7 +179,28 @@ void initialize() {
 	    // sensed drift) — tune it up on the real robot until sideways drift
 	    // is corrected without the center wheels fighting an intentional
 	    // strafe.
-	    AsteriskConfig{.middleLeftPort = -2, .middleRightPort = 9, .driftCorrectionKP = 0.5});
+	    //
+	    // turnContribution = 1.0 gives the center wheels full rotational
+	    // authority, so they drive every turn instead of coasting through
+	    // it. These are 5.5W motors against 11W corners — if they end up
+	    // saturating and dragging on fast turns, walk this down rather than
+	    // to 0.
+	    //
+	    // thermalCompensation = 1.0 has the center wheels make up whatever the
+	    // corner motors stop delivering as they heat up — both the plain loss
+	    // of speed when the corners derate together, and the forward/back
+	    // drift and twist that one derated corner throws into a strafe.
+	    // maxThermalCorrectionVolts caps how much they'll be asked for on top
+	    // of their normal share; 6V is half a motor's range, which leaves the
+	    // smaller 5.5W center motors margin before they're the ones
+	    // overheating. Works alongside driftCorrectionKP above, not instead of
+	    // it: this corrects ahead of the drift, that one cleans up what's left.
+	    AsteriskConfig{.middleLeftPort = -2,
+	                   .middleRightPort = 9,
+	                   .driftCorrectionKP = 0.5,
+	                   .turnContribution = 1.0,
+	                   .thermalCompensation = 1.0,
+	                   .maxThermalCorrectionVolts = 6.0});
 	drivetrain = &chassis;
 	SAPPHIRELIB_LOG_INFO("init", "chassis ready (IMU calibrated)");
 	// HolonomicDrivetrain zeros its field heading at construction time, so
@@ -329,6 +350,11 @@ void opcontrol() {
 		// Field-relative stick input: "forward" always means the field
 		// heading captured at initialize() (or the last resetFieldHeading()
 		// press above), not the robot's nose.
+		//
+		// The right stick steers a *heading*, not a turn rate — see
+		// holonomicFieldCentricHeadingHold() below. Curving it still makes
+		// sense: it shapes how fast the stick sweeps that heading, so small
+		// deflections give fine aim and large ones swing around quickly.
 		const double fieldThrottle =
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_Y) / 127.0, kJoystickCurve);
 		const double fieldStrafe =
@@ -351,7 +377,19 @@ void opcontrol() {
 			continue;
 		}
 
-		drivetrain->holonomicFieldCentric(fieldThrottle, fieldStrafe, turn);
+		// Heading-hold turning: the right stick moves a target heading and
+		// the turn PID holds the chassis on it continuously, mixed in on top
+		// of the translation rather than replacing it. Releasing the stick
+		// leaves the bot pointed somewhere definite instead of drifting on
+		// through, and a strafe that used to wander off-heading gets
+		// straightened as it goes — including the wander an overheating
+		// corner motor causes (see AsteriskConfig::thermalCompensation,
+		// which attacks the same problem from the feedforward side).
+		//
+		// Tunable via drivetrain->setHeadingHold(); the defaults on
+		// HeadingHoldConfig are the starting point. If turning feels
+		// sluggish, raise maxLeadDeg before slewDegPerSec.
+		drivetrain->holonomicFieldCentricHeadingHold(fieldThrottle, fieldStrafe, turn);
 		pros::delay(20);
 	}
 }

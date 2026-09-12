@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/chassis/thermal_math.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
 #include "sapphirelib/util/angle.hpp"
 
@@ -13,6 +14,24 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kLoopDelayMs = 10;
+
+/// Full motor voltage. holonomic() takes normalized [-1, 1] axes while the
+/// PIDs are configured in volts, so converting between them means dividing
+/// by this — same as moveToPose() already does with its turn output.
+constexpr double kFullScaleVolts = 12.0;
+
+/// A gap longer than this between heading-hold calls means the driver loop
+/// wasn't running — an autonomous routine, a PID tuner test, a calibration
+/// spin — and whatever heading was being held belongs to before that, not
+/// now. Generous next to a 10-20ms driver loop, short next to any of those
+/// interruptions.
+constexpr double kHeadingHoldResumeGapS = 0.25;
+
+/// How often motor temperatures are actually re-read. A V5 motor takes tens
+/// of seconds to move a degree under load, so polling this near the 100Hz
+/// rate setWheelVoltages() runs at would be six device reads per tick for a
+/// number that hasn't changed.
+constexpr std::uint32_t kThermalPollIntervalMs = 500;
 
 struct WheelMix {
     double frontLeft;
@@ -52,8 +71,8 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
         middleLeft_.emplace(middleLeftPorts, gearset);
         middleRight_.emplace(middleRightPorts, gearset);
 
-        // Center wheels always coast when they're not actively driving
-        // straight or correcting drift — see setWheelVoltages().
+        // Center wheels coast whenever they're not actively driving,
+        // turning, or correcting drift — see setWheelVoltages().
         middleLeft_->setBrakeMode(BrakeMode::coast);
         middleRight_->setBrakeMode(BrakeMode::coast);
     }
@@ -79,6 +98,32 @@ void HolonomicDrivetrain::setDriftSource(const odom::TrackingWheel* verticalWhee
     }
 }
 
+void HolonomicDrivetrain::refreshThermalFractions() {
+    // Only reached with the Asterisk wheels configured (setWheelVoltages()
+    // returns before this otherwise). Bailing here when the feature is off
+    // keeps six device reads per poll off a chassis that isn't using it —
+    // the fractions stay at their 1.0 defaults, which produce no correction.
+    if (!asterisk_ || asterisk_->thermalCompensation <= 0.0) return;
+
+    const std::uint32_t now = pros::millis();
+    if (lastThermalPollMs_ != 0 && now - lastThermalPollMs_ < kThermalPollIntervalMs) return;
+    lastThermalPollMs_ = now;
+
+    thermalFractions_ = CornerValues{
+        thermalPowerFraction(frontLeft_.getTemperatureC()),
+        thermalPowerFraction(frontRight_.getTemperatureC()),
+        thermalPowerFraction(backLeft_.getTemperatureC()),
+        thermalPowerFraction(backRight_.getTemperatureC()),
+    };
+
+    // Averaged, unlike the corners: this one only ever scales the whole
+    // correction down, so which of the two center wheels is hotter doesn't
+    // change what the correction should be, only how much of it to ask for.
+    centerThermalFraction_ = (thermalPowerFraction(middleLeft_->getTemperatureC()) +
+                              thermalPowerFraction(middleRight_->getTemperatureC())) /
+                             2.0;
+}
+
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
                                             double backRight) {
     frontLeft_.moveVoltage(frontLeft);
@@ -88,18 +133,29 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
 
     if (!asterisk_) return;
 
-    // Recover the pure throttle/strafe components from the four already-
-    // mixed corner voltages (see mixHolonomic()): summing all four cancels
-    // strafe and turn, leaving 4x throttle; this cross-combination cancels
-    // throttle and turn instead, leaving 4x strafe. This lets the center
-    // wheels react correctly no matter which call site produced the mix
-    // (holonomic() driver input, driveDistance()'s heading-corrected drive,
-    // or turnToHeading()'s turn-only mix, where both components are ~0 and
-    // the center wheels naturally coast).
+    // Recover the pure throttle/strafe/turn components from the four
+    // already-mixed corner voltages (see mixHolonomic()): summing all four
+    // cancels strafe and turn, leaving 4x throttle; each cross-combination
+    // below cancels two of the three, leaving 4x the remaining one. This
+    // lets the center wheels react correctly no matter which call site
+    // produced the mix — holonomic() driver input, driveDistance()'s
+    // heading-corrected drive, or turnToHeading()'s turn-only mix.
     const double throttleVolts = (frontLeft + frontRight + backLeft + backRight) / 4.0;
     const double strafeVolts = (frontLeft - frontRight - backLeft + backRight) / 4.0;
+    const double turnVolts = (frontLeft - frontRight + backLeft - backRight) / 4.0;
 
-    double centerVolts = throttleVolts;
+    // Feedforward from what the corners are failing to deliver. Computed
+    // from this tick's corner voltages rather than cached, because the same
+    // derating means different things depending on what's being driven —
+    // see refreshThermalFractions(). Purely additive: with every corner cool
+    // this is zero and the terms below are untouched.
+    refreshThermalFractions();
+    const CenterCorrection thermal = centerThermalCorrection(
+        CornerValues{frontLeft, frontRight, backLeft, backRight}, thermalFractions_,
+        centerThermalFraction_, asterisk_->thermalCompensation,
+        asterisk_->maxThermalCorrectionVolts);
+
+    double centerVolts = throttleVolts + thermal.commonVolts;
 
     const bool strafingDominant = std::fabs(strafeVolts) > std::fabs(throttleVolts);
     if (asterisk_->driftCorrectionKP != 0.0 && strafingDominant && driftSource_ != nullptr) {
@@ -121,9 +177,33 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
         lastDriftTickMs_ = pros::millis();
     }
 
-    centerVolts = std::clamp(centerVolts, -12.0, 12.0);
-    middleLeft_->moveVoltage(centerVolts);
-    middleRight_->moveVoltage(centerVolts);
+    // Differential turn term, on top of the common forward/back term. The
+    // left side takes +turn in mixHolonomic(), and the middle ports use the
+    // same sign convention as the corner ports, so middle-left matching
+    // front-left's sign is what makes these push the turn rather than fight
+    // it. Without this the center wheels saw a zero net command during a
+    // pure turn and just coasted through it; they now carry their share.
+    //
+    // This also means driveDistance()'s heading correction — which reaches
+    // here as a small turn component riding on top of the drive output —
+    // gets the center wheels helping hold the line, not just watching.
+    //
+    // The thermal term rides along here for the same reason it does on the
+    // throttle: a lopsided set of corner temperatures twists the chassis as
+    // well as pushing it off line, and cancelling that twist is differential
+    // work.
+    const double centerTurnVolts =
+        turnVolts * asterisk_->turnContribution + thermal.differentialVolts;
+
+    // Clamped per side after summing, since it's the sum that has to fit in
+    // a motor's range. holonomic() normalizes its mix so neither side can
+    // reach the limit from driver input; this bounds the autonomous paths,
+    // whose raw PID volts have always been free to run past it (the corner
+    // wheels clamp the same way, inside moveVoltage()).
+    const double leftVolts = std::clamp(centerVolts + centerTurnVolts, -12.0, 12.0);
+    const double rightVolts = std::clamp(centerVolts - centerTurnVolts, -12.0, 12.0);
+    middleLeft_->moveVoltage(leftVolts);
+    middleRight_->moveVoltage(rightVolts);
 }
 
 void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn) {
@@ -138,6 +218,47 @@ void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn)
     setWheelVoltages(mix.frontLeft / largest * 12.0, mix.frontRight / largest * 12.0,
                       mix.backLeft / largest * 12.0, mix.backRight / largest * 12.0);
 }
+
+double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
+    const std::uint32_t now = pros::millis();
+    const double currentHeadingDeg = imu_.getHeadingDeg();
+    const double dtS = (now - lastHeadingHoldMs_) / 1000.0;
+    const bool resuming =
+        lastHeadingHoldMs_ == 0 || !(dtS > 0.0) || dtS > kHeadingHoldResumeGapS;
+    lastHeadingHoldMs_ = now;
+
+    if (resuming) {
+        // Adopt wherever the chassis is pointing rather than steering it
+        // back to a heading from before whatever just interrupted driver
+        // control. The PID is reset for the same reason: its accumulated
+        // integral and last error describe a situation that no longer
+        // exists.
+        heldHeadingDeg_ = currentHeadingDeg;
+        turnPID_.reset();
+        return 0.0;
+    }
+
+    heldHeadingDeg_ =
+        advanceHeldHeadingDeg(heldHeadingDeg_, currentHeadingDeg, turnInput, dtS, headingHold_);
+
+    // Same target/measurement=0 trick as turnToHeading() — see that
+    // function's comment. Explicit dt because a driver loop's period is the
+    // caller's business and needn't match PID::Config::nominalDtS.
+    return turnPID_.update(wrapDegrees180(heldHeadingDeg_ - currentHeadingDeg), 0.0, dtS);
+}
+
+void HolonomicDrivetrain::holonomicHeadingHold(double throttle, double strafe, double turnInput) {
+    holonomic(throttle, strafe, headingHoldTurnVolts(turnInput) / kFullScaleVolts);
+}
+
+void HolonomicDrivetrain::holonomicFieldCentricHeadingHold(double throttle, double strafe,
+                                                            double turnInput) {
+    holonomicFieldCentric(throttle, strafe, headingHoldTurnVolts(turnInput) / kFullScaleVolts);
+}
+
+void HolonomicDrivetrain::setHeadingHold(HeadingHoldConfig config) { headingHold_ = config; }
+
+double HolonomicDrivetrain::heldHeadingDeg() const { return heldHeadingDeg_; }
 
 void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, double turn) {
     // Rotate the field-relative stick vector into the robot's current frame

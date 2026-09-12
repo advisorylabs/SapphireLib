@@ -238,6 +238,63 @@ defaults shipped here.
       content area, putting the bottom of the field behind a scroll gesture; shrinking it to 150px lets
       both it and the tab container drop `LV_OBJ_FLAG_SCROLLABLE`, which stops LVGL recomputing scroll
       extents every time the dot moves.
+- [x] Asterisk center wheels now drive turns — they were commanded off the recovered *throttle*
+      component alone, which is identically zero for a pure turn mix, so the 5th/6th motors coasted
+      through every `turnToHeading()` and every stick turn. `setWheelVoltages()` now also recovers the
+      rotation component and applies it differentially (left `+`, right `−`), scaled by the new
+      `AsteriskConfig::turnContribution` (default `1.0`; `0` restores the old coast-through behavior).
+      This is the physically correct thing for them to do — in a point turn about the chassis center a
+      wheel on the left or right flank travels purely fore/aft, exactly the direction a straight-mounted
+      center wheel rolls — and it also puts them behind `driveDistance()`'s heading correction, which
+      reaches the same function as a small rotation term riding on the drive output.
+
+- [x] Thermal compensation on the Asterisk center wheels — a V5 motor derates its own available power
+      as it heats (roughly half by 55C, shutdown by 70C) and reports nothing back up the command path.
+      On a holonomic chassis that's worse than "slower": the four corners' contributions are meant to
+      cancel in every axis but the one being driven, so a *single* derated corner breaks the
+      cancellation and the chassis picks up motion nobody asked for — most visibly as a strafe that
+      creeps forward or back and twists as it goes. Straight-mounted center wheels face exactly the
+      right way to cancel that.
+      `chassis::thermalPowerFraction()` estimates what a motor at a given temperature still delivers;
+      `chassis::centerThermalCorrection()` multiplies each corner's shortfall by its commanded voltage
+      and projects the four onto the axes the center wheels can push on ([+ + + +] for forward,
+      [+ - + -] for yaw, no strafe pattern because nothing mounted fore/aft can help there). One
+      expression covers both regimes: corners derating *together* under throttle reinforce into a
+      drive-harder boost, while *unevenly* derated corners under a strafe produce the drift correction.
+      `HolonomicDrivetrain` caches the per-corner fractions at 2Hz (temperature moves over tens of
+      seconds) but recomputes the correction every tick from live corner voltages — necessarily, since
+      the same derating means a shortfall while driving and a drift while strafing, and only the
+      current command distinguishes them. Per corner, not averaged: two hot corners on a strafe's
+      forward diagonal double the drift while one on each diagonal cancels, and an average can't tell
+      those apart. Pure and unit-tested in `tests/chassis/thermal_math_test.cpp`, including that
+      asymmetry case checked against an independently computed drift. Tunable via
+      `AsteriskConfig::thermalCompensation` (0 disables) and `maxThermalCorrectionVolts`, faded out as
+      the *center* motors heat up themselves so this can't turn a four-motor overheat into a six-motor
+      one. Feedforward, and deliberately complementary to `driftCorrectionKP`'s reactive tracking-wheel
+      loop — this corrects before the chassis has moved, that one catches the remainder plus everything
+      derating isn't. What stays out of reach is sideways thrust: a strafe on hot corners holds its
+      line but still loses speed.
+
+- [x] Heading-hold driver control — the turn stick now steers a *heading* instead of commanding a turn
+      rate: `sapphirelib::advanceHeldHeadingDeg()` sweeps a held heading from the stick, and
+      `HolonomicDrivetrain::holonomicFieldCentricHeadingHold()` closes the turn PID on it every tick,
+      mixing the result in on top of translation rather than replacing it. Releasing the stick leaves
+      the chassis pointed somewhere definite instead of coasting on through, and anything that knocks
+      it off heading mid-move — a collision, an uneven strafe, a corner motor derating — gets corrected
+      without the driver reacting. The raw-rate `holonomic()`/`holonomicFieldCentric()` are untouched
+      and still what the autonomous paths use.
+      Three things make it behave. A deadband, because a V5 stick at rest reports a count or two that
+      `curveJoystick()` passes straight through and a held heading would integrate all match (input past
+      it is rescaled so there's no jump at the edge). A lead cap, because a rate-steered target
+      otherwise sweeps at its full slew rate while the chassis lags by whatever error the PID needs —
+      a debt the chassis pays off by over-rotating after the stick is released; capping how far the
+      target may run ahead bounds that, at the cost of making the cap, not the slew rate, the real
+      limit on sustained turn rate. And a resume check: a gap longer than a quarter second means driver
+      control wasn't running (autonomous, a PID tuner test, a calibration spin), so the held heading
+      re-adopts the live one and the PID is reset rather than steering back to a pre-interruption
+      target. Pure part unit-tested in `tests/control/heading_hold_test.cpp`, including the 0/360 seam
+      and a property check that the held heading can never drift outside the cap.
+
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware** — tab bar height has been bumped twice in response to that
 testing (28 → 31 → 43px total). `src/main.cpp` wires up `Gui` with `HomePage` + `AutonSelectorPage` +
