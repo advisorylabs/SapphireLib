@@ -12,9 +12,11 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 
+#include "pros/rtos.hpp"
 #include "sapphirelib/chassis/drift_math.hpp"
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
@@ -63,7 +65,29 @@ public:
     /// direction. Robot-centric: `throttle`/`strafe` are relative to the
     /// chassis's own nose. For field-centric ("headless") control, see
     /// holonomicFieldCentric() instead.
+    ///
+    /// How each stick becomes volts depends on setDriverInputMode().
     void holonomic(double throttle, double strafe, double turn);
+
+    /// Raw per-axis volts, before wheel mixing — never affected by
+    /// setDriverInputMode(). For anything that isn't a driver's sticks: a
+    /// characterization run, a calibration spin, a custom autonomous
+    /// controller. Normalized the same way as holonomic() so no wheel exceeds
+    /// 12V without distorting the direction.
+    void holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts);
+
+    /// Chooses how holonomic() and the heading-hold/field-centric variants
+    /// turn stick input into motor output — see DriverInputMode. Heading
+    /// hold's turn output is always volts from its PID; this only changes
+    /// the translation sticks there. Safe to call from any task.
+    void setDriverInputMode(DriverInputMode mode);
+    DriverInputMode driverInputMode() const;
+
+    /// Installs measured per-axis models — used by DriverInputMode::velocity.
+    /// Safe to call from any task (e.g. a tuning run finishing while driver
+    /// control is live).
+    void setAxisModels(HolonomicAxisModels models);
+    HolonomicAxisModels axisModels() const;
 
     /// Field-centric ("headless") driver control: `throttle`/`strafe` are
     /// relative to the field, not the chassis — "throttle" always drives
@@ -76,7 +100,7 @@ public:
 
     /// Driver control with the turn stick steering a *heading* rather than a
     /// turn rate: `turnInput` sweeps a held heading (see HeadingHoldConfig),
-    /// and the turn PID drives the chassis onto it every tick — so releasing
+    /// and headingHoldPID() drives the chassis onto it every tick — so releasing
     /// the stick leaves the chassis pointed somewhere definite instead of
     /// wherever momentum carried it, and anything that knocks it off that
     /// heading is corrected without the driver reacting.
@@ -93,9 +117,10 @@ public:
     /// re-adopts the chassis's current heading rather than snapping back to
     /// a target from before the interruption.
     ///
-    /// Shares turnPID_ with turnToHeading(), so the two can't run at once —
-    /// which they never do, since one is driver control and the other is
-    /// autonomous.
+    /// Closes the loop with its own PID (headingHoldPID()), not the turn PID
+    /// autonomous uses: holding a heading under a driver wants a softer
+    /// response than snapping onto one in autonomous, and sharing one set of
+    /// gains forces one of them to be wrong.
     void holonomicHeadingHold(double throttle, double strafe, double turnInput);
 
     /// holonomicHeadingHold() with field-centric translation — the
@@ -177,13 +202,16 @@ public:
     /// the same physical port.
     sensors::Imu& imu();
 
-    /// Exposes the internal drive/turn PID controllers for live tuning
-    /// (see gui::PidTunerPage) — adjusting gains through these takes effect
-    /// immediately on the next driveDistance()/turnToHeading()/moveTo*()
-    /// call, since they read gains fresh each update() rather than caching
-    /// them at construction.
+    /// Exposes the internal PID controllers for live tuning (see
+    /// gui::PidTunerPage) — adjusting gains through these takes effect
+    /// immediately on the next update, since they read gains fresh each
+    /// update() rather than caching them at construction. drivePID() and
+    /// turnPID() drive autonomous motions; headingHoldPID() drives
+    /// holonomicHeadingHold() and starts out with turnPID()'s constructor
+    /// config until tuned separately.
     PID& drivePID();
     PID& turnPID();
+    PID& headingHoldPID();
 
     /// Attaches the forward/back TrackingWheel (typically the same
     /// RotationTrackingWheel passed to Odometry::Sensors::vertical) that the
@@ -208,6 +236,10 @@ private:
     DrivetrainConfig config_;
     PID drivePID_;
     PID turnPID_;
+    PID headingHoldPID_;
+
+    std::atomic<DriverInputMode> driverInputMode_{DriverInputMode::voltage};
+    mutable pros::MutexVar<HolonomicAxisModels> axisModels_;
 
     /// Field-centric reference heading — see resetFieldHeading(). Set to the
     /// IMU heading at construction time, so holonomicFieldCentric() works out
@@ -254,6 +286,14 @@ private:
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);
 
+    /// Rotates a field-relative (throttle, strafe) into the chassis's frame
+    /// — see holonomicFieldCentric().
+    void fieldToRobot(double& throttle, double& strafe);
+
+    /// One translation or turn stick, [-1, 1], to axis volts per the current
+    /// DriverInputMode and `model`.
+    double stickVolts(double input, const MotorFeedforward& model) const;
+
     /// Sideways travel implied by the four corner encoders — the strafe
     /// cross-combination from setWheelVoltages(), applied to positions.
     double encoderStrafeIn() const;
@@ -264,7 +304,7 @@ private:
                             const odom::Odometry& odometry, ExitConditions exit);
 
     /// Advances the held heading by one tick of `turnInput` and returns the
-    /// turn PID's output, in volts, for getting onto it.
+    /// heading-hold PID's output, in volts, for getting onto it.
     double headingHoldTurnVolts(double turnInput);
 
     /// Re-reads corner and center motor temperatures (at most every

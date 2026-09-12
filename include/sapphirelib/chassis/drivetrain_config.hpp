@@ -11,7 +11,32 @@
 
 #include <cstdint>
 
+#include "sapphirelib/control/feedforward.hpp"
+
 namespace sapphirelib::chassis {
+
+/// How driver-control stick input becomes motor output.
+enum class DriverInputMode {
+    /// Stick position is a fraction of full voltage: half stick is 6V. The
+    /// classic feel — direct, but the first few percent of travel does
+    /// nothing while the voltage is still too low to overcome friction.
+    voltage,
+
+    /// Stick position is a fraction of the axis's top speed: half stick asks
+    /// for half of top speed, and the measured model (see
+    /// HolonomicAxisModels) works out the voltage for it, friction included.
+    /// Falls back to voltage behavior on any axis without a valid model.
+    velocity,
+};
+
+/// Measured models for a holonomic chassis's three independent axes — see
+/// tuning::characterizeAxis(). Translation axes are in inches, turn in
+/// degrees, all against the axis voltage before wheel mixing.
+struct HolonomicAxisModels {
+    MotorFeedforward forward;
+    MotorFeedforward strafe;
+    MotorFeedforward turn;
+};
 
 struct DrivetrainConfig {
     /// Diameter of the drive wheels, in inches. Required — there's no sane

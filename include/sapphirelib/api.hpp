@@ -19,6 +19,7 @@
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/chassis/tank_drivetrain.hpp"
 #include "sapphirelib/chassis/thermal_math.hpp"
+#include "sapphirelib/control/feedforward.hpp"
 #include "sapphirelib/control/heading_hold.hpp"
 #include "sapphirelib/control/joystick_curve.hpp"
 #include "sapphirelib/control/pid.hpp"
@@ -41,8 +42,9 @@
 
 #include "sapphirelib/diag/sensor_check.hpp"
 
-#include "sapphirelib/tuning/auto_tune_math.hpp"
-#include "sapphirelib/tuning/auto_tune_runner.hpp"
+#include "sapphirelib/tuning/characterization_math.hpp"
+#include "sapphirelib/tuning/characterization_runner.hpp"
+#include "sapphirelib/tuning/gain_design.hpp"
 
 #include "sapphirelib/gui/auton_selector_page.hpp"
 #include "sapphirelib/gui/diagnostics_page.hpp"

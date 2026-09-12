@@ -19,8 +19,8 @@ namespace sapphirelib {
 /// "output units per (error unit x second)" and kD is "output units per
 /// (error unit / second)". PID::update() scales the integral and derivative
 /// terms by its timestep accordingly, so a set of gains stays valid if the
-/// loop period changes, and gains produced by textbook tuning rules (see
-/// sapphirelib::tuning::gainsFromUltimate()) can be used directly without
+/// loop period changes, and gains designed from a measured model (see
+/// sapphirelib::tuning::designPositionGains()) can be used directly without
 /// a per-tick conversion.
 struct PIDGains {
     double kP = 0.0;

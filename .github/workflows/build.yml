@@ -48,6 +48,8 @@ jobs:
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/sensors/imu_scale_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
+              tests/tuning/characterization_math_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
+              tests/tuning/gain_design_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
             esac
             g++ -std=c++20 -Wall -Iinclude "$test" "$src" $extra -o "/tmp/$name"
             "/tmp/$name"
