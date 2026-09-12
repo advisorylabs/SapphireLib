@@ -13,6 +13,7 @@
 #include "sapphirelib/util/log.hpp"
 #include "sapphirelib/version.hpp"
 
+#include "sapphirelib/chassis/drift_math.hpp"
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/holonomic_drivetrain.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"

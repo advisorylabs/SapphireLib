@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "sapphirelib/chassis/drift_math.hpp"
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/chassis/thermal_math.hpp"
@@ -124,10 +125,11 @@ public:
     void resetFieldHeading();
 
     /// Drives to field point (`xIn`, `yIn`), reading pose from `odometry`.
-    /// Doesn't control heading — a holonomic chassis can translate and
-    /// rotate independently, so if you also need a specific final heading,
-    /// use moveToPose() instead rather than chaining a turnToHeading()
-    /// after this. Blocks until settled or timed out, then stops.
+    /// Holds the heading the chassis had when the motion started, with the
+    /// turn PID — a holonomic chassis can translate and rotate
+    /// independently, so if you need a different final heading, use
+    /// moveToPose() instead rather than chaining a turnToHeading() after
+    /// this. Blocks until settled or timed out, then stops.
     void moveToPoint(double xIn, double yIn, const odom::Odometry& odometry, ExitConditions exit);
 
     /// Drives to field pose (`xIn`, `yIn`, `headingDeg`), reading pose from
@@ -144,7 +146,9 @@ public:
     /// `config.lookaheadIn` ahead on the path, at constant cruise voltage,
     /// until within `config.finalApproachIn` of the path's last waypoint —
     /// then hands off to moveToPoint() for a controlled, settled stop
-    /// there. Blocks until that final moveToPoint() settles or times out.
+    /// there. Holds the heading the chassis had when the path started, all
+    /// the way through that final approach. Blocks until the final
+    /// moveToPoint() settles or times out.
     void followPath(const motion::Path& path, const odom::Odometry& odometry, motion::PursuitConfig config);
 
     /// Drives straight for `inches` (signed: negative reverses) using
@@ -187,8 +191,13 @@ public:
     /// AsteriskConfig::driftCorrectionKP. No-op if the drivetrain wasn't
     /// constructed with an `asterisk` config. Reading a TrackingWheel from
     /// more than one object is safe (only *commanding* a device from more
-    /// than one place would conflict).
-    void setDriftSource(const odom::TrackingWheel* verticalWheel);
+    /// than one place would conflict). `odometry` supplies the wheel's
+    /// OdometryConfig::verticalOffsetIn, read fresh every tick so a
+    /// recalibration (e.g. OdometryPage's "Calibrate Offsets") applies
+    /// immediately — without it, turning while strafing rolls an off-center
+    /// wheel and reads as drift. nullptr treats the wheel as centered.
+    void setDriftSource(const odom::TrackingWheel* verticalWheel,
+                        const odom::Odometry* odometry = nullptr);
 
 private:
     MotorGroup frontLeft_;
@@ -213,7 +222,10 @@ private:
 
     /// Drift-correction state — see setDriftSource() and setWheelVoltages().
     const odom::TrackingWheel* driftSource_ = nullptr;
+    const odom::Odometry* driftOffsetSource_ = nullptr;
     double lastDriftVerticalIn_ = 0.0;
+    double lastDriftStrafeIn_ = 0.0;
+    double lastDriftHeadingDeg_ = 0.0;
     std::uint32_t lastDriftTickMs_ = 0;
 
     /// Thermal-compensation state — see AsteriskConfig::thermalCompensation
@@ -241,6 +253,15 @@ private:
 
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);
+
+    /// Sideways travel implied by the four corner encoders — the strafe
+    /// cross-combination from setWheelVoltages(), applied to positions.
+    double encoderStrafeIn() const;
+
+    /// moveToPoint() holding an explicit heading, so followPath() can keep
+    /// its starting heading through the final approach.
+    void moveToPointHolding(double xIn, double yIn, double holdHeadingDeg,
+                            const odom::Odometry& odometry, ExitConditions exit);
 
     /// Advances the held heading by one tick of `turnInput` and returns the
     /// turn PID's output, in volts, for getting onto it.

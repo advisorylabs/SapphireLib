@@ -45,9 +45,11 @@ struct AsteriskConfig {
     std::int8_t middleLeftPort;
     std::int8_t middleRightPort;
 
-    /// Proportional gain applied to the vertical tracking wheel's drift
-    /// rate (inches/sec of unwanted forward/back motion) while strafing, to
-    /// correct it via the center wheels alone. 0 disables drift correction
+    /// Proportional gain (volts per inch/sec) applied to the drift rate
+    /// while strafing — the forward/back motion the vertical tracking wheel
+    /// sees, minus its rotation arc and minus whatever forward component the
+    /// command itself asked for (see chassis::strafeDriftIn()) — to correct
+    /// it via the center wheels alone. 0 disables drift correction
     /// (the center wheels will still drive during forward/backward motion —
     /// this only gates the strafe-time correction). Has no effect unless
     /// setDriftSource() has been called with a vertical TrackingWheel.
