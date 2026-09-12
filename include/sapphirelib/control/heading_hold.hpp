@@ -27,9 +27,9 @@ struct HeadingHoldConfig {
     /// How fast a fully deflected turn stick sweeps the held heading, in
     /// degrees per second. This is how fast the driver can *ask* to turn —
     /// not necessarily how fast the chassis actually turns, which is capped
-    /// by maxLeadDeg and by how hard the turn PID chases.
+    /// by maxLeadDeg and by how hard the heading-hold PID chases.
     ///
-    /// If turning feels sluggish, raise maxLeadDeg or the turn PID's kP
+    /// If turning feels sluggish, raise maxLeadDeg or the heading-hold PID's kP
     /// before raising this: past the point where the chassis can keep up,
     /// more slew just pins the held heading against the lead clamp and
     /// changes nothing.
@@ -50,7 +50,7 @@ struct HeadingHoldConfig {
     ///
     /// This is what keeps a rate-steered heading honest. Without it, holding
     /// the stick sweeps the target as fast as slewDegPerSec says while the
-    /// chassis lags behind by however much error its turn PID needs to keep
+    /// chassis lags behind by however much error its heading-hold PID needs to keep
     /// moving — and that debt is real: release the stick and the chassis
     /// keeps rotating until it has paid off every degree. Capping the lead
     /// bounds how far past the driver's intent it can coast, at the cost of

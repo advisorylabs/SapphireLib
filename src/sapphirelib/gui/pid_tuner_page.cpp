@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "pros/rtos.hpp"
-#include "sapphirelib/tuning/auto_tune_math.hpp"
+#include "sapphirelib/tuning/characterization_math.hpp"
 
 namespace sapphirelib::gui {
 
@@ -29,6 +29,12 @@ constexpr std::int32_t kSelectorColumnX = 240;
 constexpr std::int32_t kSelectorButtonW = 88;
 constexpr std::int32_t kSelectorButtonH = 32;
 constexpr std::int32_t kSelectorRowHeight = 36;
+
+// Run Test/Auto-Tune row, and the optional toggle under it. The toggle ends
+// at y=162, inside the page's 179px (see kReadoutX's comment).
+constexpr std::int32_t kActionRowY = kRowY0 + 3 * kRowHeight + 6;
+constexpr std::int32_t kToggleY = kActionRowY + 36;
+constexpr std::int32_t kToggleW = 216;
 
 // Status/results column, to the right of the controller selector buttons
 // (which end at kSelectorColumnX + kSelectorButtonW = 328).
@@ -58,6 +64,20 @@ lv_obj_t* makeIconButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, const
     return button;
 }
 
+lv_obj_t* makeTextButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, std::int32_t w,
+                         const char* text, lv_event_cb_t cb, void* userData,
+                         lv_obj_t** labelOut = nullptr) {
+    lv_obj_t* button = lv_button_create(parent);
+    lv_obj_set_pos(button, x, y);
+    lv_obj_set_size(button, w, 30);
+    lv_obj_t* label = lv_label_create(button);
+    lv_label_set_text(label, text);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, userData);
+    if (labelOut) *labelOut = label;
+    return button;
+}
+
 void styleSelectorButton(lv_obj_t* button) {
     lv_obj_set_style_bg_color(button, lv_color_hex(kSelectedBgColor), LV_STATE_CHECKED);
     lv_obj_set_style_text_color(button, lv_color_hex(kSelectedTextColor), LV_STATE_CHECKED);
@@ -66,8 +86,6 @@ void styleSelectorButton(lv_obj_t* button) {
 } // namespace
 
 bool PidTunerPage::isRunning() const { return testRunning_.load(); }
-
-void PidTunerPage::setTuningRule(tuning::TuningRule rule) { tuningRule_.store(rule); }
 
 const char* PidTunerPage::title() const { return "PID"; }
 
@@ -84,18 +102,7 @@ void PidTunerPage::build(lv_obj_t* container) {
     // off the right edge.
     lv_obj_set_style_pad_all(container_, 0, 0);
 
-    for (std::size_t i = 0; i < entries_.size(); ++i) {
-        Entry& entry = *entries_[i];
-        entry.selectorButton = lv_button_create(container_);
-        lv_obj_set_pos(entry.selectorButton, kSelectorColumnX,
-                       static_cast<std::int32_t>(i) * kSelectorRowHeight);
-        lv_obj_set_size(entry.selectorButton, kSelectorButtonW, kSelectorButtonH);
-        lv_obj_t* label = lv_label_create(entry.selectorButton);
-        lv_label_set_text(label, entry.name.c_str());
-        lv_obj_center(label);
-        styleSelectorButton(entry.selectorButton);
-        lv_obj_add_event_cb(entry.selectorButton, &PidTunerPage::selectorClicked, LV_EVENT_CLICKED, this);
-    }
+    for (std::size_t i = 0; i < entries_.size(); ++i) addSelectorButton(*entries_[i], i);
 
     kpLabel_ = lv_label_create(container_);
     lv_obj_set_pos(kpLabel_, 4, kRowY0 + 5);
@@ -112,21 +119,13 @@ void PidTunerPage::build(lv_obj_t* container) {
     makeIconButton(container_, kBtnMinusX, kRowY0 + 2 * kRowHeight, "-", &PidTunerPage::kdMinusClicked, this);
     makeIconButton(container_, kBtnPlusX, kRowY0 + 2 * kRowHeight, "+", &PidTunerPage::kdPlusClicked, this);
 
-    lv_obj_t* runTestButton = lv_button_create(container_);
-    lv_obj_set_pos(runTestButton, 4, kRowY0 + 3 * kRowHeight + 6);
-    lv_obj_set_size(runTestButton, 100, 30);
-    lv_obj_t* runTestLabel = lv_label_create(runTestButton);
-    lv_label_set_text(runTestLabel, "Run Test");
-    lv_obj_center(runTestLabel);
-    lv_obj_add_event_cb(runTestButton, &PidTunerPage::runTestClicked, LV_EVENT_CLICKED, this);
+    makeTextButton(container_, 4, kActionRowY, 100, "Run Test", &PidTunerPage::runTestClicked, this);
+    makeTextButton(container_, 110, kActionRowY, 110, "Auto-Tune", &PidTunerPage::autoTuneClicked,
+                   this);
 
-    lv_obj_t* autoTuneButton = lv_button_create(container_);
-    lv_obj_set_pos(autoTuneButton, 110, kRowY0 + 3 * kRowHeight + 6);
-    lv_obj_set_size(autoTuneButton, 110, 30);
-    lv_obj_t* autoTuneLabel = lv_label_create(autoTuneButton);
-    lv_label_set_text(autoTuneLabel, "Auto-Tune");
-    lv_obj_center(autoTuneLabel);
-    lv_obj_add_event_cb(autoTuneButton, &PidTunerPage::autoTuneClicked, LV_EVENT_CLICKED, this);
+    toggleButton_ = makeTextButton(container_, 4, kToggleY, kToggleW, "",
+                                   &PidTunerPage::toggleClicked, this, &toggleButtonLabel_);
+    if (!toggleLabel_) lv_obj_add_flag(toggleButton_, LV_OBJ_FLAG_HIDDEN);
 
     statusLabel_ = lv_label_create(container_);
     lv_obj_set_pos(statusLabel_, kReadoutX, kStatusY);
@@ -144,29 +143,50 @@ void PidTunerPage::build(lv_obj_t* container) {
     refreshGainLabels();
 }
 
+void PidTunerPage::addAxis(std::string name,
+                           std::function<tuning::CharacterizationConfig()> buildExperiment,
+                           std::function<void(const tuning::AxisCharacterization&)> onMeasured) {
+    if (testRunning_.load()) return;
+    auto axis = std::make_unique<Axis>();
+    axis->name = std::move(name);
+    axis->buildExperiment = std::move(buildExperiment);
+    axis->onMeasured = std::move(onMeasured);
+    axes_.push_back(std::move(axis));
+}
+
 void PidTunerPage::addController(std::string name, PID& pid, std::function<void()> runTest,
-                                 std::function<tuning::RelayTuneConfig()> buildAutoTuneConfig) {
+                                 std::string axis, tuning::ResponseSpec response) {
+    if (testRunning_.load()) return;
     auto entry = std::make_unique<Entry>();
     entry->name = std::move(name);
     entry->pid = &pid;
     entry->runTest = std::move(runTest);
-    entry->buildAutoTuneConfig = std::move(buildAutoTuneConfig);
+    entry->axis = std::move(axis);
+    entry->response = response;
 
-    if (container_) {
-        entry->selectorButton = lv_button_create(container_);
-        const std::int32_t row = static_cast<std::int32_t>(entries_.size());
-        lv_obj_set_pos(entry->selectorButton, kSelectorColumnX, row * kSelectorRowHeight);
-        lv_obj_set_size(entry->selectorButton, kSelectorButtonW, kSelectorButtonH);
-        lv_obj_t* label = lv_label_create(entry->selectorButton);
-        lv_label_set_text(label, entry->name.c_str());
-        lv_obj_center(label);
-        styleSelectorButton(entry->selectorButton);
-        lv_obj_add_event_cb(entry->selectorButton, &PidTunerPage::selectorClicked, LV_EVENT_CLICKED, this);
-    }
+    if (container_) addSelectorButton(*entry, entries_.size());
 
     const bool wasEmpty = entries_.empty();
     entries_.push_back(std::move(entry));
     if (wasEmpty && container_) select(0);
+}
+
+void PidTunerPage::setToggle(std::function<std::string()> label, std::function<void()> onTap) {
+    toggleLabel_ = std::move(label);
+    toggleTap_ = std::move(onTap);
+    if (toggleButton_) lv_obj_remove_flag(toggleButton_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void PidTunerPage::addSelectorButton(Entry& entry, std::size_t row) {
+    entry.selectorButton = lv_button_create(container_);
+    lv_obj_set_pos(entry.selectorButton, kSelectorColumnX,
+                   static_cast<std::int32_t>(row) * kSelectorRowHeight);
+    lv_obj_set_size(entry.selectorButton, kSelectorButtonW, kSelectorButtonH);
+    lv_obj_t* label = lv_label_create(entry.selectorButton);
+    lv_label_set_text(label, entry.name.c_str());
+    lv_obj_center(label);
+    styleSelectorButton(entry.selectorButton);
+    lv_obj_add_event_cb(entry.selectorButton, &PidTunerPage::selectorClicked, LV_EVENT_CLICKED, this);
 }
 
 void PidTunerPage::select(std::size_t index) {
@@ -179,6 +199,7 @@ void PidTunerPage::select(std::size_t index) {
     if (entries_[index]->selectorButton) lv_obj_add_state(entries_[index]->selectorButton, LV_STATE_CHECKED);
 
     setDisplayedGains(entries_[index]->pid->gains());
+    readoutDirty_.store(true);
 }
 
 void PidTunerPage::setDisplayedGains(PIDGains gains) {
@@ -217,6 +238,61 @@ void PidTunerPage::refreshGainLabels() {
     setLabelText(kdLabel_, buf);
 }
 
+const PidTunerPage::Axis* PidTunerPage::findAxis(const std::string& name) const {
+    for (const auto& axis : axes_) {
+        if (axis->name == name) return axis.get();
+    }
+    return nullptr;
+}
+
+void PidTunerPage::refreshReadout() {
+    char buf[192];
+
+    const int failed = failedAxis_.load();
+    if (failed >= 0 && failed < static_cast<int>(axes_.size())) {
+        // Every failure mode the fit has — sensor sign backwards, travel
+        // limit too short to reach speed, voltage too low to break friction
+        // — shows up as some mix of a poor R² and too few moving samples, so
+        // show both and name the usual suspects.
+        const Axis& axis = *axes_[failed];
+        std::snprintf(buf, sizeof(buf),
+                      "%s: no fit\nR2 %.2f, %d pts\nCheck sensor sign, travel, volts",
+                      axis.name.c_str(), axis.result.fit.rSquared, axis.result.fit.samplesUsed);
+        setLabelText(resultLabel_, buf);
+        return;
+    }
+
+    if (entries_.empty()) {
+        setLabelText(resultLabel_, "");
+        return;
+    }
+    const Entry& entry = *entries_[selectedIndex_];
+    const Axis* axis = findAxis(entry.axis);
+
+    if (entry.axis.empty() || axis == nullptr) {
+        setLabelText(resultLabel_, "Manual tuning only");
+        return;
+    }
+    if (!entry.designed || !axis->measured) {
+        std::snprintf(buf, sizeof(buf), "Axis: %s\nTap Auto-Tune", axis->name.c_str());
+        setLabelText(resultLabel_, buf);
+        return;
+    }
+
+    // One value per line — see kReadoutX's comment for the width this has
+    // to live within. The model is worth showing next to the gains it
+    // produced: it's what to copy into source so a reboot doesn't need a
+    // re-measure, and an implausible kS or lag is the quickest way to spot
+    // a bad run.
+    const MotorFeedforward& model = axis->result.fit.model;
+    std::snprintf(buf, sizeof(buf),
+                  "%s model:\nkS %.2f kV %.4f\nkA %.4f\nR2 %.2f lag %.0fms\nsettle %.2fs\nPM %.0f%s\n(not saved)",
+                  axis->name.c_str(), model.kS, model.kV, model.kA, axis->result.fit.rSquared,
+                  axis->result.delayS * 1000.0, entry.design.settleTimeS,
+                  entry.design.phaseMarginDeg, entry.design.limitedByDelay ? " lag-capped" : "");
+    setLabelText(resultLabel_, buf);
+}
+
 void PidTunerPage::runSelectedTest() {
     if (entries_.empty() || testRunning_.load()) return;
 
@@ -236,85 +312,85 @@ void PidTunerPage::runSelectedTest() {
     });
 }
 
-void PidTunerPage::runSelectedAutoTune() {
-    if (entries_.empty() || testRunning_.load()) return;
-
-    Entry* entry = entries_[selectedIndex_].get();
-    if (!entry->buildAutoTuneConfig) return;
+void PidTunerPage::runAutoTune() {
+    if (axes_.empty() || testRunning_.load()) return;
 
     testRunning_.store(true);
     autoTuneActive_.store(true);
-    resultsReady_.store(false);
-    autoTuneFailed_.store(false);
+    failedAxis_.store(-1);
 
-    pros::Task([this, entry] {
-        // Built fresh on this task, not at registration time — lets the
-        // caller's factory capture "here" (current position/heading) as
-        // the relay experiment's reference frame each time this runs.
-        const tuning::RelayTuneConfig config = entry->buildAutoTuneConfig();
-        const std::vector<tuning::RelaySample> samples = tuning::runRelayExperiment(config);
-        const tuning::RelayOscillation oscillation = tuning::analyzeRelayOscillation(samples);
+    // Axis/Entry results are plain fields, not atomics: this task is their
+    // only writer and only while testRunning_ is true, and update() only
+    // reads them once it's false again. Entries can't be added or selected
+    // mid-run either (both check testRunning_), so selectedIndex_ and the
+    // vectors themselves are stable for the task's lifetime.
+    pros::Task([this] {
+        for (std::size_t i = 0; i < axes_.size(); ++i) {
+            Axis& axis = *axes_[i];
+            measuringAxis_.store(static_cast<int>(i));
 
-        if (oscillation.ok) {
-            // Passing the relay's own hysteresis in matters: a relay with a
-            // switching deadband overshoots each crossing before it flips,
-            // and without that correction the inflated swing reads as a
-            // weaker plant than it is, biasing every derived gain low.
-            const tuning::UltimateParams ultimate = tuning::ultimateParamsFromRelay(
-                config.relayAmplitude, oscillation, config.hysteresis);
-            const PIDGains gains = tuning::gainsFromUltimate(ultimate, this->tuningRule_.load());
+            // Built fresh on this task, not at registration time — lets the
+            // factory capture "here" as this run's reference frame.
+            const tuning::CharacterizationConfig config = axis.buildExperiment();
+            const tuning::CharacterizationData data = tuning::runCharacterization(config);
+            axis.result = tuning::characterizeAxis(data, config.minSpeed);
+            axis.measured = axis.result.ok;
 
-            entry->pid->setGains(gains);
-            // Only writer of displayed*_/tuned*_ while this task is
-            // running (see the class comment above testRunning_) — safe
-            // alongside update()'s concurrent reads of the same atomics.
-            this->setDisplayedGains(gains);
-            this->tunedP_.store(gains.kP);
-            this->tunedI_.store(gains.kI);
-            this->tunedD_.store(gains.kD);
-            this->tunedUltimateGain_.store(ultimate.ultimateGain);
-            this->tunedUltimatePeriodMs_.store(ultimate.ultimatePeriodMs);
-            this->resultsReady_.store(true);
-        } else {
-            // Left the PID's gains untouched — nothing measured well enough
-            // to trust, so nothing gets applied.
-            this->autoTuneFailed_.store(true);
+            if (!axis.measured) {
+                // Stop here rather than carry on: the robot is probably set
+                // up wrong (a reversed sensor, not enough room), and whatever
+                // is wrong likely affects the next axis too. Nothing has been
+                // applied yet, so every controller keeps its old gains.
+                failedAxis_.store(static_cast<int>(i));
+                break;
+            }
+            if (axis.onMeasured) axis.onMeasured(axis.result);
+        }
+        measuringAxis_.store(-1);
+
+        if (failedAxis_.load() < 0) {
+            for (auto& entry : entries_) {
+                const Axis* axis = findAxis(entry->axis);
+                entry->designed = false;
+                if (axis == nullptr || !axis->measured) continue;
+
+                entry->design = tuning::designPositionGains(axis->result.fit.model, entry->response,
+                                                            axis->result.delayS);
+                if (!entry->design.ok) continue;
+                entry->pid->setGains(entry->design.gains);
+                entry->designed = true;
+            }
+            if (!entries_.empty()) setDisplayedGains(entries_[selectedIndex_]->pid->gains());
         }
 
-        this->autoTuneActive_.store(false);
-        this->testRunning_.store(false);
+        readoutDirty_.store(true);
+        autoTuneActive_.store(false);
+        testRunning_.store(false);
     });
 }
 
 void PidTunerPage::update() {
-    if (resultsReady_.load()) {
-        // One value per line — see kReadoutX's comment for the width this
-        // has to live within. Ku/Tu are worth showing next to the gains
-        // they produced: Tu is checkable against the oscillation you just
-        // watched, which is the quickest way to spot a misread experiment.
-        char buf[128];
-        std::snprintf(buf, sizeof(buf),
-                      "Tuned:\nkP %.3f\nkI %.3f\nkD %.3f\nKu %.3f\nTu %.0fms\n(not saved)",
-                      tunedP_.load(), tunedI_.load(), tunedD_.load(), tunedUltimateGain_.load(),
-                      tunedUltimatePeriodMs_.load());
-        setLabelText(resultLabel_, buf);
-        resultsReady_.store(false);
-    }
-    if (autoTuneFailed_.load()) {
-        setLabelText(resultLabel_,
-                     "Auto-Tune failed: no clean oscillation. Raise relay amplitude.");
-        autoTuneFailed_.store(false);
-    }
-
     // "Ready" is what this reads for all but a few seconds of a session, so
     // going through setLabelText() rather than lv_label_set_text() is the
     // difference between invalidating this label once per state change and
     // once per tick.
     if (testRunning_.load()) {
-        setLabelText(statusLabel_, autoTuneActive_.load() ? "Auto-tuning..." : "Running...");
+        const int measuring = measuringAxis_.load();
+        if (!autoTuneActive_.load()) {
+            setLabelText(statusLabel_, "Running...");
+        } else if (measuring >= 0 && measuring < static_cast<int>(axes_.size())) {
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "Measuring %s", axes_[measuring]->name.c_str());
+            setLabelText(statusLabel_, buf);
+        } else {
+            setLabelText(statusLabel_, "Designing...");
+        }
     } else {
         setLabelText(statusLabel_, "Ready");
+        if (readoutDirty_.exchange(false)) refreshReadout();
     }
+
+    if (toggleLabel_) setLabelText(toggleButtonLabel_, toggleLabel_().c_str());
 
     // The only place gain labels actually get redrawn — see
     // setDisplayedGains()'s comment for why select()/adjustGain()/the
@@ -356,7 +432,12 @@ void PidTunerPage::runTestClicked(lv_event_t* e) {
     static_cast<PidTunerPage*>(lv_event_get_user_data(e))->runSelectedTest();
 }
 void PidTunerPage::autoTuneClicked(lv_event_t* e) {
-    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->runSelectedAutoTune();
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->runAutoTune();
+}
+void PidTunerPage::toggleClicked(lv_event_t* e) {
+    auto* page = static_cast<PidTunerPage*>(lv_event_get_user_data(e));
+    if (page->testRunning_.load() || !page->toggleTap_) return;
+    page->toggleTap_();
 }
 
 } // namespace sapphirelib::gui

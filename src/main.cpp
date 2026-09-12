@@ -1,14 +1,18 @@
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "main.h"
 #include "sapphirelib/api.hpp"
 
+using sapphirelib::MotorFeedforward;
 using sapphirelib::PID;
 using sapphirelib::chassis::AsteriskConfig;
+using sapphirelib::chassis::DriverInputMode;
 using sapphirelib::chassis::DrivetrainConfig;
 using sapphirelib::chassis::ExitConditions;
 using sapphirelib::chassis::Gearset;
+using sapphirelib::chassis::HolonomicAxisModels;
 using sapphirelib::chassis::HolonomicDrivetrain;
 using sapphirelib::diag::DeviceKind;
 using sapphirelib::diag::SensorCheck;
@@ -24,7 +28,9 @@ using sapphirelib::odom::Odometry;
 using sapphirelib::odom::OdometryConfig;
 using sapphirelib::odom::Pose;
 using sapphirelib::odom::RotationTrackingWheel;
-using sapphirelib::tuning::RelayTuneConfig;
+using sapphirelib::tuning::AxisCharacterization;
+using sapphirelib::tuning::CharacterizationConfig;
+using sapphirelib::tuning::ResponseSpec;
 
 namespace {
 
@@ -64,68 +70,92 @@ void turnTuningTest() {
 	drivetrain->turnToHeading(0);
 }
 
-// --- Ziegler-Nichols relay auto-tune configs for PidTunerPage ---
+// --- Auto-Tune for PidTunerPage ---
 //
-// Each factory below is called fresh every time "Auto-Tune" is tapped (not
-// once at startup) — see PidTunerPage::addController()'s
-// buildAutoTuneConfig doc comment for why: it lets `driveRelayConfig()`
-// capture the chassis's current pose/heading as the relay experiment's
-// reference frame each time, rather than a frame frozen at registration.
+// Auto-Tune measures each axis below (forward, strafe, turn) by driving it
+// through short voltage ramps and steps, fits a model of it, and designs
+// every controller's gains from those models — see PidTunerPage's class
+// comment. It needs clear floor: each translation segment travels up to
+// kTranslationTravelIn from where it started (plus coasting), alternating
+// direction so the robot ends up roughly where it began, and the turn axis
+// spins in place for several seconds.
 //
-// TODO: relayAmplitude/setpointDelta/hysteresis below are conservative
-// starting points, not measured for this robot — a relay amplitude too
-// small to overcome friction/static load will make Auto-Tune report
-// "no clean oscillation"; too large risks a rougher, more aggressive
-// oscillation than necessary. Nudge them on the real robot and re-run.
+// Each experiment factory is called fresh every time Auto-Tune is tapped
+// (not once at startup), so translation is measured along whichever way the
+// chassis faces at the start of that run.
+//
+// TODO: the voltages and travel below are starting points, not measured for
+// this robot. If an axis reports "no fit", first check its sensor sign
+// (a positive voltage must make the measurement grow), then give it more
+// travel or voltage.
 
-constexpr double kDriveRelayAmplitudeVolts = 4.0;
-constexpr double kDriveRelaySetpointIn = 12.0;
-constexpr double kDriveRelayHysteresisIn = 0.5;
+constexpr double kTranslationTravelIn = 30.0;
+constexpr double kTranslationStepVolts = 6.0;
+constexpr double kTurnStepVolts = 6.0;
 
-constexpr double kTurnRelayAmplitudeVolts = 4.0;
-constexpr double kTurnRelaySetpointDeg = 90.0;
-constexpr double kTurnRelayHysteresisDeg = 2.0;
+// How each controller should behave — see tuning::ResponseSpec. All three
+// are designed from the same axis measurements; only these specs differ.
+constexpr ResponseSpec kDriveResponse{.settleTimeS = 0.6, .dampingRatio = 1.0};
+constexpr ResponseSpec kTurnResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
+// Softer on purpose: the driver is steering the target heading, and a hold
+// that snaps onto it as hard as an autonomous turn feels twitchy and fights
+// them whenever the robot gets bumped.
+constexpr ResponseSpec kHeadingHoldResponse{.settleTimeS = 0.9, .dampingRatio = 1.0};
 
-constexpr std::uint32_t kAutoTuneTimeoutMs = 8000;
+enum class TranslationAxis { forward, strafe };
 
-RelayTuneConfig driveRelayConfig() {
-	// Captured by value into `measure` below, so every sample during this
-	// one experiment reads distance traveled along *this* run's starting
-	// heading — not the live heading, which open-loop relay driving (no
-	// heading correction while the relay bypasses drivePID_) can let drift
-	// slightly over the experiment.
+CharacterizationConfig translationExperiment(TranslationAxis axis) {
+	// Captured by value into `measure` below, so every sample reads distance
+	// along *this* run's starting heading — the open-loop voltages don't
+	// hold heading, and the live heading can drift slightly over a run.
 	const Pose reference = odometry->getPose();
 
-	return RelayTuneConfig{
-	    .actuate = [](double v) { drivetrain->holonomic(v / 12.0, 0.0, 0.0); },
+	return CharacterizationConfig{
+	    .actuate =
+	        [axis](double volts) {
+		        if (axis == TranslationAxis::forward) {
+			        drivetrain->holonomicVolts(volts, 0.0, 0.0);
+		        } else {
+			        drivetrain->holonomicVolts(0.0, volts, 0.0);
+		        }
+	        },
 	    .measure =
-	        [reference] {
+	        [reference, axis] {
 		        const Pose pose = odometry->getPose();
 		        const LocalOffset local = toLocalFrame(pose.xIn - reference.xIn, pose.yIn - reference.yIn,
 		                                               reference.headingDeg);
-		        return local.forwardIn;
+		        return axis == TranslationAxis::forward ? local.forwardIn : local.lateralIn;
 	        },
-	    .relayAmplitude = kDriveRelayAmplitudeVolts,
-	    .setpointDelta = kDriveRelaySetpointIn,
-	    .hysteresis = kDriveRelayHysteresisIn,
-	    .timeoutMs = kAutoTuneTimeoutMs,
+	    .stepVolts = kTranslationStepVolts,
+	    .maxTravel = kTranslationTravelIn,
+	    .minSpeed = 2.0,  // in/s
 	};
 }
 
-RelayTuneConfig turnRelayConfig() {
-	return RelayTuneConfig{
-	    .actuate = [](double v) { drivetrain->holonomic(0.0, 0.0, v / 12.0); },
-	    // Cumulative (unwrapped) heading, not getHeadingDeg()'s 0-360
-	    // reading — so "start + setpointDelta" stays a simple, always-
-	    // reachable linear target regardless of where the chassis happens
-	    // to be pointed when Auto-Tune is tapped, instead of needing to
-	    // dodge the 0/360 seam by hand.
+CharacterizationConfig turnExperiment() {
+	return CharacterizationConfig{
+	    .actuate = [](double volts) { drivetrain->holonomicVolts(0.0, 0.0, volts); },
+	    // Cumulative (unwrapped) heading, so a multi-turn spin reads as one
+	    // continuous position instead of jumping at the 0/360 seam.
 	    .measure = [] { return drivetrain->imu().getCumulativeHeadingDeg(); },
-	    .relayAmplitude = kTurnRelayAmplitudeVolts,
-	    .setpointDelta = kTurnRelaySetpointDeg,
-	    .hysteresis = kTurnRelayHysteresisDeg,
-	    .timeoutMs = kAutoTuneTimeoutMs,
+	    .stepVolts = kTurnStepVolts,
+	    .minSpeed = 5.0,  // deg/s
 	};
+}
+
+// Installs one freshly measured axis on the drivetrain, for
+// DriverInputMode::velocity, and logs it over `pros terminal` — the only
+// place the strafe model shows up, since no PID tab entry uses that axis.
+// Not persisted — copy the logged numbers into a setAxisModels() call in
+// initialize() to keep them.
+void installModel(MotorFeedforward HolonomicAxisModels::*axis, const char* name,
+                  const AxisCharacterization& result) {
+	SAPPHIRELIB_LOG_INFO("tune", "%s: kS=%.4f kV=%.5f kA=%.5f R2=%.3f delay=%.0fms", name,
+	                     result.fit.model.kS, result.fit.model.kV, result.fit.model.kA,
+	                     result.fit.rSquared, result.delayS * 1000.0);
+	HolonomicAxisModels models = drivetrain->axisModels();
+	models.*axis = result.fit.model;
+	drivetrain->setAxisModels(models);
 }
 
 }  // namespace
@@ -264,9 +294,31 @@ void initialize() {
 
 	auto pidTunerPageOwned = std::make_unique<PidTunerPage>();
 	pidTunerPage = pidTunerPageOwned.get();
-	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, &driveRelayConfig);
-	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, &turnRelayConfig);
-	pidTunerPage->setTuningRule(sapphirelib::tuning::TuningRule::pdOnly);
+	pidTunerPage->addAxis(
+	    "Fwd", [] { return translationExperiment(TranslationAxis::forward); },
+	    [](const AxisCharacterization& result) { installModel(&HolonomicAxisModels::forward, "Fwd", result); });
+	pidTunerPage->addAxis(
+	    "Strafe", [] { return translationExperiment(TranslationAxis::strafe); },
+	    [](const AxisCharacterization& result) { installModel(&HolonomicAxisModels::strafe, "Strafe", result); });
+	pidTunerPage->addAxis("Turn", &turnExperiment, [](const AxisCharacterization& result) {
+		installModel(&HolonomicAxisModels::turn, "Turn", result);
+	});
+	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, "Fwd", kDriveResponse);
+	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, "Turn", kTurnResponse);
+	pidTunerPage->addController("Hold", chassis.headingHoldPID(), nullptr, "Turn", kHeadingHoldResponse);
+	// Driver stick mode — see DriverInputMode. Velocity needs Auto-Tune's
+	// models; until an axis has one, that axis quietly keeps voltage behavior.
+	pidTunerPage->setToggle(
+	    [] {
+		    if (drivetrain->driverInputMode() == DriverInputMode::voltage) return std::string("Sticks: Voltage");
+		    return std::string(drivetrain->axisModels().forward.valid() ? "Sticks: Velocity"
+		                                                                : "Sticks: Velocity (no model)");
+	    },
+	    [] {
+		    drivetrain->setDriverInputMode(drivetrain->driverInputMode() == DriverInputMode::voltage
+		                                       ? DriverInputMode::velocity
+		                                       : DriverInputMode::voltage);
+	    });
 	gui.addPage(std::move(pidTunerPageOwned));
 
 	// fieldWidthIn/fieldHeightIn default to a 144x144in (12x12ft) VRC field
@@ -274,14 +326,14 @@ void initialize() {
 	auto odometryPageOwned = std::make_unique<OdometryPage>(*odometry);
 	odometryPage = odometryPageOwned.get();
 	// "Calibrate Offsets" button: spins the chassis in place (via the
-	// drivetrain's own holonomic() turn axis, so it stays robot-centric
-	// regardless of field heading) and derives verticalOffsetIn/
+	// drivetrain's raw-volts turn axis, so it stays robot-centric regardless
+	// of field heading and of the driver stick mode) and derives verticalOffsetIn/
 	// horizontalOffsetIn from how far the tracking wheels move over a known
 	// rotation — replaces the hand-measured 3.5/5.5 placeholders above with
 	// a calibrated value applied straight to the running Odometry.
 	odometryPage->enableOffsetCalibration(
 	    chassis.imu(), &verticalWheel, &horizontalWheel,
-	    [](double turn) { drivetrain->holonomic(0.0, 0.0, turn); });
+	    [](double turn) { drivetrain->holonomicVolts(0.0, 0.0, turn * 12.0); });
 	gui.addPage(std::move(odometryPageOwned));
 	SAPPHIRELIB_LOG_INFO("init", "all pages built");
 

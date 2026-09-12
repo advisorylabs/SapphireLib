@@ -167,41 +167,42 @@ defaults shipped here.
     test motion to see the effect, no re-flashing. The entry selector (Drive/Turn/...) lives in a static
     right-hand column of buttons, not a scrolling list — touch-scrolling on the brain screen proved
     "incredibly hard" to use reliably in testing, so nothing on this page requires it.
-  - Automatic: `sapphirelib::tuning`, a Ziegler-Nichols relay-feedback auto-tune (replaced an earlier
-    Twiddle/coordinate-ascent search — dropped for not converging reliably and, per team preference, for
-    not being the algorithm wanted here). Tapping "Auto-Tune" drives the bound controller's plant
-    open-loop with a small, *bounded* relay (`tuning::runRelayExperiment()`) instead of the controller's
-    own PID, forcing a sustained oscillation; `tuning::analyzeRelayOscillation()` finds that oscillation's
-    period/amplitude from the recorded samples via a noise-floored zig-zag extrema finder;
-    `tuning::ultimateParamsFromRelay()` derives the plant's ultimate gain/period from those via the
-    Åström–Hägglund describing-function approximation, corrected for the relay's own switching hysteresis
-    (which otherwise inflates the observed swing and biases every derived gain low);
-    `tuning::gainsFromUltimate()` applies a closed-loop tuning rule to get final gains. Four rules are
-    available (`tuning::TuningRule`, selected with `PidTunerPage::setTuningRule()`); the default is
-    `noOvershoot` (kP=0.2·Ku, Ti=Tu/2, Td=Tu/3) rather than the classic ZN formulas (kP=0.6·Ku, Ti=Tu/2,
-    Td=Tu/8, still available as `classicZN`/`tuning::zieglerNicholsGains()`), because classic ZN targets
-    quarter-amplitude decay — roughly 25% overshoot by design, which is the wrong trade for a positioning
-    loop where overshooting a heading and coming back costs more time than a slightly slower approach.
-    The extrema finder's noise floor adapts to the measured swing rather than being a fixed absolute
-    number: too small a floor makes sensor jitter around each flat peak read as extra reversals, which
-    shortens the reported period and shrinks the reported amplitude together — both pushing gains too
-    aggressive, and with `ok` still true, so nothing reports the problem. Unlike a naive "keep raising
-    kP until it oscillates" gain sweep — the textbook criticism of automatic Ziegler-Nichols tuning — the
-    relay's output magnitude is fixed up front rather than climbing toward instability, so the experiment
-    can't run away even on an unexpectedly aggressive plant; each `PidTunerPage::addController()` caller
-    picks that amplitude explicitly. All the oscillation math is pure and unit-tested against a synthetic
-    triangle-wave signal (with and without injected noise) in `tests/tuning/auto_tune_math_test.cpp`.
-    `src/main.cpp` wires the drive controller's relay experiment to a signed forward-distance measurement
-    (odometry position projected onto the heading captured at the start of that run, via
-    `motion::toLocalFrame()`) and the turn controller's to `sensors::Imu::getCumulativeHeadingDeg()` —
-    unwrapped, so the relay's "start + setpointDelta" target math never has to dodge the 0/360 seam the
-    way the old Twiddle test headings (90°/30°) did. Each `addController()` auto-tune callback is now a
-    *factory* (`std::function<tuning::RelayTuneConfig()>`), called fresh on every tap rather than once at
-    registration, specifically so it can capture that reference frame at the moment the run actually
-    starts. If a relay experiment never oscillates cleanly (e.g. its amplitude is too small to overcome
-    friction), the page reports failure and leaves the existing gains untouched rather than applying
-    garbage. Applied gains are shown alongside the measured Ku/Tu so they can be copied into source — this
-    only tunes what's live in memory; it does not persist or hardcode anything itself.
+  - Automatic: `sapphirelib::tuning`, model-based auto-tune — system identification plus pole
+    placement. (Replaced a Ziegler-Nichols relay-feedback auto-tune, which itself replaced an earlier
+    Twiddle search. Relay tuning measured each controller at a single frequency, assumed a sinusoidal
+    response a drivetrain's friction and backlash don't give, and produced one gain set per plant —
+    which couldn't be right for both an autonomous turn and driver heading hold sharing that plant, and
+    had nothing to say about pathing.) Auto-Tune now works on *axes* rather than controllers: each axis
+    registered with `PidTunerPage::addAxis()` (forward, strafe, turn) is driven through a ramp and a step
+    each way (`tuning::runCharacterization()`, travel-limited so a translation axis stays on the field),
+    and `tuning::characterizeAxis()` fits `V = kS·sign(v) + kV·v + kA·a` plus the axis's response delay.
+    The fit deliberately avoids differentiating position twice — acceleration noise biases kA toward
+    zero (regression dilution) — and instead regresses the exact discrete-time solution
+    `v[k+m] = α·v[k] + β·u + γ·sign(v)` over intervals whose two velocity windows share no samples.
+    Delay is measured by comparing the step's time-to-half-speed against what the delay-free model
+    predicts, and the fit is then redone with commands shifted by that delay, since fitting delayed data
+    as if it weren't inflates kS and shrinks kA. Every controller registered with `addController()` names
+    its axis and a `tuning::ResponseSpec` (settle time, damping ratio, minimum phase margin), and
+    `tuning::designPositionGains()` places its poles: `kP = kA·ω²`, `kD = 2ζω·kA − kV` (clamped at 0),
+    no kI — feedforward's kS already removes the friction an integrator usually exists for. Delay is
+    what textbook pole placement ignores and a V5 loop can't: the design checks the phase margin the
+    measured delay leaves and backs ω off until it meets the spec, reporting that it did. One tap
+    therefore measures the robot once and tunes every controller from it — `src/main.cpp` gives Drive,
+    Turn, and the new driver heading-hold PID (`HolonomicDrivetrain::headingHoldPID()`, split off from
+    `turnPID()`) three different specs designed from two axis measurements. If any axis fails to fit
+    (reversed sensor, too little travel, voltage under kS), the run stops and every controller keeps its
+    old gains. The readout shows the model, R², lag, and achieved settle time/phase margin so they can be
+    copied into source; nothing is persisted. Pure math unit-tested against a simulated axis with known
+    kS/kV/kA, delay, and sensor noise in `tests/tuning/characterization_math_test.cpp`, and the designs
+    checked in closed loop against the same simulation in `tests/tuning/gain_design_test.cpp`.
+  - Driver stick mode toggle (`chassis::DriverInputMode`, the button under Auto-Tune): `voltage` (stick
+    = fraction of 12V, the old behavior and still the default) or `velocity` (stick = fraction of the
+    axis's top speed, turned into volts through the measured model via `MotorFeedforward`, so the
+    friction deadzone at the bottom of the stick is gone and stick position maps linearly to speed).
+    Feedforward only for now — it doesn't yet correct for battery sag or motor heat, which needs
+    measured-velocity feedback. `HolonomicDrivetrain::holonomicVolts()` is the new raw-volts entry point that
+    characterization, calibration spins, and autonomous motions use, so none of them are affected by the
+    toggle.
   - Gain adjustments, entry selection, and new test/auto-tune launches are all locked out while a run is
     in progress, since a run and the tuning UI would otherwise read/write the same `PID` object
     concurrently. Every run (manual test or auto-tune trial) happens on a background `pros::Task`, never
@@ -324,12 +325,13 @@ have actually been *run*, not just type-checked; that pass also caught and fixed
 failing to link three of them due to unlisted cross-module dependencies (see
 `.github/workflows/build.yml`). Still outstanding: the IMU scale factor needs calibrating on the real
 robot (default `1.0` is a no-op); the new `DiagnosticsPage`/`PidTunerPage` widgets, and the auto-tune flow
-specifically, haven't had on-hardware time yet the way the rest of the GUI has — the relay-oscillation
-math itself is verified against a synthetic triangle wave, but the `relayAmplitude`/`setpointDelta`/
-`hysteresis` starting points wired up in `src/main.cpp` are unmeasured placeholders, and nothing about how
-the relay experiment performs against *real* sensor noise, mechanical friction, or the drive-encoder-
-fallback odometry's own accuracy has been checked; SD-card telemetry and motor-fault diagnostics haven't
-been started.
+specifically, haven't had on-hardware time yet the way the rest of the GUI has — the identification and
+gain-design math is verified against a simulated axis (including delay and sensor noise), but the
+characterization voltages/travel in `src/main.cpp` are unmeasured starting points, and how the fit holds
+up against real odometry noise, wheel slip, and backlash hasn't been checked. Still to come on the tuning
+side: motion profiles with feedforward and measured-velocity feedback in `moveToPoint()`/`followPath()`
+(per-axis gains, so strafing stops borrowing the forward axis's), and an automated path-tracking
+validation run. SD-card telemetry and motor-fault diagnostics haven't been started.
 
 ---
 

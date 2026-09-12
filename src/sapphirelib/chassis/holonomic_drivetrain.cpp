@@ -15,17 +15,21 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kLoopDelayMs = 10;
 
-/// Full motor voltage. holonomic() takes normalized [-1, 1] axes while the
-/// PIDs are configured in volts, so converting between them means dividing
-/// by this — same as moveToPose() already does with its turn output.
+/// Full motor voltage. holonomic() takes normalized [-1, 1] sticks while
+/// holonomicVolts() and the PIDs work in volts; this is the scale between
+/// them in DriverInputMode::voltage.
 constexpr double kFullScaleVolts = 12.0;
+
+/// Stick magnitude treated as centered in DriverInputMode::velocity — see
+/// stickVolts().
+constexpr double kVelocityModeDeadband = 0.03;
 
 /// A gap longer than this between heading-hold calls means the driver loop
 /// wasn't running — an autonomous routine, a PID tuner test, a calibration
 /// spin — and whatever heading was being held belongs to before that, not
 /// now. Generous next to a 10-20ms driver loop, short next to any of those
 /// interruptions.
-constexpr double kHeadingHoldResumeGapS = 0.25;
+constexpr double kHeadingHoldResumeGapS = 0.35;
 
 /// How often motor temperatures are actually re-read. A V5 motor takes tens
 /// of seconds to move a degree under load, so polling this near the 100Hz
@@ -64,6 +68,7 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
       config_(config),
       drivePID_(drivePIDConfig),
       turnPID_(turnPIDConfig),
+      headingHoldPID_(turnPIDConfig),
       asterisk_(asterisk) {
     if (asterisk_) {
         const std::initializer_list<std::int8_t> middleLeftPorts{asterisk_->middleLeftPort};
@@ -89,6 +94,16 @@ sensors::Imu& HolonomicDrivetrain::imu() { return imu_; }
 PID& HolonomicDrivetrain::drivePID() { return drivePID_; }
 
 PID& HolonomicDrivetrain::turnPID() { return turnPID_; }
+
+PID& HolonomicDrivetrain::headingHoldPID() { return headingHoldPID_; }
+
+void HolonomicDrivetrain::setDriverInputMode(DriverInputMode mode) { driverInputMode_.store(mode); }
+
+DriverInputMode HolonomicDrivetrain::driverInputMode() const { return driverInputMode_.load(); }
+
+void HolonomicDrivetrain::setAxisModels(HolonomicAxisModels models) { *axisModels_.lock() = models; }
+
+HolonomicAxisModels HolonomicDrivetrain::axisModels() const { return *axisModels_.lock(); }
 
 void HolonomicDrivetrain::setDriftSource(const odom::TrackingWheel* verticalWheel,
                                          const odom::Odometry* odometry) {
@@ -226,17 +241,41 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
     middleRight_->moveVoltage(rightVolts);
 }
 
-void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn) {
-    const WheelMix mix = mixHolonomic(throttle, strafe, turn);
+void HolonomicDrivetrain::holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts) {
+    const WheelMix mix = mixHolonomic(forwardVolts, strafeVolts, turnVolts);
 
     // Scale the whole mix down (never up) so the largest wheel command never
-    // exceeds a normalized magnitude of 1 — preserves the requested
-    // direction instead of clipping one wheel and distorting it.
-    const double largest = std::max({std::fabs(mix.frontLeft), std::fabs(mix.frontRight),
-                                      std::fabs(mix.backLeft), std::fabs(mix.backRight), 1.0});
+    // exceeds full voltage — preserves the requested direction instead of
+    // clipping one wheel and distorting it.
+    const double largest =
+        std::max({std::fabs(mix.frontLeft), std::fabs(mix.frontRight), std::fabs(mix.backLeft),
+                  std::fabs(mix.backRight), kFullScaleVolts}) /
+        kFullScaleVolts;
 
-    setWheelVoltages(mix.frontLeft / largest * 12.0, mix.frontRight / largest * 12.0,
-                      mix.backLeft / largest * 12.0, mix.backRight / largest * 12.0);
+    setWheelVoltages(mix.frontLeft / largest, mix.frontRight / largest, mix.backLeft / largest,
+                     mix.backRight / largest);
+}
+
+double HolonomicDrivetrain::stickVolts(double input, const MotorFeedforward& model) const {
+    if (driverInputMode_.load() != DriverInputMode::velocity || !model.valid()) {
+        return input * kFullScaleVolts;
+    }
+
+    // A resting V5 stick still reads a count or two. In voltage mode that's
+    // a harmless millivolt; here it would add the whole kS and creep the
+    // chassis, so centered has to mean exactly zero.
+    if (std::fabs(input) < kVelocityModeDeadband) return 0.0;
+
+    // Full stick asks for the speed full voltage reaches, so this mode never
+    // costs top speed — it only reshapes the stick below that.
+    const double clamped = std::clamp(input, -1.0, 1.0);
+    return model.volts(clamped * model.maxVelocity(kFullScaleVolts));
+}
+
+void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn) {
+    const HolonomicAxisModels models = axisModels();
+    holonomicVolts(stickVolts(throttle, models.forward), stickVolts(strafe, models.strafe),
+                   stickVolts(turn, models.turn));
 }
 
 double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
@@ -254,7 +293,7 @@ double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
         // integral and last error describe a situation that no longer
         // exists.
         heldHeadingDeg_ = currentHeadingDeg;
-        turnPID_.reset();
+        headingHoldPID_.reset();
         return 0.0;
     }
 
@@ -264,23 +303,26 @@ double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
     // Same target/measurement=0 trick as turnToHeading() — see that
     // function's comment. Explicit dt because a driver loop's period is the
     // caller's business and needn't match PID::Config::nominalDtS.
-    return turnPID_.update(wrapDegrees180(heldHeadingDeg_ - currentHeadingDeg), 0.0, dtS);
+    return headingHoldPID_.update(wrapDegrees180(heldHeadingDeg_ - currentHeadingDeg), 0.0, dtS);
 }
 
 void HolonomicDrivetrain::holonomicHeadingHold(double throttle, double strafe, double turnInput) {
-    holonomic(throttle, strafe, headingHoldTurnVolts(turnInput) / kFullScaleVolts);
+    const HolonomicAxisModels models = axisModels();
+    holonomicVolts(stickVolts(throttle, models.forward), stickVolts(strafe, models.strafe),
+                   headingHoldTurnVolts(turnInput));
 }
 
 void HolonomicDrivetrain::holonomicFieldCentricHeadingHold(double throttle, double strafe,
                                                             double turnInput) {
-    holonomicFieldCentric(throttle, strafe, headingHoldTurnVolts(turnInput) / kFullScaleVolts);
+    fieldToRobot(throttle, strafe);
+    holonomicHeadingHold(throttle, strafe, turnInput);
 }
 
 void HolonomicDrivetrain::setHeadingHold(HeadingHoldConfig config) { headingHold_ = config; }
 
 double HolonomicDrivetrain::heldHeadingDeg() const { return heldHeadingDeg_; }
 
-void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, double turn) {
+void HolonomicDrivetrain::fieldToRobot(double& throttle, double& strafe) {
     // Rotate the field-relative stick vector into the robot's current frame
     // by the heading it has picked up since the last field-heading zero —
     // matches pros::Imu::get_heading()'s clockwise-positive convention.
@@ -290,8 +332,13 @@ void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, 
     const double sinHeading = std::sin(headingDeltaRad);
     const double robotThrottle = throttle * cosHeading + strafe * sinHeading;
     const double robotStrafe = -throttle * sinHeading + strafe * cosHeading;
+    throttle = robotThrottle;
+    strafe = robotStrafe;
+}
 
-    holonomic(robotThrottle, robotStrafe, turn);
+void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, double turn) {
+    fieldToRobot(throttle, strafe);
+    holonomic(throttle, strafe, turn);
 }
 
 void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.getHeadingDeg(); }
@@ -326,7 +373,7 @@ void HolonomicDrivetrain::moveToPointHolding(double xIn, double yIn, double hold
         const double turnOutput =
             turnPID_.update(wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
 
-        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, turnOutput / 12.0);
+        holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
 
         const std::uint32_t now = pros::millis();
         if (distanceIn <= exit.errorThreshold) {
@@ -366,7 +413,7 @@ void HolonomicDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
         const double headingError = wrapDegrees180(headingDeg - pose.headingDeg);
         const double turnOutput = turnPID_.update(headingError, 0.0);
 
-        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, turnOutput / 12.0);
+        holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
 
         const std::uint32_t now = pros::millis();
         if (distanceIn <= exit.positionErrorThresholdIn &&
@@ -409,7 +456,7 @@ void HolonomicDrivetrain::followPath(const motion::Path& path, const odom::Odome
         const double turnOutput =
             turnPID_.update(wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
 
-        holonomic(local.forwardIn * scale / 12.0, local.lateralIn * scale / 12.0, turnOutput / 12.0);
+        holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
 
         pros::delay(kLoopDelayMs);
     }
