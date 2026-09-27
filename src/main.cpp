@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "main.h"
+#include "robot_macros.hpp"
 #include "sapphirelib/api.hpp"
 
 using sapphirelib::MotorFeedforward;
@@ -57,6 +58,32 @@ void driveForwardAuton() { drivetrain->driveDistance(24); }
 void turnTestingAuton() { drivetrain->turnToHeading(90);
 						  pros::delay(1000);
 						  drivetrain->turnToHeading(0); }
+
+pros::Motor winch(-20);
+pros::Motor winch2(19);
+void liftTesting() {
+	winch.set_encoder_units_all(pros::v5::MotorUnits::degrees);
+	winch2.set_encoder_units_all(pros::v5::MotorUnits::degrees);
+	// winch is reversed (port -20), so its position counts UP while moving at
+	// +127. Zero it so the thresholds are relative to where the lift starts.
+	winch.tare_position();
+	winch2.tare_position();
+	for (int i = 0; i < 18; i++) {
+		winch.move(127);
+		winch2.move(127);
+		while (winch.get_position() < 1000) {
+			pros::delay(2);
+		}
+		winch.move(-127);
+		winch2.move(-127);
+		while (winch.get_position() > 15) {
+			pros::delay(2);
+		}
+		winch.move(0);
+		winch2.move(0);
+		pros::delay(6000);
+	}
+}
 
 // Round-trip test motions for PidTunerPage — repeated "Run Test" taps don't
 // walk the robot off the field, since each one returns to where it started.
@@ -266,11 +293,16 @@ void initialize() {
 	// doesn't read as drift.
 	chassis.setDriftSource(&verticalWheel, &odom);
 
+	// Temporary intake/claw/lift driver macros — see robot_macros.hpp. Zeroes
+	// the lift here, so start the program with the lift all the way down.
+	robot_macros::initialize();
+
 	gui.addPage(std::make_unique<HomePage>(&chassis.imu()));
 
 	auto autonSelectorPage = std::make_unique<AutonSelectorPage>();
 	autonSelector = autonSelectorPage.get();
 	autonSelector->addRoutine("Do Nothing", &doNothingAuton);
+	autonSelector->addRoutine("Lift Testing", &liftTesting);
 	autonSelector->addRoutine("Drive Forward", &driveForwardAuton);
 	autonSelector->addRoutine("Turn Testing", &turnTestingAuton);
 	gui.addPage(std::move(autonSelectorPage));
@@ -306,7 +338,7 @@ void initialize() {
 	pidTunerPage->addController("Drive", chassis.drivePID(), &driveTuningTest, "Fwd", kDriveResponse);
 	pidTunerPage->addController("Turn", chassis.turnPID(), &turnTuningTest, "Turn", kTurnResponse);
 	pidTunerPage->addController("Hold", chassis.headingHoldPID(), nullptr, "Turn", kHeadingHoldResponse);
-	// Driver stick mode — see DriverInputMode. Velocity needs Auto-Tune's
+	// Driver stick mode - see DriverInputMode. Velocity needs Auto-Tune's
 	// models; until an axis has one, that axis quietly keeps voltage behavior.
 	pidTunerPage->setToggle(
 	    [] {
@@ -409,13 +441,15 @@ void opcontrol() {
 		// holonomicFieldCentricHeadingHold() below. Curving it still makes
 		// sense: it shapes how fast the stick sweeps that heading, so small
 		// deflections give fine aim and large ones swing around quickly.
-		const double fieldThrottle =
+		const double fieldThrottle = 
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_Y) / 127.0, kJoystickCurve);
 		const double fieldStrafe =
 		    sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_X) / 127.0, kJoystickCurve);
-		const double turn =
-		    sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
-
+		// const double turn =
+		//     sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
+		// Intake, claw, and lift buttons (R1/R2/L1/L2/Y/RIGHT). Runs ahead of
+		// the background-routine check below, so they keep working during one.
+		robot_macros::update(master);
 		// Skip driving from the sticks while a background GUI routine
 		// (OdometryPage's offset calibration, or a PidTunerPage test/auto-
 		// tune run) is driving the chassis on its own — otherwise this
@@ -443,7 +477,7 @@ void opcontrol() {
 		// Tunable via drivetrain->setHeadingHold(); the defaults on
 		// HeadingHoldConfig are the starting point. If turning feels
 		// sluggish, raise maxLeadDeg before slewDegPerSec.
-		drivetrain->holonomicFieldCentricHeadingHold(fieldThrottle, fieldStrafe, turn);
+		// drivetrain->holonomicFieldCentricHeadingHold(fieldThrottle, fieldStrafe, turn);
 		pros::delay(20);
 	}
 }

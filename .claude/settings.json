@@ -59,7 +59,8 @@
       "Bash(where clang-format *)",
       "Bash(awk 'NR==119||NR==120{print NR\": \"length\" : \"$0}' src/sapphirelib/gui/pid_tuner_page.cpp)",
       "Bash(awk 'NR==44||NR==53{print NR\": \"length\" : \"$0}' src/sapphirelib/tuning/auto_tune_math.cpp)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(pros make *)"
     ]
   }
 }
