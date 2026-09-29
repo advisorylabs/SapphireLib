@@ -2,12 +2,13 @@
  * \file examples/tank_chassis.cpp
  *
  * Phase 1 example: closed-loop tank drive using only an IMU and drive motor
- * encoders — no tracking wheels. Assumes a 2-motor-per-side drivetrain with
+ * encoders — no tracking wheels. Assumes a 3-motor-per-side drivetrain with
  * green (200 RPM) gearing and a 3.25" wheel diameter.
  *
- * This file is illustrative, not built by the project (the Makefile only
- * compiles src/). Copy the relevant pieces into your own src/main.cpp and
- * adjust ports/gains for your robot.
+ * Not built into the program (the Makefile only compiles src/), but
+ * `make check-examples` compiles it against the current headers so it can't
+ * silently fall out of date. Copy the relevant pieces into your own
+ * src/main.cpp and adjust ports/gains for your robot.
  *
  * Team 96671H — Hitmen
  */
@@ -17,49 +18,73 @@
 
 using sapphirelib::PID;
 using sapphirelib::chassis::DrivetrainConfig;
-using sapphirelib::chassis::ExitConditions;
 using sapphirelib::chassis::Gearset;
 using sapphirelib::chassis::TankDrivetrain;
+using sapphirelib::input::Axis;
+using sapphirelib::input::Controller;
 
 namespace {
 
 constexpr std::uint8_t kImuPort = 10;
-constexpr double kJoystickCurve = 0.3; // 0 = linear, 1 = full cubic
+constexpr double kStickDeadband = 0.05; // ignores the count or two a stick reads at rest
+constexpr double kJoystickCurve = 0.3;  // 0 = linear, 1 = full cubic
 
-TankDrivetrain* drivetrain = nullptr;
+// At namespace scope, never a local in opcontrol(), so its button history
+// survives opcontrol() restarting (see input::Controller).
+Controller master(pros::E_CONTROLLER_MASTER);
+
+/// Built on the first call, which initialize() makes, rather than at namespace
+/// scope: constructing a drivetrain blocks for ~2-3s while its IMU calibrates,
+/// and static initialization runs before initialize() — before the program has
+/// even started. A function-local static also means there's never a null
+/// pointer to check.
+TankDrivetrain& drivetrain() {
+    static TankDrivetrain instance(
+        /*leftPorts=*/{1, -2, 3}, /*rightPorts=*/{-4, 5, -6}, Gearset::green, kImuPort,
+        DrivetrainConfig{.wheelDiameterIn = 3.25, .externalGearRatio = 1.0,
+                         .headingCorrectionKP = 0.4},
+        /*drivePIDConfig=*/
+        PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.001}, .outputLimit = 12.0},
+        /*turnPIDConfig=*/
+        PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.0002}, .outputLimit = 12.0});
+    return instance;
+}
+
+/// A stick reading, [-1, 1], shaped for driving: deadband first, so the curve
+/// starts from a clean zero.
+double shapeStick(double input) {
+    return sapphirelib::curveJoystick(sapphirelib::applyDeadband(input, kStickDeadband),
+                                      kJoystickCurve);
+}
 
 } // namespace
 
 void initialize() {
     sapphirelib::initialize();
-
-    static TankDrivetrain chassis(
-        /*leftPorts=*/{1, -2, 3}, /*rightPorts=*/{-4, 5, -6}, Gearset::green, kImuPort,
-        DrivetrainConfig{.wheelDiameterIn = 3.25, .externalGearRatio = 1.0,
-                          .headingCorrectionKP = 0.4},
-        /*drivePIDConfig=*/
-        PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.001}, .outputLimit = 12.0},
-        /*turnPIDConfig=*/
-        PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.0002}, .outputLimit = 12.0});
-    drivetrain = &chassis;
+    drivetrain(); // constructs it, blocking while the IMU calibrates
 }
 
 void opcontrol() {
-    pros::Controller master(pros::E_CONTROLLER_MASTER);
-
     while (true) {
-        const double throttle =
-            sapphirelib::curveJoystick(master.get_analog(ANALOG_LEFT_Y) / 127.0, kJoystickCurve);
-        const double turn =
-            sapphirelib::curveJoystick(master.get_analog(ANALOG_RIGHT_X) / 127.0, kJoystickCurve);
-
-        drivetrain->arcade(throttle, turn);
+        master.update(); // sample the controller once per tick
+        // axis() is already normalized to [-1, 1], and reads 0 while the
+        // controller is disconnected, so the robot stops if it drops out.
+        drivetrain().arcade(shapeStick(master.axis(Axis::leftY)),
+                            shapeStick(master.axis(Axis::rightX)));
         pros::delay(20);
     }
 }
 
 void autonomous() {
-    drivetrain->driveDistance(24.0, ExitConditions{.errorThreshold = 1.0});
-    drivetrain->turnToHeading(90.0, ExitConditions{.errorThreshold = 2.0});
-    drivetrain->driveDistance(-24.0, ExitConditions{.errorThreshold = 1.0});
+    // Exit conditions default to a 1in threshold for drives and 2 degrees for
+    // turns, each held for 200ms, with a 3s timeout.
+    drivetrain().driveDistance(24.0);
+    drivetrain().turnToHeading(90.0);
+
+    // Override just the fields you care about. Every motion also returns a
+    // MotionResult, so a routine can tell a settled motion from one that
+    // timed out against something.
+    const auto result = drivetrain().driveDistance(-24.0, {.timeoutMs = 1500});
+    if (!result.settled()) return; // stuck: don't carry on from the wrong place
+    drivetrain().turnToHeading(0.0);
 }

@@ -26,31 +26,59 @@ jobs:
           pros conduct new . --no-default-libs --force
           pros make
 
-      - name: Check formatting
-        run: |
-          sudo apt-get update && sudo apt-get install -y clang-format
-          find include/sapphirelib src/sapphirelib -name '*.hpp' -o -name '*.cpp' \
-            | xargs clang-format --dry-run --Werror
+      # The checks below each run even if an earlier step failed
+      # (`!cancelled()`), so one red step can't hide the others' results — a
+      # formatting problem shouldn't stop the unit tests from running.
 
       - name: Run host-side unit tests
+        if: ${{ !cancelled() }}
         run: |
           for test in tests/*/*_test.cpp; do
             name=$(basename "$test" .cpp)
             src="src/sapphirelib/$(dirname "${test#tests/}")/$(basename "$test" _test.cpp).cpp"
+            # Header-only modules (util/timing.hpp, util/sequence.hpp) have no
+            # matching .cpp. wait_test and sequence_test define the clock seam
+            # (util/clock.hpp) themselves as a fake clock, so neither may ever
+            # link src/sapphirelib/util/clock.cpp, which is PROS-bound anyway.
+            [ -f "$src" ] || src=""
             # Most tests are self-contained (test + its one matching source
-            # file), but a few pure-math modules call into another module
-            # (e.g. odometry_math.cpp calls sapphirelib::wrapDegrees180) —
-            # list those extra source files here, matching each test's own
-            # "Build & run" doc comment.
+            # file), but some pure modules call into another module (e.g.
+            # odometry_math.cpp calls sapphirelib::wrapDegrees180) — list
+            # those extra source files here, matching each test's own
+            # "Build & run" comment.
             extra=""
             case "$test" in
               tests/control/heading_hold_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
+              tests/mechanism/position_control_test.cpp) extra="src/sapphirelib/control/pid.cpp" ;;
+              tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/sensors/imu_scale_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
-              tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
+              tests/telemetry/channel_test.cpp)
+                extra="src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp" ;;
+              tests/telemetry/characterization_tap_test.cpp)
+                extra="src/sapphirelib/telemetry/channel.cpp src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp" ;;
               tests/tuning/characterization_math_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
               tests/tuning/gain_design_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
             esac
-            g++ -std=c++20 -Wall -Iinclude "$test" "$src" $extra -o "/tmp/$name"
+            echo "== $name"
+            # -pthread for record_ring_test's producer threads; harmless for
+            # every other test.
+            g++ -std=c++20 -Wall -pthread -Iinclude "$test" $src $extra -o "/tmp/$name"
             "/tmp/$name"
           done
+
+      - name: Self-test the telemetry reader
+        if: ${{ !cancelled() }}
+        run: python tools/telemetry/slt_read.py --selftest
+
+      # Still fails on files written before .clang-format was fixed to match
+      # the house style, until they get their one-time format pass. tuning/
+      # is left out of that pass and of this check until the model-based
+      # auto-tune lands, so its diff stays reviewable.
+      - name: Check formatting
+        if: ${{ !cancelled() }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang-format
+          find include/sapphirelib src/sapphirelib \( -name '*.hpp' -o -name '*.cpp' \) \
+            -not -path '*/tuning/*' \
+            | xargs clang-format --dry-run --Werror
