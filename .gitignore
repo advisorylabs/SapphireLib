@@ -25,3 +25,6 @@ project.pros
 # Python bytecode (tools/telemetry/slt_read.py)
 __pycache__/
 *.pyc
+
+# Telemetry analyzer single-file bundle (node tools/analyzer/build.js)
+tools/analyzer/dist/

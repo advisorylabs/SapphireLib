@@ -425,52 +425,52 @@
   }
 
   /**
-   * Replays each recorded step response of a drivetrain controller (its
-   * responses within [t0, t1]) through the fitted axis: from the response's
-   * first error to zero, error folded into the target as the robot's loops
-   * do. Returns [{ start, duration, e0, recorded: { t, err }, sim: { t, err, u },
-   * metrics }].
+   * Replays each recorded step response of a drivetrain controller that
+   * starts within [t0, t1] through the fitted axis: from the response's first
+   * error to zero, error folded into the target as the robot's loops do. A
+   * response runs to its natural end (the next reset), whatever t1 is.
+   * Continuous loops (a "response" longer than `maxResponseS`, like heading
+   * hold under a driver) have no step to replay and are skipped. Returns
+   * [{ start, duration, e0, recorded: { t, err }, sim: { t, err, u }, metrics }].
    */
-  function replaySteps(log, system, fit, controller, { gains, t0, t1, maxResponses = 12 }) {
+  function replaySteps(log, system, fit, controller, { gains, t0, t1, maxResponses = 12,
+    maxResponseS = 10 }) {
     const ch = log.get(controller.pid);
     if (!ch) return [];
-    const [i0, i1] = ch.range(t0, t1);
+    const flags = ch.cols.flags;
     const out = [];
-    let first = -1;
-    const finish = (last) => {
-      if (first < 0) return;
+    let i = ch.range(t0, t1)[0];
+    // Back up to the start of the response containing t0, if t0 is mid-response.
+    while (i > 0 && !(flags[i] & slt.FIRST_STEP)) i--;
+    while (i < ch.length && out.length < maxResponses) {
+      const first = i;
+      let last = i;
+      while (last + 1 < ch.length && !(flags[last + 1] & slt.FIRST_STEP)) last++;
+      i = last + 1;
       const start = ch.t[first];
-      const duration = Math.min(4, ch.t[last] - start + 0.4);
+      if (start > t1) break;
+      if (start < t0 - 1e-9) continue;
+      const length = ch.t[last] - start;
+      if (length > maxResponseS) continue;
+      const duration = Math.min(4, length + 0.4);
       const e0 = ch.cols.err[first];
-      if (Math.abs(e0) < 2 * controller.threshold || duration < 0.2) return;
+      if (Math.abs(e0) < 2 * controller.threshold || duration < 0.2) continue;
       const pid = new M.PID(pidConfigOf(log, controller, gains));
-      // The error folds the target in (target = err, meas = 0), so simulate
-      // the axis travelling e0 and report what's left.
       const sim = M.simulateClosedLoop({
         model: fit.model, delayS: fit.delayS, periodS: controller.loopS || 0.01, durationS: duration,
         x0: 0, targetAt: () => e0, controller: (target, x) => pid.update(target - x, 0),
       });
-      const simErr = Float64Array.from(sim.x, (x) => e0 - x);
       const [a, b] = ch.range(start, start + duration);
-      const recorded = { t: Float64Array.from(ch.t.subarray(a, b), (t) => t - start),
-        err: ch.cols.err.slice(a, b) };
       out.push({
         start,
         duration,
         e0,
-        recorded,
-        sim: { t: sim.t, err: simErr, u: sim.u },
+        recorded: { t: Float64Array.from(ch.t.subarray(a, b), (t) => t - start),
+          err: ch.cols.err.slice(a, b) },
+        sim: { t: sim.t, err: Float64Array.from(sim.x, (x) => e0 - x), u: sim.u },
         metrics: M.stepMetrics(sim.t, sim.x, 0, e0, controller.threshold, sim.u),
       });
-    };
-    for (let i = i0; i < i1; ++i) {
-      if (ch.cols.flags[i] & slt.FIRST_STEP) {
-        finish(i - 1);
-        first = i;
-      }
-      if (out.length >= maxResponses) break;
     }
-    if (out.length < maxResponses) finish(i1 - 1);
     return out;
   }
 

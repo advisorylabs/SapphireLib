@@ -107,6 +107,16 @@ test('what-if: turn steps replay from their recorded first error', () => {
   const better = T.replaySteps(MATCH, turn, fit, controller, { gains: d.gains, t0: 20, t1: 35 });
   assert.ok(better[0].metrics.overshootFraction < steps[0].metrics.overshootFraction,
     'the designed gains overshoot less than the hand-picked ones');
+  // Asking for just one step still replays the whole response, not the window.
+  const one = T.replaySteps(MATCH, turn, fit, controller, { gains: d.gains,
+    t0: steps[0].start - 1e-6, t1: steps[0].start + 1e-6 });
+  assert.equal(one.length, 1);
+  assert.equal(one[0].duration, steps[0].duration);
+  assert.ok(one[0].duration > 1, `whole response: ${one[0].duration}`);
+  assert.ok(one[0].metrics.settled, 'the designed turn settles within its replay');
+  // Heading hold runs all through driver control: no steps to replay.
+  const hold = T.systems(MATCH).find((s) => s.axisName === 'Turn').controllers[1];
+  assert.deepEqual(T.replaySteps(MATCH, turn, fit, hold, { gains: d.gains, t0: 37.5, t1: 142.5 }), []);
 });
 
 test('C++ snippets name what to paste where', () => {
