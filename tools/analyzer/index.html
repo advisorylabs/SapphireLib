@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sapphire Telemetry</title>
+<!--
+  SapphireLib telemetry analyzer. Open this file in a browser — no install, no
+  server, works offline. Drop SLnnnnnn.CSV files from the robot's SD card (the
+  sl folder) onto the page. See README.md next to this file.
+  Team 96671H — Hitmen
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="brand">
+    <h1><span class="mark" aria-hidden="true"></span> Sapphire Telemetry</h1>
+    <span class="sub" id="file-label">No log open</span>
+  </div>
+  <div class="pickers">
+    <select class="select" id="run-select" aria-label="Program run" hidden></select>
+    <div class="segments" id="session-picker" role="group" aria-label="Match or session"></div>
+  </div>
+  <div class="actions-bar">
+    <label class="btn primary" for="file-input">Open logs</label>
+    <input type="file" id="file-input" accept=".csv,.CSV,text/csv" multiple hidden>
+    <button class="btn" id="demo-btn" type="button">Demo</button>
+    <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch light or dark theme" title="Theme">◐</button>
+  </div>
+</header>
+<nav class="tabs" id="tabs" role="tablist" aria-label="Views">
+  <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+  <button role="tab" data-tab="replay">Replay</button>
+  <button role="tab" data-tab="charts">Charts</button>
+  <button role="tab" data-tab="responses">PID responses</button>
+  <button role="tab" data-tab="motions">Motions</button>
+  <button role="tab" data-tab="tune">Tune</button>
+</nav>
+<main id="main">
+  <section class="drop" id="loading">
+    <h2>Loading…</h2>
+  </section>
+</main>
+<script src="js/model.js"></script>
+<script src="js/slt.js"></script>
+<script src="js/analysis.js"></script>
+<script src="js/tuning.js"></script>
+<script src="js/demo.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/app.js"></script>
+<script src="js/replay.js"></script>
+<script src="js/explorer.js"></script>
+<script src="js/tuneview.js"></script>
+<script>SA.app.start();</script>
+</body>
+</html>
