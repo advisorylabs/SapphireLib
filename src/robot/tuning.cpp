@@ -3,8 +3,9 @@
  *
  * PidTunerPage wiring: the round-trip test motions, the Auto-Tune
  * experiments, and what happens with their results. Every characterization
- * run is also mirrored into the SD log (char.fwd/char.strafe/char.turn), so
- * an axis can be refit offline from real runs.
+ * run is also mirrored into the SD log (char.fwd/char.strafe/char.turn/
+ * char.lift), so an axis can be refit offline from real runs — the telemetry
+ * analyzer's Tune tab (tools/analyzer) does exactly that.
  *
  * Team 96671H — Hitmen
  */
@@ -15,6 +16,7 @@
 #include <utility>
 
 #include "robot/devices.hpp"
+#include "robot/macros.hpp"
 #include "robot/telemetry.hpp"
 #include "sapphirelib/control/feedforward.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
@@ -34,8 +36,11 @@ using sapphirelib::odom::Pose;
 using sapphirelib::telemetry::Channel;
 using sapphirelib::telemetry::ChannelOptions;
 using sapphirelib::telemetry::tapCharacterization;
+using sapphirelib::telemetry::tapMechanismCharacterization;
 using sapphirelib::tuning::AxisCharacterization;
 using sapphirelib::tuning::CharacterizationConfig;
+using sapphirelib::tuning::MechanismCharacterization;
+using sapphirelib::tuning::MechanismCharacterizationConfig;
 using sapphirelib::tuning::ResponseSpec;
 
 namespace {
@@ -86,6 +91,10 @@ constexpr ResponseSpec kTurnResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
 // that snaps onto it as hard as an autonomous turn feels twitchy and fights
 // them whenever the robot gets bumped.
 constexpr ResponseSpec kHeadingHoldResponse{.settleTimeS = 0.9, .dampingRatio = 1.0};
+// The lift, designed from its own measurement (with gravity) — see
+// macros::liftExperiment(). Its loop runs at the 20ms opcontrol tick, which
+// the design allows for.
+constexpr ResponseSpec kLiftResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
 
 // The char.* channels' rows arrive every 10ms (the runner's sample period)
 // during a run; 512 rows is 5s of them, far more than the logger's writer
@@ -163,6 +172,21 @@ void installModel(MotorFeedforward HolonomicAxisModels::*axis, const char* name,
     drivetrain().setAxisModels(models);
 }
 
+// Installs the lift's measured gravity feedforward on the running lift, and
+// logs its model the same way installModel() does. The Lift entry's gains are
+// designed and set by the page itself. Not persisted: copy kG into
+// kLiftGravityVolts in macros.cpp to keep it.
+void installLiftModel(const MechanismCharacterization& result) {
+    const auto& model = result.fit.model;
+    SAPPHIRELIB_LOG_INFO("tune", "Lift: kS=%.4f kG=%.4f kV=%.5f kA=%.5f R2=%.3f delay=%.0fms",
+                         model.motion.kS, model.kG, model.motion.kV, model.motion.kA,
+                         result.fit.rSquared, result.delayS * 1000.0);
+    sapphirelib::telemetry::event(
+        "tune", "model,Lift,kS=%.4f,kV=%.5f,kA=%.5f,kG=%.4f,r2=%.3f,delay_ms=%.0f", model.motion.kS,
+        model.motion.kV, model.motion.kA, model.kG, result.fit.rSquared, result.delayS * 1000.0);
+    macros::liftMechanism().setGravity(model.gravityFeedforward());
+}
+
 } // namespace
 
 void registerTuning(PidTunerPage& page) {
@@ -174,6 +198,7 @@ void registerTuning(PidTunerPage& page) {
     Channel& forwardLog = logger().channel("char.fwd", {"volts", "pos"}, kCharacterizationChannel);
     Channel& strafeLog = logger().channel("char.strafe", {"volts", "pos"}, kCharacterizationChannel);
     Channel& turnLog = logger().channel("char.turn", {"volts", "pos"}, kCharacterizationChannel);
+    Channel& liftLog = logger().channel("char.lift", {"volts", "pos"}, kCharacterizationChannel);
 
     page.addAxis(
         "Fwd",
@@ -196,10 +221,22 @@ void registerTuning(PidTunerPage& page) {
         [](const AxisCharacterization& result) {
             installModel(&HolonomicAxisModels::turn, "Turn", result);
         });
+    // The lift: its own Auto-Tune group, so selecting Lift and tapping
+    // Auto-Tune runs only this (and selecting Drive, Turn or Hold only the
+    // drivetrain). Held samples are logged as NaN volts.
+    page.addMechanismAxis(
+        "Lift",
+        [channel = &liftLog] {
+            sapphirelib::telemetry::event("tune", "start,Lift");
+            return tapMechanismCharacterization(macros::liftExperiment(), *channel);
+        },
+        &installLiftModel);
     page.addController("Drive", drivetrain().drivePID(), &driveTuningTest, "Fwd", kDriveResponse);
     page.addController("Turn", drivetrain().turnPID(), &turnTuningTest, "Turn", kTurnResponse);
     page.addController("Hold", drivetrain().headingHoldPID(), nullptr, "Turn",
                        kHeadingHoldResponse);
+    page.addController("Lift", macros::liftMechanism().pid(), &macros::liftTuningTest, "Lift",
+                       kLiftResponse);
     // Driver stick mode - see DriverInputMode. Velocity needs Auto-Tune's
     // models; until an axis has one, that axis quietly keeps voltage behavior.
     page.setToggle(

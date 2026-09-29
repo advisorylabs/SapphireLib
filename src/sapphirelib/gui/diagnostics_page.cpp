@@ -1,8 +1,10 @@
 #include "sapphirelib/gui/diagnostics_page.hpp"
 
 #include <cstdio>
+#include <string>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/telemetry/event.hpp"
 
 namespace sapphirelib::gui {
 
@@ -19,6 +21,22 @@ constexpr std::uint32_t kFailColor = 0xf87171;
 // refresh rate bought nothing; 250ms still catches a mid-match failure
 // within a quarter second.
 constexpr std::uint32_t kPollIntervalMs = 250;
+
+/// Commas split an event's key=value fields, so they can't appear inside
+/// one.
+std::string withoutCommas(std::string text) {
+    for (char& c : text) {
+        if (c == ',') c = ';';
+    }
+    return text;
+}
+
+/// A `device` telemetry event for one check's verdict: missing/lost/back.
+void logDevice(const char* what, const diag::CheckResult& result) {
+    telemetry::event("device", "%s,port=%d,label=%s%s%s", what, static_cast<int>(result.port),
+                     withoutCommas(result.label).c_str(), result.ok ? "" : ",found=",
+                     result.ok ? "" : withoutCommas(result.detail).c_str());
+}
 
 } // namespace
 
@@ -58,6 +76,12 @@ void DiagnosticsPage::update() {
 
     for (Row& row : rows_) {
         const diag::CheckResult result = diag::runCheck(row.check);
+        if (!row.polled) {
+            if (!result.ok) logDevice("missing", result);
+        } else if (row.ok != result.ok) {
+            logDevice(result.ok ? "back" : "lost", result);
+        }
+        row.polled = true;
         if (result.ok) {
             std::snprintf(buf, sizeof(buf), "OK  %s (port %d)", result.label.c_str(),
                           static_cast<int>(result.port));

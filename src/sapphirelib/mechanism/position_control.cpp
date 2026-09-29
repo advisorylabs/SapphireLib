@@ -23,6 +23,7 @@ const char* positionLawName(PositionLaw law) {
         case PositionLaw::sensorLost: return "no sensor";
         case PositionLaw::manual: return "manual";
         case PositionLaw::off: return "off";
+        case PositionLaw::external: return "external";
     }
     return "?";
 }

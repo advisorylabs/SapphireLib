@@ -41,7 +41,10 @@ double readRotationDeg(const pros::Rotation& sensor) {
 PositionMechanism::PositionMechanism(std::initializer_list<std::int8_t> motorPorts,
                                      PositionSource position, PositionConfig config)
     : motors_(motorPorts), source_(std::move(position)), config_(config), pid_(config.pid),
-      gap_(config.resetAfterGapMs) {
+      gravityConstantVolts_(config.gravity.constantVolts),
+      gravityCosineVolts_(config.gravity.cosineVolts),
+      gravityHorizontalPosition_(config.gravity.horizontalPosition),
+      gravityArmDegreesPerUnit_(config.gravity.armDegreesPerUnit), gap_(config.resetAfterGapMs) {
     // An empty std::function would throw when called. Reading "no sensor"
     // instead leaves the mechanism braking, which is visible (law() reports
     // "no sensor") rather than fatal.
@@ -84,6 +87,32 @@ void PositionMechanism::stop() {
 void PositionMechanism::resetController() { resetRequested_.store(true); }
 
 double PositionMechanism::target() const { return target_.load(); }
+
+void PositionMechanism::setGravity(GravityFeedforward gravity) {
+    gravityConstantVolts_.store(gravity.constantVolts);
+    gravityCosineVolts_.store(gravity.cosineVolts);
+    gravityHorizontalPosition_.store(gravity.horizontalPosition);
+    gravityArmDegreesPerUnit_.store(gravity.armDegreesPerUnit);
+}
+
+GravityFeedforward PositionMechanism::gravity() const {
+    return GravityFeedforward{.constantVolts = gravityConstantVolts_.load(),
+                              .cosineVolts = gravityCosineVolts_.load(),
+                              .horizontalPosition = gravityHorizontalPosition_.load(),
+                              .armDegreesPerUnit = gravityArmDegreesPerUnit_.load()};
+}
+
+void PositionMechanism::beginExternalControl() { external_.store(true); }
+
+void PositionMechanism::endExternalControl() {
+    // Cleared by the reset the external steps already do, but asked for
+    // anyway: a step that loaded external_ just before this store has one
+    // more update() to run on stale memory otherwise.
+    resetRequested_.store(true);
+    external_.store(false);
+}
+
+bool PositionMechanism::externalControl() const { return external_.load(); }
 
 PositionMode PositionMechanism::mode() const { return mode_.load(); }
 
@@ -197,7 +226,14 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
     const double position = source_(); // the one sensor read of this update
 
     PositionCommand command;
-    if (disabled) {
+    // Whoever has the motors (see beginExternalControl()) is commanding
+    // them; this update only reads and reports. It wins over disabled too:
+    // braking would fight a run that is itself responsible for stopping.
+    const bool external = external_.load();
+    if (external) {
+        pid_.reset();
+        command = {.law = PositionLaw::external, .volts = 0.0, .brake = false};
+    } else if (disabled) {
         // VEXos ignores motor commands while the robot is disabled. Running
         // the loop anyway would integrate an error it can't act on and lurch
         // the mechanism at enable, so rest with the PID cleared instead (one
@@ -207,9 +243,15 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
         command = {.law = PositionLaw::off, .volts = 0.0, .brake = true};
     } else {
         switch (mode) {
-            case PositionMode::position:
-                command = computePositionCommand(pid_, config_, target, position);
+            case PositionMode::position: {
+                // The config with the live gravity (setGravity()); copied per
+                // update rather than written into config_, which other tasks
+                // may be reading through config().
+                PositionConfig live = config_;
+                live.gravity = gravity();
+                command = computePositionCommand(pid_, live, target, position);
                 break;
+            }
             case PositionMode::voltage:
                 // Reset every update, so handing back to closed loop starts
                 // without stale derivative or integral.
@@ -226,7 +268,9 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
     }
     // Brake mode, never move_voltage(0), on sensor loss and when off: the
     // user's brake mode (hold, usually) is what keeps a lift up.
-    if (command.brake) {
+    if (external) {
+        // Not ours to command.
+    } else if (command.brake) {
         motors_.brake();
     } else {
         motors_.move_voltage(command.millivolts());
@@ -249,7 +293,9 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
                               .mode = mode,
                               .target = target,
                               .position = position,
-                              .volts = command.brake ? 0.0 : command.volts,
+                              .volts = external        ? std::numeric_limits<double>::quiet_NaN()
+                                       : command.brake ? 0.0
+                                                       : command.volts,
                               .atTarget = near,
                               .settled = settled};
     if (listener_) listener_(result);

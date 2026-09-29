@@ -76,6 +76,15 @@ struct GainDesign {
     /// True if the requested settle time wasn't achievable within
     /// minPhaseMarginDeg, so the response was slowed until it was.
     bool limitedByDelay = false;
+
+    /// kS / kP: the largest error static friction can hold this loop at. Inside
+    /// it, kP·error is less than the kS it takes to move at all, so a PD loop
+    /// can come to rest anywhere within this band of its target. Nothing
+    /// applies kS as feedforward in SapphireLib's motions or PositionMechanism
+    /// today, so compare this against the exit threshold (or mechanism
+    /// tolerance) the controller is used with: a band wider than the threshold
+    /// is a motion that may never settle. Infinity when kP is 0.
+    double staticErrorBound = 0.0;
 };
 
 /// 2% settling time of a unit-natural-frequency spring-damper with damping
@@ -98,6 +107,10 @@ double phaseMarginDeg(const MotorFeedforward& model, PIDGains gains, double dela
 /// comes out negative; it is clamped to 0 instead, which leaves the response
 /// somewhat more damped than requested rather than feeding speed back as
 /// positive feedback.
+///
+/// A mechanism is designed the same way from its MechanismModel's `motion`:
+/// with gravity cancelled by feedforward (MechanismModel::gravityFeedforward())
+/// what's left is the same spring and damper.
 GainDesign designPositionGains(const MotorFeedforward& model, ResponseSpec spec,
                                double delayS = 0.0);
 

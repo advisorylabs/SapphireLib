@@ -56,8 +56,11 @@ jobs:
               tests/telemetry/channel_test.cpp)
                 extra="src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp" ;;
               tests/telemetry/characterization_tap_test.cpp)
-                extra="src/sapphirelib/telemetry/channel.cpp src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp" ;;
-              tests/tuning/characterization_math_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
+                extra="src/sapphirelib/telemetry/channel.cpp src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/tuning/characterization_runner.cpp" ;;
+              tests/tuning/characterization_math_test.cpp)
+                extra="src/sapphirelib/control/feedforward.cpp src/sapphirelib/mechanism/position_control.cpp src/sapphirelib/control/pid.cpp" ;;
+              tests/tuning/characterization_runner_test.cpp)
+                extra="src/sapphirelib/tuning/characterization_math.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/mechanism/position_control.cpp src/sapphirelib/control/pid.cpp" ;;
               tests/tuning/gain_design_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
             esac
             echo "== $name"
@@ -72,13 +75,12 @@ jobs:
         run: python tools/telemetry/slt_read.py --selftest
 
       # Still fails on files written before .clang-format was fixed to match
-      # the house style, until they get their one-time format pass. tuning/
-      # is left out of that pass and of this check until the model-based
-      # auto-tune lands, so its diff stays reviewable.
+      # the house style, until they get their one-time format pass. (tuning/
+      # had its pass when model-based Auto-Tune landed, and is checked like
+      # everything else now.)
       - name: Check formatting
         if: ${{ !cancelled() }}
         run: |
           sudo apt-get update && sudo apt-get install -y clang-format
           find include/sapphirelib src/sapphirelib \( -name '*.hpp' -o -name '*.cpp' \) \
-            -not -path '*/tuning/*' \
             | xargs clang-format --dry-run --Werror

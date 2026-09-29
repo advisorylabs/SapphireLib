@@ -101,6 +101,9 @@ void opcontrol() {
     while (true) {
         // One sample of every button and stick, and this tick's "now".
         controller.update();
+        // ...and that sample into the SD log, so a match's replay shows what
+        // the driver asked for next to what the robot did.
+        robot::logDriver(controller);
 
         // Intake, claw, and lift buttons (R1/R2/L1/L2/Y/RIGHT/LEFT). Runs
         // ahead of the busy check below, so they keep working during a GUI

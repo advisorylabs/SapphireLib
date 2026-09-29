@@ -1,15 +1,15 @@
-// Host-side unit test for sapphirelib::telemetry::tapCharacterization() — no
-// PROS/embedded dependencies. The characterization runner itself sleeps on
-// pros::delay(), so this file carries a copy of its loop
-// (src/sapphirelib/tuning/characterization_runner.cpp) with the PROS calls
-// swapped for a fake clock, and drives it against a simulated axis. Keep the
-// copy in step with the real runner: what's under test is that the tap logs
-// exactly one row per CharacterizationSample the runner records, whatever
-// order the runner calls measure() and actuate() in.
+// Host-side unit test for sapphirelib::telemetry::tapCharacterization() and
+// tapMechanismCharacterization() — no PROS/embedded dependencies. The
+// characterization runners read time and sleep only through util/clock.hpp,
+// which this file defines as a fake clock that moves a simulated axis, so it
+// drives the real runners (src/sapphirelib/tuning/characterization_runner.cpp).
+// What's under test is that the tap logs exactly one row per
+// CharacterizationSample the runner records, whatever order the runner calls
+// measure(), actuate() and hold() in.
 //
 // Build & run:
 // clang-format off
-//   g++ -std=c++20 -Wall -Wextra -Iinclude tests/telemetry/characterization_tap_test.cpp src/sapphirelib/telemetry/characterization_tap.cpp src/sapphirelib/telemetry/channel.cpp src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp -o characterization_tap_test && ./characterization_tap_test
+//   g++ -std=c++20 -Wall -Wextra -Iinclude tests/telemetry/characterization_tap_test.cpp src/sapphirelib/telemetry/characterization_tap.cpp src/sapphirelib/telemetry/channel.cpp src/sapphirelib/telemetry/record_ring.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/tuning/characterization_runner.cpp -o characterization_tap_test && ./characterization_tap_test
 // clang-format on
 
 #include <algorithm>
@@ -27,9 +27,6 @@ namespace {
 std::uint32_t fakeMs = 0;
 } // namespace
 
-namespace sapphirelib {
-std::uint64_t micros() { return static_cast<std::uint64_t>(fakeMs) * 1000; }
-} // namespace sapphirelib
 
 using sapphirelib::telemetry::Channel;
 using sapphirelib::telemetry::ChannelKind;
@@ -37,10 +34,12 @@ using sapphirelib::telemetry::ChannelSchema;
 using sapphirelib::telemetry::Record;
 using sapphirelib::telemetry::RecordKind;
 using sapphirelib::telemetry::tapCharacterization;
+using sapphirelib::telemetry::tapMechanismCharacterization;
 using sapphirelib::tuning::CharacterizationConfig;
 using sapphirelib::tuning::CharacterizationData;
 using sapphirelib::tuning::CharacterizationRun;
 using sapphirelib::tuning::CharacterizationSample;
+using sapphirelib::tuning::MechanismCharacterizationConfig;
 
 namespace {
 
@@ -58,8 +57,15 @@ struct Axis {
     double position = 0.0;
     std::vector<std::string> calls;
 
+    bool held = false; // on the brake: see hold()
+
     void advance(std::uint32_t ms) {
         for (std::uint32_t i = 0; i < ms; ++i) {
+            if (held) {
+                speed = 0.0;
+                ++fakeMs;
+                continue;
+            }
             speed += (gain * volts - speed) * (0.001 / tauS);
             position += speed * 0.001;
             ++fakeMs;
@@ -78,83 +84,30 @@ struct Axis {
         std::snprintf(text, sizeof(text), "actuate@%u(%.17g)", fakeMs, v);
         calls.emplace_back(text);
         volts = v;
+        held = false;
+    }
+
+    void hold() {
+        char text[64];
+        std::snprintf(text, sizeof(text), "hold@%u", fakeMs);
+        calls.emplace_back(text);
+        held = true;
     }
 };
 
 Axis* axis = nullptr; // the axis the fake clock moves
 
-void delayMs(std::uint32_t ms) { axis->advance(ms); }
+} // namespace
+
+// The clock seam (util/clock.hpp), faked: time only moves when the runner
+// sleeps, and moving it moves the axis.
+namespace sapphirelib {
 std::uint32_t millis() { return fakeMs; }
+std::uint64_t micros() { return static_cast<std::uint64_t>(fakeMs) * 1000; }
+void delayMs(std::uint32_t ms) { axis->advance(ms); }
+} // namespace sapphirelib
 
-// --- Copy of characterization_runner.cpp, PROS calls swapped for the fakes ----
-
-// In its own namespace so the calls below name it explicitly — otherwise
-// argument-dependent lookup also finds the real tuning::runCharacterization().
-namespace runner_copy {
-
-constexpr double kStoppedFraction = 0.002;
-constexpr std::uint32_t kStoppedCheckMs = 100;
-
-void waitUntilStopped(const CharacterizationConfig& config) {
-    config.actuate(0.0);
-    const double threshold =
-        std::fmax(config.maxTravel > 0.0 ? config.maxTravel * kStoppedFraction : 0.0, 0.01);
-    const std::uint32_t start = millis();
-    double last = config.measure();
-    while (millis() - start < config.settleTimeoutMs) {
-        delayMs(kStoppedCheckMs);
-        const double now = config.measure();
-        if (std::fabs(now - last) < threshold) return;
-        last = now;
-    }
-}
-
-template <typename VoltsAt>
-CharacterizationRun runSegment(const CharacterizationConfig& config, VoltsAt voltsAt) {
-    CharacterizationRun run;
-    const std::uint32_t startMs = millis();
-    const double origin = config.measure();
-
-    while (true) {
-        const std::uint32_t elapsedMs = millis() - startMs;
-        if (elapsedMs >= config.preRollMs + config.maxSegmentMs) break;
-
-        const double position = config.measure();
-        if (config.maxTravel > 0.0 && std::fabs(position - origin) >= config.maxTravel) break;
-
-        const double volts =
-            elapsedMs < config.preRollMs ? 0.0 : voltsAt((elapsedMs - config.preRollMs) / 1000.0);
-        config.actuate(volts);
-        run.push_back(
-            CharacterizationSample{.timeMs = elapsedMs, .volts = volts, .position = position});
-        delayMs(config.samplePeriodMs);
-    }
-
-    config.actuate(0.0);
-    return run;
-}
-
-CharacterizationData runCharacterization(const CharacterizationConfig& config) {
-    CharacterizationData data;
-    const double rampRate = std::fabs(config.rampVoltsPerS);
-    const double rampMax = std::fabs(config.rampMaxVolts);
-    const double step = std::fabs(config.stepVolts);
-
-    for (const double direction : {1.0, -1.0}) {
-        waitUntilStopped(config);
-        data.ramps.push_back(runSegment(
-            config, [&](double t) { return direction * std::min(rampRate * t, rampMax); }));
-    }
-    for (const double direction : {1.0, -1.0}) {
-        waitUntilStopped(config);
-        data.steps.push_back(runSegment(config, [&](double) { return direction * step; }));
-    }
-
-    waitUntilStopped(config);
-    return data;
-}
-
-} // namespace runner_copy
+namespace {
 
 // --- Helpers -------------------------------------------------------------------
 
@@ -194,7 +147,7 @@ CharacterizationConfig configFor(Axis& target, double maxTravel, std::uint32_t m
     return config;
 }
 
-/// Runs the copied runner twice from the same start — once plain, once tapped
+/// Runs the runner twice from the same start — once plain, once tapped
 /// — and returns what the tapped run logged, after checking the tap changed
 /// nothing the runner or the axis could see.
 struct TappedRun {
@@ -207,13 +160,13 @@ TappedRun runBoth(double maxTravel, std::uint32_t maxSegmentMs) {
     axis = &plain;
     fakeMs = 1000;
     const CharacterizationData expected =
-        runner_copy::runCharacterization(configFor(plain, maxTravel, maxSegmentMs));
+        sapphirelib::tuning::runCharacterization(configFor(plain, maxTravel, maxSegmentMs));
 
     Axis tapped;
     axis = &tapped;
     fakeMs = 1000;
     Channel channel = makeChannel();
-    const CharacterizationData data = runner_copy::runCharacterization(
+    const CharacterizationData data = sapphirelib::tuning::runCharacterization(
         tapCharacterization(configFor(tapped, maxTravel, maxSegmentMs), channel));
 
     // The original callbacks saw exactly the same calls, same arguments, same
@@ -371,6 +324,65 @@ void testActuateWithoutFreshMeasureLogsNothing() {
     assert(rows[0].volts == 4.0f && rows[0].position == 2.5f);
 }
 
+void testMechanismHeldSamplesAreLoggedAsNan() {
+    // The mechanism runner holds the axis (rather than 0V) through each
+    // pre-roll and after each segment. Held samples are recorded with NaN
+    // volts, and the tap must log them the same way — plus one NaN row where
+    // each limit-cut segment ended — and change nothing else.
+    const auto configFor = [](Axis& target) {
+        MechanismCharacterizationConfig config;
+        config.axis.actuate = [&target](double v) { target.actuate(v); };
+        config.axis.measure = [&target] { return target.measure(); };
+        config.hold = [&target] { target.hold(); };
+        config.lowerLimit = 0.5;
+        config.upperLimit = 6.0;
+        return config;
+    };
+
+    Axis plain;
+    axis = &plain;
+    fakeMs = 1000;
+    const CharacterizationData expected =
+        sapphirelib::tuning::runMechanismCharacterization(configFor(plain));
+
+    Axis tapped;
+    axis = &tapped;
+    fakeMs = 1000;
+    Channel channel = makeChannel();
+    const CharacterizationData data = sapphirelib::tuning::runMechanismCharacterization(
+        tapMechanismCharacterization(configFor(tapped), channel));
+    assert(tapped.calls == plain.calls);
+    assert(!data.aborted);
+
+    const std::vector<Row> rows = drain(channel);
+    const std::vector<CharacterizationRun> segments = segmentsInOrder(data);
+    assert(segmentsInOrder(expected).size() == segments.size() && segments.size() == 4);
+    std::size_t row = 0;
+    for (const CharacterizationRun& segment : segments) {
+        assert(!segment.empty());
+        int heldSamples = 0;
+        for (const CharacterizationSample& sample : segment) {
+            assert(row < rows.size());
+            if (std::isnan(sample.volts)) {
+                ++heldSamples;
+                assert(std::isnan(rows[row].volts));
+                assert(rows[row].position == static_cast<float>(sample.position));
+            } else {
+                assert(sameAsSample(rows[row], sample));
+            }
+            ++row;
+        }
+        assert(heldSamples == 10); // 100ms pre-roll at 10ms
+        // The limit-cut extra row: held, at the out-of-range position.
+        assert(row < rows.size());
+        assert(std::isnan(rows[row].volts));
+        ++row;
+    }
+    assert(row == rows.size());
+    // Up segments end at the upper limit, down segments at the lower one.
+    assert(segments[0].back().position < 6.0 && rows.size() > 40);
+}
+
 } // namespace
 
 int main() {
@@ -379,6 +391,7 @@ int main() {
     testRowsAreTimestampedWhenActuated();
     testIncompleteConfigIsReturnedUnchanged();
     testActuateWithoutFreshMeasureLogsNothing();
+    testMechanismHeldSamplesAreLoggedAsNan();
     std::printf("characterization_tap_test: all tests passed\n");
     return 0;
 }

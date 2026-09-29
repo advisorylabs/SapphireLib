@@ -38,4 +38,14 @@ namespace sapphirelib::telemetry {
 tuning::CharacterizationConfig tapCharacterization(tuning::CharacterizationConfig config,
                                                    Channel& channel);
 
+/// tapCharacterization() for runMechanismCharacterization(): the same rows,
+/// plus one for each hold() that follows a fresh measure() — a held sample,
+/// logged with NaN volts exactly as the runner records it. So the pre-roll
+/// before each segment is in the log, and a segment cut short by its limit
+/// ends with one NaN row at the out-of-range position (where a drive axis's
+/// ends with a 0V one). With no hold set, the runner holds with actuate(0),
+/// which logs as it always does.
+tuning::MechanismCharacterizationConfig
+tapMechanismCharacterization(tuning::MechanismCharacterizationConfig config, Channel& channel);
+
 } // namespace sapphirelib::telemetry

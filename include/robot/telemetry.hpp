@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "sapphirelib/input/controller.hpp"
 #include "sapphirelib/telemetry/logger.hpp"
 
 namespace robot {
@@ -22,8 +23,10 @@ sapphirelib::telemetry::Logger& logger();
 
 /// Registers every channel this robot logs — the drivetrain's three PIDs
 /// ("drive", "turn", "hold"), the odometry pose ("odom"), the drivetrain's
-/// applied axis volts ("chassis"), the battery ("batt"), and the lift's
-/// channels (macros::attachTelemetry()) — then starts the logger's tasks.
+/// applied axis volts ("chassis"), the battery ("batt"), every motor's health
+/// ("motor.*"), the driver's controller ("driver", see logDriver()), and the
+/// macros' channels (macros::attachTelemetry(): "lift", "lift.act", "mech") —
+/// then starts the logger's tasks.
 ///
 /// Call once from initialize(), after initDevices() and before anything can
 /// run a motion or opcontrol: attaching a PID's observer isn't synchronized
@@ -32,5 +35,13 @@ sapphirelib::telemetry::Logger& logger();
 /// spawns two tasks (the card check and file open happen on the logger's
 /// own writer task), so a missing card costs initialize() nothing.
 void startTelemetry();
+
+/// Records this tick's controller sample in the "driver" channel: both
+/// sticks, every button held (as a bitmask, bit i = input::Button i), and
+/// whether the controller is connected. Call once per opcontrol tick, right
+/// after controller.update() — a robot that stops answering its driver is
+/// either this (connected drops to 0) or everything downstream of it, and the
+/// log should say which.
+void logDriver(const sapphirelib::input::Controller& controller);
 
 } // namespace robot

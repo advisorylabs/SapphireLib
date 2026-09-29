@@ -11,6 +11,7 @@
 
 #include "pros/error.h"
 #include "pros/misc.hpp"
+#include "pros/motors.h"
 #include "pros/version.h"
 #include "sapphirelib/telemetry/csv_format.hpp"
 #include "sapphirelib/telemetry/file_naming.hpp"
@@ -154,6 +155,12 @@ Channel& Logger::channel(const char* name, std::initializer_list<const char*> co
 Channel& Logger::poll(const char* name, std::initializer_list<const char*> columns,
                       std::uint32_t periodMs, std::function<void(double* values)> read,
                       ChannelOptions options) {
+    return pollColumns(name, columns.begin(), columns.size(), periodMs, std::move(read), options);
+}
+
+Channel& Logger::pollColumns(const char* name, const char* const* columns, std::size_t columnCount,
+                             std::uint32_t periodMs, std::function<void(double* values)> read,
+                             ChannelOptions options) {
     std::lock_guard<pros::Mutex> lock(registrationMutex_);
     const std::size_t count = polledCount_.load(std::memory_order_relaxed);
     if (count >= kMaxPolled || !read) {
@@ -163,8 +170,7 @@ Channel& Logger::poll(const char* name, std::initializer_list<const char*> colum
         return *nullChannel_;
     }
 
-    Channel& channel =
-        addChannelLocked(name, ChannelKind::samples, columns.begin(), columns.size(), options);
+    Channel& channel = addChannelLocked(name, ChannelKind::samples, columns, columnCount, options);
     if (isNullChannel(channel)) return channel;
 
     polled_[count] = std::make_unique<Polled>(
@@ -183,6 +189,24 @@ Channel& Logger::pose(const odom::Odometry& odometry, const char* name, std::uin
         values[1] = pose.yIn;
         values[2] = pose.headingDeg;
     });
+}
+
+Channel& Logger::motor(const char* name, std::int8_t port, std::uint32_t periodMs,
+                       ChannelOptions options) {
+    return pollColumns(
+        name, kMotorColumns, kMotorColumnCount, periodMs,
+        [port](double* values) {
+            // Six quick reads of state the brain already has cached from the
+            // motor's last status packet; no radio or device round trip.
+            motorRow(MotorReadings{.voltageMv = pros::c::motor_get_voltage(port),
+                                   .currentMa = pros::c::motor_get_current_draw(port),
+                                   .temperatureC = pros::c::motor_get_temperature(port),
+                                   .velocityRpm = pros::c::motor_get_actual_velocity(port),
+                                   .efficiencyPct = pros::c::motor_get_efficiency(port),
+                                   .faults = pros::c::motor_get_faults(port)},
+                     values);
+        },
+        options);
 }
 
 Channel& Logger::addChannelLocked(const char* name, ChannelKind kind, const char* const* columns,

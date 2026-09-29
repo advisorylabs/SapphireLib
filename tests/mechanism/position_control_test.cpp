@@ -532,6 +532,11 @@ void testLawNames() {
     CHECK(std::strcmp(positionLawName(PositionLaw::sensorLost), "no sensor") == 0);
     CHECK(std::strcmp(positionLawName(PositionLaw::manual), "manual") == 0);
     CHECK(std::strcmp(positionLawName(PositionLaw::off), "off") == 0);
+    CHECK(std::strcmp(positionLawName(PositionLaw::external), "external") == 0);
+    // The numbers are what telemetry logs (lift.act's `law` column), so they
+    // never move: new laws only get added at the end.
+    CHECK(static_cast<int>(PositionLaw::off) == 5);
+    CHECK(static_cast<int>(PositionLaw::external) == 6);
 }
 
 /// A lift on a hard stop at 0: `gravityVolts` of its weight pulls it down,

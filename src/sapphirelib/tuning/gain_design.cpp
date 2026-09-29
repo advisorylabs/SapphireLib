@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace sapphirelib::tuning {
 
@@ -123,6 +124,8 @@ GainDesign designPositionGains(const MotorFeedforward& model, ResponseSpec spec,
     design.naturalFrequency = omega;
     design.settleTimeS = unitSettle / omega;
     design.phaseMarginDeg = phaseMarginDeg(model, design.gains, delayS);
+    design.staticErrorBound = design.gains.kP > 0.0 ? model.kS / design.gains.kP
+                                                    : std::numeric_limits<double>::infinity();
     return design;
 }
 

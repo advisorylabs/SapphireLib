@@ -26,6 +26,12 @@ public:
     /// whenever any check is failing (cleared automatically once they all
     /// pass again) — so a bad sensor is visible from any tab, not just this
     /// one.
+    ///
+    /// Every change is also logged to the SD telemetry, when a Logger is
+    /// running, as a `device` event (docs/TELEMETRY_FORMAT.md): `missing` for
+    /// a check failing at the first poll, then `lost` and `back` as it flips —
+    /// so a cable knocked loose mid-match shows up in the log at the moment it
+    /// happened, next to whatever the robot did about it.
     explicit DiagnosticsPage(std::vector<diag::SensorCheck> checks, Gui* gui = nullptr);
 
     const char* title() const override;
@@ -49,6 +55,10 @@ private:
         /// establishes the invariant by painting every row failing-colored
         /// before the first check runs.
         bool ok = false;
+
+        /// Checked at least once — until then `ok` is only the paint's
+        /// starting point, not a verdict, so a first pass isn't a "change".
+        bool polled = false;
     };
 
     std::vector<Row> rows_;
