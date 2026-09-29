@@ -15,10 +15,15 @@
 namespace sapphirelib::motion {
 
 /// Exit conditions for moveToPose() — settles once *both* the position and
-/// heading errors are within their thresholds at the same time.
+/// heading errors are within their thresholds at the same time. `{}` gives
+/// the defaults below; positional `{1.0, 2.0}` still works too.
 struct PoseExitConditions {
-    double positionErrorThresholdIn;
-    double headingErrorThresholdDeg;
+    /// Distance from the target point, in inches, that counts as there.
+    double positionErrorThresholdIn = 1.0;
+
+    /// Heading error from the target heading, in degrees, that counts as
+    /// there.
+    double headingErrorThresholdDeg = 2.0;
 
     /// How long both errors must stay within threshold before the motion
     /// exits successfully.
@@ -58,6 +63,18 @@ struct PursuitConfig {
 
     /// Exit conditions for that final moveToPoint() hand-off.
     chassis::ExitConditions finalExit = chassis::ExitConditions{1.0};
+
+    /// Hard cap, in milliseconds, on the pursuit phase alone (the final
+    /// moveToPoint() keeps its own finalExit.timeoutMs). Pursuit otherwise
+    /// only ends by reaching finalApproachIn, so a robot that gets blocked
+    /// on the way would chase the path for the rest of the period. On
+    /// timeout followPath() stops and returns ExitReason::timedOut without
+    /// attempting the final approach — it never got near it. 0 disables
+    /// the cap (not recommended).
+    ///
+    /// The last field on purpose, so existing designated initializers stay
+    /// valid.
+    std::uint32_t timeoutMs = 10000;
 };
 
 } // namespace sapphirelib::motion

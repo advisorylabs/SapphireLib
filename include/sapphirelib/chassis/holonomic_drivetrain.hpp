@@ -23,6 +23,7 @@
 #include "sapphirelib/chassis/thermal_math.hpp"
 #include "sapphirelib/control/heading_hold.hpp"
 #include "sapphirelib/control/pid.hpp"
+#include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/odom/odometry.hpp"
@@ -37,6 +38,11 @@ namespace sapphirelib::chassis {
 /// independently. driveDistance()/turnToHeading() only use the
 /// forward/turn axes — see the class comment on driveDistance() for why
 /// strafing isn't (yet) part of the closed-loop API.
+///
+/// Every blocking motion returns a motion::MotionResult (settled, timed
+/// out, or aborted, plus its final error) and logs a `motion` start/end
+/// event to the running telemetry::Logger, if there is one — see
+/// docs/TELEMETRY_FORMAT.md.
 class HolonomicDrivetrain {
 public:
     /// Constructs the drivetrain's motor groups and IMU directly from ports
@@ -75,6 +81,20 @@ public:
     /// controller. Normalized the same way as holonomic() so no wheel exceeds
     /// 12V without distorting the direction.
     void holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts);
+
+    /// The forward/strafe/turn volts the corner wheels were last commanded,
+    /// recovered from the four corner voltages — so it covers every path to
+    /// the motors: driver control, holonomicVolts(), and every autonomous
+    /// motion. After any normalization (see holonomicVolts()) but before
+    /// each motor's own ±12V clamp, so an autonomous motion's raw PID
+    /// output can read past 12. All zero after stop(), which commands no
+    /// voltage.
+    ///
+    /// For telemetry and model fitting: the input side of the chassis's
+    /// response. Safe to call from any task — the three fields are separate
+    /// lock-free atomics, so a read racing a command can mix fields from
+    /// two consecutive ticks, but never tears a single value.
+    AxisVolts appliedAxisVolts() const;
 
     /// Chooses how holonomic() and the heading-hold/field-centric variants
     /// turn stick input into motor output — see DriverInputMode. Heading
@@ -134,10 +154,16 @@ public:
     /// on the next holonomicHeadingHold() call.
     void setHeadingHold(HeadingHoldConfig config);
 
-    /// The heading holonomicHeadingHold() is currently holding, in degrees.
-    /// Only meaningful once one of those has been called; it tracks the
-    /// chassis within HeadingHoldConfig::maxLeadDeg, so it's a useful thing
-    /// to put on a GUI page next to the live heading.
+    /// The heading holonomicHeadingHold() is currently holding, as a field
+    /// heading (0-360, the same frame as headingDeg()). Only meaningful once
+    /// one of those has been called; it tracks the chassis within
+    /// HeadingHoldConfig::maxLeadDeg, so it's a useful thing to put on a GUI
+    /// page next to the live heading.
+    ///
+    /// Internally the hold works in the Imu's rotation frame, which
+    /// Odometry::setPose() never shifts — so re-framing the field heading
+    /// mid-drive leaves the chassis pointed where it was instead of spinning
+    /// it to chase a target that just moved by the re-frame.
     double heldHeadingDeg() const;
 
     /// Re-zeros the field-centric reference heading to the chassis's current
@@ -147,15 +173,36 @@ public:
     ///
     /// Doesn't disturb the held heading: redefining which way "forward"
     /// translates has nothing to do with which way the chassis is pointed.
+    ///
+    /// The reference is a physical direction, kept in the Imu's rotation
+    /// frame: Odometry::setPose() re-framing the field heading (at the start
+    /// of an autonomous routine, say) doesn't change which way "forward"
+    /// drives. Only this call does.
     void resetFieldHeading();
+
+    /// The pose source for the moveToPoint()/moveToPose()/followPath()
+    /// overloads that don't take one, so a routine can write
+    /// `moveToPoint(24, 24)` instead of passing the odometry to every call.
+    /// Set it once during setup (initialize()), before any motion runs —
+    /// it isn't synchronized. `odometry` must outlive the drivetrain;
+    /// nullptr unsets it. The overloads that take an Odometry ignore this.
+    void setOdometry(const odom::Odometry* odometry);
 
     /// Drives to field point (`xIn`, `yIn`), reading pose from `odometry`.
     /// Holds the heading the chassis had when the motion started, with the
     /// turn PID — a holonomic chassis can translate and rotate
     /// independently, so if you need a different final heading, use
     /// moveToPose() instead rather than chaining a turnToHeading() after
-    /// this. Blocks until settled or timed out, then stops.
-    void moveToPoint(double xIn, double yIn, const odom::Odometry& odometry, ExitConditions exit);
+    /// this. `exit.errorThreshold` is the distance to the point, in inches.
+    /// Blocks until settled or timed out, then stops.
+    motion::MotionResult moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
+                                     ExitConditions exit = ExitConditions{1.0});
+
+    /// moveToPoint() reading pose from the setOdometry() odometry. If none
+    /// was set, logs an error and returns ExitReason::aborted without
+    /// moving.
+    motion::MotionResult moveToPoint(double xIn, double yIn,
+                                     ExitConditions exit = ExitConditions{1.0});
 
     /// Drives to field pose (`xIn`, `yIn`, `headingDeg`), reading pose from
     /// `odometry`. Unlike TankDrivetrain's boomerang controller, this just
@@ -163,9 +210,16 @@ public:
     /// heading control at the same time — a holonomic chassis doesn't need
     /// the carrot-point trick since translation and rotation don't
     /// interfere with each other. Blocks until settled or timed out, then
-    /// stops.
-    void moveToPose(double xIn, double yIn, double headingDeg, const odom::Odometry& odometry,
-                     motion::PoseExitConditions exit);
+    /// stops. The result's finalError is the distance to the point.
+    motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg,
+                                    const odom::Odometry& odometry,
+                                    motion::PoseExitConditions exit = {});
+
+    /// moveToPose() reading pose from the setOdometry() odometry. If none
+    /// was set, logs an error and returns ExitReason::aborted without
+    /// moving.
+    motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg,
+                                    motion::PoseExitConditions exit = {});
 
     /// Follows `path` using pure pursuit: repeatedly drives toward a point
     /// `config.lookaheadIn` ahead on the path, at constant cruise voltage,
@@ -174,7 +228,19 @@ public:
     /// there. Holds the heading the chassis had when the path started, all
     /// the way through that final approach. Blocks until the final
     /// moveToPoint() settles or times out.
-    void followPath(const motion::Path& path, const odom::Odometry& odometry, motion::PursuitConfig config);
+    ///
+    /// Returns the final approach's reason and error, with elapsedMs
+    /// covering the whole path. If the pursuit phase runs past
+    /// `config.timeoutMs` it stops there and returns ExitReason::timedOut
+    /// (finalError is the distance left to the last waypoint); an empty
+    /// path logs an error and returns ExitReason::aborted without moving.
+    motion::MotionResult followPath(const motion::Path& path, const odom::Odometry& odometry,
+                                    motion::PursuitConfig config);
+
+    /// followPath() reading pose from the setOdometry() odometry. If none
+    /// was set, logs an error and returns ExitReason::aborted without
+    /// moving.
+    motion::MotionResult followPath(const motion::Path& path, motion::PursuitConfig config);
 
     /// Drives straight for `inches` (signed: negative reverses) using
     /// drive-encoder position PID with IMU-based heading correction. Only
@@ -182,18 +248,25 @@ public:
     /// distance control needs per-wheel-vector odometry math that isn't
     /// implemented yet; use holonomic() directly for open-loop strafing in
     /// the meantime. Blocks until settled or timed out, then stops.
-    void driveDistance(double inches, ExitConditions exit = ExitConditions{1.0});
+    ///
+    /// Measures from wherever the drive encoders read when it starts,
+    /// without taring them — see MotorGroup::tarePosition() for why a tare
+    /// would disturb odometry.
+    motion::MotionResult driveDistance(double inches, ExitConditions exit = ExitConditions{1.0});
 
     /// Turns in place to `headingDeg` (absolute heading, matching
     /// pros::Imu::get_heading()'s 0-360 range) using IMU heading PID.
-    /// Blocks until settled or timed out, then stops.
-    void turnToHeading(double headingDeg, ExitConditions exit = ExitConditions{2.0});
+    /// `exit.errorThreshold` is in degrees here. Blocks until settled or
+    /// timed out, then stops.
+    motion::MotionResult turnToHeading(double headingDeg,
+                                       ExitConditions exit = ExitConditions{2.0});
 
     void stop(BrakeMode mode = BrakeMode::brake);
 
-    /// Current IMU heading in degrees (0-360, clockwise-positive), for
-    /// callers implementing field-centric ("headless") driver control. Not
-    /// const — see sensors::Imu::getHeadingDeg()'s call-frequency caveat.
+    /// Current field heading in degrees (0-360, clockwise-positive) — the
+    /// frame turnToHeading() targets and Odometry::setPose() sets (see
+    /// sensors::Imu::getHeadingDeg()). Not const — see that function's
+    /// call-frequency caveat.
     double headingDeg();
 
     /// The drivetrain's own calibrated IMU — exposed so you can share it
@@ -241,9 +314,22 @@ private:
     std::atomic<DriverInputMode> driverInputMode_{DriverInputMode::voltage};
     mutable pros::MutexVar<HolonomicAxisModels> axisModels_;
 
+    /// See setOdometry().
+    const odom::Odometry* odometry_ = nullptr;
+
+    /// See appliedAxisVolts(). Written by whichever task is commanding the
+    /// motors, read by telemetry's sampler — atomics rather than a mutex,
+    /// since PROS deletes competition tasks on every mode change and a
+    /// mutex held at that moment would stay locked forever.
+    std::atomic<double> appliedForwardVolts_{0.0};
+    std::atomic<double> appliedStrafeVolts_{0.0};
+    std::atomic<double> appliedTurnVolts_{0.0};
+
     /// Field-centric reference heading — see resetFieldHeading(). Set to the
     /// IMU heading at construction time, so holonomicFieldCentric() works out
     /// of the box without callers needing to call resetFieldHeading() first.
+    /// In the rotation frame (rotationHeadingDeg()), so a setPose() re-frame
+    /// leaves it pointing the same physical way.
     double fieldHeadingZeroDeg_;
 
     /// Asterisk center wheels — unset (std::nullopt/empty) for a standard
@@ -280,11 +366,18 @@ private:
     /// of 0 means "not holding", which is also what a long enough gap
     /// between calls decays back to.
     HeadingHoldConfig headingHold_;
-    double heldHeadingDeg_ = 0.0;
+    double heldHeadingDeg_ = 0.0; // rotation frame — see heldHeadingDeg()
     std::uint32_t lastHeadingHoldMs_ = 0;
 
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);
+
+    /// Mean of the four corner encoders, in motor degrees — driveDistance()'s
+    /// position reading.
+    double cornerAverageDegrees() const;
+
+    /// Publishes one tick's axis volts for appliedAxisVolts().
+    void recordAppliedVolts(double forwardVolts, double strafeVolts, double turnVolts);
 
     /// Rotates a field-relative (throttle, strafe) into the chassis's frame
     /// — see holonomicFieldCentric().
@@ -298,14 +391,25 @@ private:
     /// cross-combination from setWheelVoltages(), applied to positions.
     double encoderStrafeIn() const;
 
-    /// moveToPoint() holding an explicit heading, so followPath() can keep
-    /// its starting heading through the final approach.
-    void moveToPointHolding(double xIn, double yIn, double holdHeadingDeg,
-                            const odom::Odometry& odometry, ExitConditions exit);
+    /// moveToPoint()'s control loop, holding an explicit heading, so
+    /// followPath() can keep its starting heading through the final
+    /// approach. Logs no telemetry events of its own: the final approach is
+    /// part of the followPath() motion, not a separate one.
+    motion::MotionResult moveToPointHolding(double xIn, double yIn, double holdHeadingDeg,
+                                            const odom::Odometry& odometry, ExitConditions exit);
 
     /// Advances the held heading by one tick of `turnInput` and returns the
     /// heading-hold PID's output, in volts, for getting onto it.
     double headingHoldTurnVolts(double turnInput);
+
+    /// The IMU's scaled rotation since construction, wrapped to 0-360 — a
+    /// heading that Odometry::setPose()'s re-framing never shifts. Used for
+    /// everything that tracks a physical direction or only takes differences
+    /// (field-centric "forward", heading hold, driveDistance()'s heading
+    /// correction); anything that targets a field heading uses headingDeg().
+    /// While the frame doesn't change, the two differ by a constant, so every
+    /// difference comes out the same in either.
+    double rotationHeadingDeg();
 
     /// Re-reads corner and center motor temperatures (at most every
     /// kThermalPollIntervalMs) into thermalFractions_/centerThermalFraction_.

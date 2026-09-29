@@ -75,6 +75,41 @@ void testHeadingWrapAcrossSeam() {
     expectNear(delta.dyIn, 10.0 * std::cos(0.0 * kPi / 180.0), "wrap: dy");
 }
 
+void testReframingRotatesTheDeltaButIsNotATurn() {
+    // Odometry::update() re-expresses the previous heading in the current
+    // heading frame (rotation + offset) so that a setPose() between updates
+    // shifts both endpoints by the same amount. That has to be exactly a
+    // rotation of the field-frame delta — with no change to how much the
+    // robot is considered to have turned, or the tracking-wheel arc
+    // correction would fire for a turn that never happened.
+    const double offsets[] = {0.0, 90.0, -90.0, 180.0, 233.7, -721.0};
+    for (const double offset : offsets) {
+        for (double last = -400.0; last <= 400.0; last += 37.0) {
+            const double turned = 13.0;
+            const auto base = computeOdometryDelta(last, last + turned, 7.0, -2.0, 3.59, 4.18);
+            const auto shifted =
+                computeOdometryDelta(last + offset, last + turned + offset, 7.0, -2.0, 3.59, 4.18);
+            // Rotating (dx, dy) clockwise by `offset` degrees, in the same
+            // convention as the field frame (x = forward·sin, y = forward·cos).
+            const double rad = offset * kPi / 180.0;
+            const double expectedDx = base.dxIn * std::cos(rad) + base.dyIn * std::sin(rad);
+            const double expectedDy = -base.dxIn * std::sin(rad) + base.dyIn * std::cos(rad);
+            expectNear(shifted.dxIn, expectedDx, "re-framed delta: dx");
+            expectNear(shifted.dyIn, expectedDy, "re-framed delta: dy");
+            // Same distance traveled — the arc correction saw the same turn.
+            expectNear(std::hypot(shifted.dxIn, shifted.dyIn), std::hypot(base.dxIn, base.dyIn),
+                       "re-framed delta: length");
+        }
+    }
+
+    // And an unwrapped previous heading (rotation + offset, never wrapped) is
+    // the same as its wrapped equivalent.
+    const auto unwrapped = computeOdometryDelta(-350.0 + 720.0, 15.0, 10.0, 0.0, 0.0, 0.0);
+    const auto wrapped = computeOdometryDelta(10.0, 15.0, 10.0, 0.0, 0.0, 0.0);
+    expectNear(unwrapped.dxIn, wrapped.dxIn, "unwrapped last: dx");
+    expectNear(unwrapped.dyIn, wrapped.dyIn, "unwrapped last: dy");
+}
+
 void testCalibrateTrackingWheelOffset() {
     // 1 full turn (2*pi radians) moving a wheel 5in-offset tracking wheel
     // through an arc length of offset * 2*pi.
@@ -94,6 +129,7 @@ int main() {
     testForwardTravelAtHeadingEast();
     testPureRotationDoesNotDriftWithCorrectOffset();
     testHeadingWrapAcrossSeam();
+    testReframingRotatesTheDeltaButIsNotATurn();
     testCalibrateTrackingWheelOffset();
     std::puts("odometry_math_test: all assertions passed");
     return 0;

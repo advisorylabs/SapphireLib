@@ -62,6 +62,14 @@ public:
     /// DiagnosticsPage's poll interval) rather than lean on Gui's timer
     /// period.
     virtual bool updatesWhenHidden() const { return false; }
+
+    /// True while this page runs a routine that drives the robot on its own
+    /// — a calibration spin, a tuning run. Driver control should skip
+    /// commanding the drivetrain while Gui::anyPageBusy() is true: a driver
+    /// loop keeps commanding the same motors every tick (even with centered
+    /// sticks) and would fight the routine. Called from other tasks, so
+    /// read an atomic here, never a widget.
+    virtual bool isBusy() const { return false; }
 };
 
 } // namespace sapphirelib::gui

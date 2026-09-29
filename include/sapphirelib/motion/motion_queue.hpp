@@ -37,7 +37,10 @@ public:
     /// Starts processing the queue on a background task. Returns
     /// immediately — call waitUntilDone() to block until every enqueued
     /// motion (including ones enqueued after run() was called) has run.
-    /// Call at most once per MotionQueue instance.
+    /// Only the first call starts the task; later calls do nothing (a second
+    /// worker would run motions in parallel). The task runs for the rest of
+    /// the program, so the MotionQueue must too — make it static, never a
+    /// local in autonomous(), which PROS can end at any moment.
     void run();
 
     /// True while a motion is executing or more are queued behind it.

@@ -146,11 +146,26 @@ struct AsteriskConfig {
     double maxThermalCorrectionVolts = 6.0;
 };
 
-/// Exit conditions for a blocking motion (driveDistance()/turnToHeading()).
+/// The per-axis voltages a drivetrain last commanded, before wheel mixing —
+/// forward/back, sideways, and rotation, in volts. See
+/// HolonomicDrivetrain::appliedAxisVolts() / TankDrivetrain::appliedAxisVolts().
+struct AxisVolts {
+    double forward = 0.0;
+    double strafe = 0.0;
+    double turn = 0.0;
+};
+
+/// Exit conditions for a blocking motion (driveDistance()/turnToHeading()/
+/// moveToPoint()).
 struct ExitConditions {
     /// The motion is "settled" once its error stays within this threshold —
-    /// inches for driveDistance(), degrees for turnToHeading().
-    double errorThreshold;
+    /// inches for driveDistance() and moveToPoint() (distance to the
+    /// target), degrees for turnToHeading(). Defaults to 1.0, which suits
+    /// the inch-measured motions; turnToHeading()'s default argument uses
+    /// 2.0 degrees instead. (It used to have no default at all, so `{}` or
+    /// `{.timeoutMs = 1500}` meant a threshold of 0 — a motion that could
+    /// never settle and always ran to its timeout.)
+    double errorThreshold = 1.0;
 
     /// How long the error must stay within errorThreshold before the motion
     /// exits successfully.

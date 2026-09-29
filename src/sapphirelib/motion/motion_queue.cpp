@@ -30,6 +30,9 @@ void MotionQueue::clear() {
 }
 
 void MotionQueue::run() {
+    // A second worker would run queued motions in parallel, both commanding
+    // the same motors.
+    if (task_) return;
     task_ = std::make_unique<pros::Task>(
         [this] {
             while (true) {
