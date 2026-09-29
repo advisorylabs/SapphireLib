@@ -197,6 +197,26 @@ defaults shipped here.
     copied into source; nothing is persisted. Pure math unit-tested against a simulated axis with known
     kS/kV/kA, delay, and sensor noise in `tests/tuning/characterization_math_test.cpp`, and the designs
     checked in closed loop against the same simulation in `tests/tuning/gain_design_test.cpp`.
+  - Mechanisms: lifts and arms Auto-Tune the same way (`PidTunerPage::addMechanismAxis()`). Gravity
+    is the difference: it pulls the same way whichever way the mechanism moves, so
+    `tuning::runMechanismCharacterization()` ramps and steps *up and down* between absolute limits,
+    braking the mechanism between segments, and `characterizeMechanism()` fits
+    `V = kS·sign(v) + kG·g(x) + kV·v + kA·a` with `g` constant (an elevator) or `cos(angle)` (an arm,
+    matching `GravityFeedforward`) — the up/down asymmetry is what separates kG from kS. Held samples
+    record NaN volts and the fit skips them. The result drops straight into the mechanism
+    (`MechanismModel::gravityFeedforward()`, `PositionMechanism::setGravity()`), and its controller is
+    designed from the same model with gravity cancelled. While the run has the motors,
+    `PositionMechanism::beginExternalControl()` puts the mechanism in a new `external` law, so the
+    driver macros can keep calling `update()` without fighting it. 96671H's lift is registered (Auto-Tune
+    measures only the selected controller's group, so tuning the lift never drives the chassis), with
+    a Run Test that moves it between two heights through the macros' own `update()`.
+  - A Stop button aborts a run between samples (and the robot being disabled does too); the new
+    gains, and each axis's finish hook, are applied only once the whole run succeeded. The runners
+    moved onto the `util/clock.hpp` seam, so `tests/tuning/characterization_runner_test.cpp` runs
+    runner → fit → design → closed loop end to end on simulated drive and lift axes, and the tap test
+    drives the real runner. The design now adds half the loop's own period to the measured delay, and
+    the readout shows the friction band (`GainDesign::staticErrorBound`, kS/kP): how far short of
+    the target static friction can stop a controller with no integrator.
   - Driver stick mode toggle (`chassis::DriverInputMode`, the button under Auto-Tune): `voltage` (stick
     = fraction of 12V, the old behavior and still the default) or `velocity` (stick = fraction of the
     axis's top speed, turned into volts through the measured model via `MotorFeedforward`, so the
@@ -253,8 +273,41 @@ defaults shipped here.
       DiagnosticsPage` re-runs every registered check on a 250ms poll — not just at startup, so a
       sensor knocked loose mid-match shows up too — and lists failures with what's actually plugged in
       instead; optionally raises a red header banner via `Gui::showWarning()`/`clearWarning()` so a bad
-      sensor is visible from any tab. Motor *fault* checking (stalls/over-temp, as opposed to wrong-port
-      detection) is still open — `MotorGroup` doesn't currently expose per-motor fault flags.
+      sensor is visible from any tab. Every change of verdict is also logged (`device` events:
+      missing, lost, back), so a sensor that came loose mid-match is in the SD log with its port.
+- [x] Motor health telemetry — `Logger::motor(name, port)` logs any motor's volts, current,
+      temperature, speed, efficiency and fault bits every 100 ms, as a whole row of NaN when the motor
+      doesn't answer (unplugged), never plausible zeros. The robot logs all ten motors, plus battery
+      current and temperature, the driver's sticks, buttons and controller connection (`driver`), and
+      the macros' state (`mech`). V5 motors cut their own current as they heat (to half at 55 °C,
+      nothing at 70 °C) and report it nowhere else, so this is the evidence for a mechanism that fades
+      mid-match. Pure part (turning PROS's error values into NaN) tested in
+      `tests/telemetry/motor_row_test.cpp`. Not on the brain screen yet: the diagnostics page still
+      checks ports, not motor faults.
+- [x] Telemetry analyzer — `tools/analyzer/`, a browser app with no install or server (open
+      `index.html`, drop the SD card's logs on it; it works offline). Plain JavaScript with a Node test
+      suite that CI runs. It reads SLT files (merging a run split across files by `sd,reopened`), cuts
+      them into matches and practice sessions, and:
+  - lists what went wrong, each finding with its time and a jump to it: motors overheating (with the
+    derating step reached), disconnecting, stalling or losing speed per volt; a mechanism stuck
+    short of its target at full power, or settling below its targets; battery sag; a controller
+    dropping out; sensors unplugged; autonomous motions timing out (and whether they were still
+    pushing when they did); PIDs oscillating or their loops stalling; odometry jumps; SD faults and
+    dropped rows;
+  - replays a match on a small field view (robot pose, trail, targets) and a side view of the lift
+    (target and actual height, its motors' temperatures), with the controller's sticks, battery,
+    motor tiles and "happening now", next to synced charts;
+  - charts any column of any channel on one shared time axis, with presets, zoom, a values table,
+    and CSV export; lists every PID step response and every motion with its metrics;
+  - tunes offline — the practical form of "a tuner in the app": the robot has to be driven, but a
+    log already holds what Auto-Tune measures. It refits Auto-Tune's `char.*` runs with a
+    JavaScript port of `tuning/` (matching the C++ to 1e-12 on its golden cases), or fits a model
+    from ordinary match driving (the volts each system was sent, next to where it went); designs
+    each controller the way the robot does; replays the log's real targets through the fitted model
+    with the gains the robot had, the designed ones, and hand-entered ones; and prints the C++ to
+    paste. A demo (a simulated match with an overheating lift, a loose cable and a controller
+    dropout, plus a pit session with an Auto-Tune run) loads on start, so every view can be seen
+    without a robot.
 
 - [x] GUI refresh-cost pass — the default pages were cheap individually but the refresh model wasn't:
       every registered page's `update()` ran on every tick regardless of which tab was showing, and each
@@ -365,7 +418,9 @@ up against real odometry noise, wheel slip, and backlash hasn't been checked. St
 side: motion profiles with feedforward and measured-velocity feedback in `moveToPoint()`/`followPath()`
 (per-axis gains, so strafing stops borrowing the forward axis's), and an automated path-tracking
 validation run — for which the SD telemetry now records the data (see above), though it hasn't run
-against a real card yet. Motor-fault diagnostics haven't been started.
+against a real card yet. The lift's Auto-Tune and the new telemetry are verified on the host
+(simulated axes, fake clock) and compile-checked only; the analyzer has been run against simulated
+logs, not a real match's.
 
 ---
 
@@ -500,7 +555,7 @@ user expects — without dropping features or changing how any motion drives.
       new robot file can't silently ship inside `sapphirelib.a`.
 - [x] Tooling — `.clang-format` now matches the house style (it indented namespace contents, which the
       code never has, so the CI format gate reported thousands of violations and couldn't pass), with
-      `tuning/` left out of the CI check until Auto-Tune lands; `make check-examples` compiles every
+      `tuning/` left out of the CI check until Auto-Tune landed (it's in now); `make check-examples` compiles every
       example against the current headers so they can't silently rot; and CI's test loop handles
       header-only modules and tests that need extra sources.
 - [x] One field heading frame — `Odometry::setPose()` (and the constructor's `startPose`) used to
@@ -549,7 +604,7 @@ first:
       away. Needs the two items above first.
 - [ ] Shorter names through C++20 inline namespaces — `sapphirelib::HolonomicDrivetrain` alongside
       `sapphirelib::chassis::HolonomicDrivetrain`, source-compatible. It touches every file's namespace
-      line, `tuning/` included, so it waits for Auto-Tune to land.
+      line; `tuning/` has had its format pass now, so nothing's waiting on it.
 - [ ] Driver-control API consolidation — `holonomic` / `holonomicFieldCentric` / `holonomicHeadingHold`
       / `holonomicFieldCentricHeadingHold` is combinatorial naming. One call with options
       (`{.fieldCentric = true, .headingHold = true}`), or a stored mode, would replace them. Add first,
@@ -570,11 +625,11 @@ first:
       non-finite IMU reading ends it at once and writes NaN offsets into the live odometry.
 - [ ] Keyed GUI warnings — the header has a single warning slot, and `DiagnosticsPage` clears it every
       250ms while its checks pass, wiping anyone else's `showWarning()`.
-- [ ] Registering the lift with `PidTunerPage` — `addController(lift.pid())` works mechanically, but
-      opcontrol runs the macros ahead of its busy check, so the macros' `lift.update()` would fight a
-      tuner test motion. Gate the macros while a tuner run is active first. (Auto-Tune's model also has
-      no gravity term, so a lift's fit would be biased; the logged `lift.act` rows keep what a later
-      gravity fit needs.)
+- [ ] Gains written while a loop runs — `PID::setGains()` from the tuner page's task lands while
+      another task may be inside `update()`. The gains are plain doubles, so one step can use a mix
+      of old and new kP/kI/kD (and on the Cortex-A9 a double itself isn't guaranteed to be written in
+      one piece). Harmless in practice — it lasts one tick — but the fix is cheap: stage new gains in
+      an atomic slot that `update()` adopts at the top of its next step.
 
 ---
 

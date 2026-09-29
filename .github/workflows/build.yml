@@ -74,6 +74,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/telemetry/slt_read.py --selftest
 
+      # The telemetry analyzer (tools/analyzer) is plain browser JavaScript
+      # with no dependencies; its parser, analysis, and tuning math run under
+      # Node's built-in test runner. The file glob matters: `node --test
+      # <directory>` doesn't find the tests.
+      - name: Set up Node
+        if: ${{ !cancelled() }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test the telemetry analyzer
+        if: ${{ !cancelled() }}
+        run: node --test tools/analyzer/test/*.test.js
+
       # Still fails on files written before .clang-format was fixed to match
       # the house style, until they get their one-time format pass. (tuning/
       # had its pass when model-based Auto-Tune landed, and is checked like

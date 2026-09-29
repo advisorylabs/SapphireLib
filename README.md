@@ -32,14 +32,22 @@ PID tuning is still per-robot work you'll do after pulling it in. See
 - **GUI** — a tab-based brain-screen UI: home/status, autonomous selector, live odometry, sensor
   diagnostics, and a PID tuner. Opt-in, and your own pages plug into the same `addPage()`.
 - **Tuning** — manual PID tuning from the brain screen, and Auto-Tune: it measures each drive axis's
-  model and places every controller's poles from it. Also IMU heading-scale calibration.
+  model — or a lift's or arm's, gravity included — and places every controller's poles from it. Also
+  IMU heading-scale calibration.
 - **Macros & mechanisms** — `input::Controller` (button edges, hold times, combos, a throttled
   controller screen), `PositionMechanism` (lifts and arms: PID plus gravity feedforward, on your loop
   or its own task), `Piston`, `Roller` with anti-jam, `PresetLadder`, `Sequence`, and `waitUntil()`.
   See the guide, [`docs/MACROS.md`](docs/MACROS.md).
-- **Telemetry** — `telemetry::Logger` records PID steps, pose, your own channels, and events to the SD
-  card, one file per program run, without ever blocking the code it records. Format:
+- **Telemetry** — `telemetry::Logger` records PID steps, pose, motor health (temperature, current,
+  derating, disconnects), your own channels, and events to the SD card, one file per program run,
+  without ever blocking the code it records. Format:
   [`docs/TELEMETRY_FORMAT.md`](docs/TELEMETRY_FORMAT.md); reader: `tools/telemetry/slt_read.py`.
+- **Telemetry analyzer** — [`tools/analyzer/`](tools/analyzer/): open `index.html` in a browser (no
+  install, works offline) and drop the SD card's logs on it. It lists what went wrong in a match
+  (overheating, derating, disconnects, stalls, battery sag, timed-out motions), replays the match on a
+  small field-and-lift view next to synced charts, and tunes controllers from the log: it refits
+  Auto-Tune runs or ordinary driving, designs gains, shows how they'd have done against the match's
+  real targets, and writes the C++ to paste.
 
 ## Supported Odometry Configurations
 
@@ -133,6 +141,7 @@ SapphireLib/
 ├── tests/                 # Host-side unit tests for the pure modules (desktop g++)
 ├── examples/              # Usage examples, compile-checked with `make check-examples`
 ├── tools/telemetry/       # slt_read.py, the reference reader for SD telemetry logs
+├── tools/analyzer/        # Browser telemetry analyzer: diagnostics, match replay, offline tuning
 ├── docs/                  # Roadmap, setup guide, macros guide, telemetry format
 └── .github/               # CI workflow, issue templates
 ```

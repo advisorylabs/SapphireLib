@@ -1,15 +1,16 @@
 # SapphireLib telemetry format (SLT v1)
 
-`sapphirelib::telemetry::Logger` records PID steps, pose, mechanism commands and events to the
-V5's SD card while the robot runs, one file per program run. This document is the contract the
-off-robot tuning app codes against. The encoder (`src/sapphirelib/telemetry/csv_format.cpp`) is
+`sapphirelib::telemetry::Logger` records PID steps, pose, mechanism commands, motor health and
+events to the V5's SD card while the robot runs, one file per program run. This document is the
+contract the telemetry analyzer (`tools/analyzer/`) and any other reader code against. The encoder (`src/sapphirelib/telemetry/csv_format.cpp`) is
 golden-tested byte for byte against it (`tests/telemetry/csv_format_test.cpp`), and
 `tools/telemetry/slt_read.py` is the reference reader — standard library only, with a
 `--selftest` that parses the same golden file.
 
 Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives](#directives) ·
 [Rows](#rows) · [Ordering and robustness](#ordering) · [Events](#events) ·
-[Channels on 96671H's robot](#channels-on-96671hs-robot) · [Meaning, for tuning](#meaning-for-tuning) ·
+[Channels on 96671H's robot](#channels-on-96671hs-robot) · [Motor channels](#motor-channels) ·
+[Meaning, for tuning](#meaning-for-tuning) ·
 [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows) ·
 [Worked example](#worked-example)
 
@@ -173,11 +174,42 @@ Which pid channels a motion drives (see the channel table below):
 | `moveToPoint`, `moveToPose` | `drive` (distance to the target) and `turn` (heading hold, or steering on a tank) |
 | `followPath` | `turn` while pursuing; then `drive` and `turn` for the final approach |
 
+### Device events
+
+The GUI's diagnostics page (`gui::DiagnosticsPage`) re-checks every device about once a second
+while it's installed, whichever page is showing, and logs each change of verdict:
+
+```
+E,<t_us>,device,missing,port=<n>,label=<label>,found=<what it found>
+E,<t_us>,device,lost,port=<n>,label=<label>,found=<what it found>
+E,<t_us>,device,back,port=<n>,label=<label>
+```
+
+`missing` is a device that failed its very first check, `lost` one that was fine and then failed
+(a cable worked loose mid-match), `back` one that answers again. `label` and `found` have their
+commas replaced, so the message splits cleanly on `,` and `=`. A motor channel (below) going to all
+NaN says the same thing for a motor, at 100 ms resolution; the device events cover every sensor,
+and say which port.
+
+### Tuning events
+
+Auto-Tune (`PidTunerPage`, wired in `src/robot/tuning.cpp`) marks each axis it measures:
+
+```
+E,<t_us>,tune,start,<Fwd|Strafe|Turn|Lift>
+E,<t_us>,tune,model,<axis>,kS=<V>,kV=<V/unit/s>,kA=<V/unit/s²>,r2=<r²>,delay_ms=<ms>
+E,<t_us>,tune,model,Lift,kS=<V>,kV=<V/unit/s>,kA=<V/unit/s²>,kG=<V>,r2=<r²>,delay_ms=<ms>
+```
+
+`start` comes just before the axis's first `char.*` row; `model` is what the robot fitted from
+them, once the run ends (a run that was stopped or failed its fit logs no `model`). Units are the
+axis's: inches for Fwd/Strafe, degrees for Turn and the lift. A mechanism's model adds `kG`, the
+volts that hold it against gravity.
+
 ### Other tags
 
 - `auton`: `start,<routine name>` / `end,<routine name>` around each autonomous routine (a routine
   the competition switch cuts short has no `end`).
-- `tune`: free-form messages from the Auto-Tune characterization runs, e.g. the fitted model.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button), `macro`.
 
 ## Channels on 96671H's robot
@@ -195,10 +227,13 @@ names to match on.
 | `hold` | pid | pid columns | The drivetrain's `headingHoldPID()`: driver-control heading hold. |
 | `odom` | samples | `x,y,heading` | Odometry pose — inches, inches, degrees 0–360 — every 10 ms while enabled. |
 | `chassis` | samples | `fwd_v,strafe_v,turn_v` | The volts the drivetrain last commanded on each axis, before each motor's ±12 V clamp, every 10 ms while enabled. A snapshot, possibly one tick torn across the three fields; `strafe_v` is always 0 on a tank. |
-| `batt` | samples | `volts,pct` | Battery voltage and charge, every second. |
+| `batt` | samples | `volts,pct,amps,temp` | Battery voltage, charge (%), current drawn (A) and pack temperature (°C), every 200 ms. A failed read is `nan`. |
+| `motor.<name>` | samples | `volts,amps,temp,rpm,eff,faults` | One per motor, every 100 ms: see [Motor channels](#motor-channels). 96671H logs `motor.fl`, `fr`, `bl`, `br`, `ml`, `mr` (drivetrain), `motor.liftA`, `liftB`, `intake` and `claw`. |
+| `driver` | samples | `lx,ly,rx,ry,buttons,connected` | The controller, every opcontrol tick (20 ms): sticks in −1…1, the held buttons as a bitmask (bit *i* = `input::Button` *i*: L1, L2, R1, R2, Up, Down, Left, Right, X, B, Y, A), and 1/0 for whether the controller is connected. |
 | `lift` | pid | pid columns | The lift's position PID. |
-| `lift.act` | samples | `target,pos,volts,law` | Every lift update: target and position in degrees (`pos` is `nan` if the rotation sensor didn't answer), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking), and which branch of the control law ran (`law`, below). |
-| `char.fwd`, `char.strafe`, `char.turn` | samples | `volts,pos` | Auto-Tune characterization runs, one row per sample the runner takes. Declared in every file; rows appear only while Auto-Tune runs. See [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows). |
+| `lift.act` | samples | `target,pos,volts,law` | Every lift update: target and position in degrees (`pos` is `nan` if the rotation sensor didn't answer), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking; `nan` while Auto-Tune has the motors), and which branch of the control law ran (`law`, below). |
+| `mech` | samples | `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed` | The macro system, every opcontrol tick: volts sent to the intake and claw, the claw piston (1 extended), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level and scoring mode (0 alliance, 1 medium, 2 center), the running score/reseat sequence step (−1 none; else 0 scoreDescend, 1 scoreOuttake, 2 reseatLower, 3 reseatRetract, 4 reseatDeploy), and whether the claw is deployed. |
+| `char.fwd`, `char.strafe`, `char.turn`, `char.lift` | samples | `volts,pos` | Auto-Tune characterization runs, one row per sample the runner takes. Declared in every file; rows appear only while Auto-Tune runs. See [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows). |
 
 `lift.act`'s `law` is `mechanism::PositionLaw` as an integer:
 
@@ -210,6 +245,28 @@ names to match on.
 | 3 | no sensor | no position reading: motors braked, loop reset |
 | 4 | manual | open-loop volts |
 | 5 | off | braked: stopped, or disabled |
+| 6 | external | something else has the motors — an Auto-Tune run (`beginExternalControl()`); `volts` is `nan` |
+
+### Motor channels
+
+`Logger::motor(name, port)` polls one motor, every 100 ms by default, into six columns:
+
+| Column | Unit | From |
+|---|---|---|
+| `volts` | V | `motor_get_voltage()`: what the motor is applying |
+| `amps` | A | `motor_get_current_draw()` |
+| `temp` | °C | `motor_get_temperature()` — the V5 reports it in 5 °C steps |
+| `rpm` | RPM | `motor_get_actual_velocity()`, at the output shaft (after the cartridge) |
+| `eff` | % | `motor_get_efficiency()`: 100 is free-spinning, 0 is stalled while powered |
+| `faults` | bits | `motor_get_faults()`: 1 over temperature, 2 H-bridge fault, 4 over current, 8 H-bridge over current |
+
+- A single reading that failed is `nan`. A motor that answers nothing at all — unplugged, or a dead
+  cable — logs a whole row of `nan`, never zeros: read a run of all-`nan` rows as "disconnected"
+  (and a channel that's all `nan` from the start as "never plugged in", or a placeholder port).
+- V5 motors protect themselves from heat by limiting their own current: to 50 % at 55 °C, 25 % at
+  60 °C, 12.5 % at 65 °C, and 0 at 70 °C. Nothing else in the log says so — a mechanism that
+  weakens late in a match shows it here, as `temp` climbing through those steps while `amps`
+  flattens under a full-power command. The over-temperature fault bit comes on at the top end.
 
 ## Meaning, for tuning
 
@@ -241,25 +298,33 @@ events record).
 
 Each row is a superset of `tuning::CharacterizationSample{timeMs, volts, position}`: `volts` is
 the voltage applied at that tick and `pos` the position measured just before it — inches along
-the axis for `char.fwd`/`char.strafe`, cumulative (unwrapped) degrees for `char.turn`. To rebuild
-the runner's `CharacterizationData`:
+the axis for `char.fwd`/`char.strafe`, cumulative (unwrapped) degrees for `char.turn`, and the
+lift's own degrees for `char.lift`. To rebuild the runner's `CharacterizationData`:
 
 1. Take the rows of one run. One characterization is four segments, in order: ramp forward, ramp
-   back, step forward, step back. Separate runs are seconds apart; `tune` events mark them too.
+   back, step forward, step back (up, down, up, down for the lift). Separate runs are seconds
+   apart; each starts just after its `tune,start,<axis>` event.
 2. Split into segments at gaps: within a segment rows are one sample period (10 ms) apart; between
    segments the runner waits at least 100 ms for the axis to stop, and logs nothing meanwhile.
 3. Within each segment, `timeMs` is `(t_us - first t_us) / 1000`. The first ~100 ms are the
-   pre-roll at 0 V (so velocity has a full differentiation window when the voltage starts).
-4. A segment cut short by its travel limit ends with one extra row: 0 V at the position that
-   was out of range, which the runner measured but didn't store. It is a genuine (volts,
-   position) pair, so keeping it barely changes a fit; drop it to match the robot exactly (the
-   last row of a segment, when it is 0 V and the row before it isn't).
-5. Ramps (volts rising slowly) pin down kS and kV; steps pin down kA and the response delay.
-   Differentiate position within a segment, never across the gap between two. Feed the result to
-   the same math the robot uses (`tuning::fitFeedforward()`/`characterizeAxis()`,
-   `include/sapphirelib/tuning/characterization_math.hpp`) or its Python equivalent.
+   pre-roll at 0 V (so velocity has a full differentiation window when the voltage starts). A
+   mechanism is held still (braked) instead, and its held rows have `nan` volts: the fit skips
+   them as samples, but they still give the velocity window.
+4. A segment cut short by its travel limit ends with one extra row: 0 V (`nan` for a mechanism)
+   at the position that was out of range, which the runner measured but didn't store. A drive
+   axis's is a genuine (volts, position) pair, so keeping it barely changes a fit; drop it to
+   match the robot exactly (the last row of a segment, when it is 0 V or `nan` and the row before
+   it isn't).
+5. Ramps (volts rising slowly) pin down kS and kV; steps pin down kA and the response delay; for a
+   mechanism, the difference between going up and coming down pins down kG. Differentiate
+   position within a segment, never across the gap between two. Feed the result to the same math
+   the robot uses (`tuning::fitFeedforward()`/`characterizeAxis()`, or `characterizeMechanism()`
+   with the lift's gravity shape — constant for 96671H's lift;
+   `include/sapphirelib/tuning/characterization_math.hpp`).
 
-`slt_read.py`'s `characterization_segments()` does steps 2–3.
+`slt_read.py`'s `characterization_segments()` does steps 2–3. The telemetry analyzer
+(`tools/analyzer/`, its Tune tab) does all five, with a JavaScript port of that math that
+reproduces the robot's fits, and designs gains from the result.
 
 ## Worked example
 
