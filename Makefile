@@ -34,12 +34,14 @@ IS_LIBRARY:=1
 LIBNAME:=sapphirelib
 # Kept in sync with SAPPHIRELIB_VERSION in include/sapphirelib/version.hpp
 VERSION:=0.1.0
-# EXCLUDE_SRC_FROM_LIB= $(SRCDIR)/unpublishedfile.c
-# this line excludes opcontrol.c and similar files
-EXCLUDE_SRC_FROM_LIB+=$(foreach file, $(SRCDIR)/main,$(foreach cext,$(CEXTS),$(file).$(cext)) $(foreach cxxext,$(CXXEXTS),$(file).$(cxxext)))
-# Robot-specific driver macros (temporary) — linked into this robot's
-# program, but not shipped in the library.
-EXCLUDE_SRC_FROM_LIB+=$(SRCDIR)/robot_macros.cpp
+# Only src/sapphirelib/** belongs in the library archive, and so in the cold
+# package and the published template. Everything else directly under src/
+# (main.cpp, src/robot/, anything added later) is this robot's program and
+# links straight into the hot image. It's an allowlist rather than a list of
+# robot files, so a new robot file can't silently ship inside sapphirelib.a.
+# (Headers need nothing: TEMPLATE_FILES below only takes include/sapphirelib/,
+# so include/robot/ never ships either.)
+EXCLUDE_SRC_FROM_LIB+=$(filter-out $(SRCDIR)/$(LIBNAME),$(wildcard $(SRCDIR)/*))
 
 # files that get distributed to every user (beyond your source archive) - add
 # whatever files you want here. This line is configured to add all header files
@@ -82,3 +84,22 @@ endif
 $(shell mkdir -p $(BINDIR) && echo $(TOOLCHAIN_VERSION) > $(TOOLCHAIN_STAMP))
 endif
 endif
+
+################################################################################
+############################### Example checking ###############################
+# Nothing else compiles examples/ — they aren't part of the program or the
+# library — so an API change that breaks one would otherwise only surface once
+# a team has copied it into their own project. `make check-examples`
+# syntax-checks each example with the same compiler and flags as src/main.cpp
+# (as if it had been copied there), writes no objects, and fails if any of them
+# doesn't compile. Every example is checked even after one fails, so a single
+# run lists them all.
+
+.PHONY: check-examples
+check-examples:
+	@status=0; \
+	for example in $(sort $(wildcard $(ROOT)/examples/*.cpp)); do \
+		echo "Checking $$example"; \
+		$(CXX) -fsyntax-only $(INCLUDE) $(CXXFLAGS) $(EXTRA_CXXFLAGS) "$$example" || status=1; \
+	done; \
+	exit $$status
