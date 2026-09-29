@@ -13,9 +13,12 @@ namespace sapphirelib::odom {
 /// Field-coordinate pose: position in inches, heading in degrees.
 ///
 /// Coordinate convention: the origin and axis orientation are whatever
-/// Odometry's startPose (or a later setPose()) defines them to be — but
-/// once fixed, x increases to the right, y increases "downfield" from that
-/// origin, and heading is 0-360 degrees, clockwise-positive, matching
+/// Odometry's startPose (or a later setPose()) defines them to be — heading
+/// included: setPose({x, y, 270}) means "the chassis faces 270 right now",
+/// and from then on the pose, the drivetrain's turnToHeading(), and its
+/// moveToPose() all use that frame (see Odometry::setPose()). Once fixed,
+/// x increases to the right, y increases "downfield" from that origin, and
+/// heading is 0-360 degrees, clockwise-positive, matching
 /// pros::Imu::get_heading() (0 = facing +y, 90 = facing +x).
 struct Pose {
     double xIn = 0.0;

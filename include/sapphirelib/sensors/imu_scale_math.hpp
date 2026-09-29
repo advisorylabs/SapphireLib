@@ -29,6 +29,18 @@ double rawHeadingDeltaDeg(double lastRawHeadingDeg, double rawHeadingDeg);
 /// reading.
 double wrapDegrees360(double degrees);
 
+/// The absolute field heading, 0-360, for a cumulative (unwrapped) rotation
+/// reading plus the offset that puts it in the field frame — how
+/// sensors::Imu::getHeadingDeg() turns rotation-since-construction into a
+/// heading after setHeadingDeg().
+double fieldHeadingDeg(double cumulativeDeg, double headingOffsetDeg);
+
+/// The offset that makes fieldHeadingDeg(cumulativeDeg, offset) read
+/// `targetHeadingDeg` right now — what sensors::Imu::setHeadingDeg() stores.
+/// Any target works, negative or past 360; the offset comes back in
+/// (-180, 180], since only its value mod 360 matters.
+double headingOffsetFor(double targetHeadingDeg, double cumulativeDeg);
+
 /// Calibration helper: with an Imu constructed at headingScale = 1.0 (no
 /// correction), physically rotate the chassis a known number of full turns
 /// — more turns average out the IMU's per-turn error better — then pass how

@@ -16,6 +16,14 @@ double wrapDegrees360(double degrees) {
     return wrapped;
 }
 
+double fieldHeadingDeg(double cumulativeDeg, double headingOffsetDeg) {
+    return wrapDegrees360(cumulativeDeg + headingOffsetDeg);
+}
+
+double headingOffsetFor(double targetHeadingDeg, double cumulativeDeg) {
+    return wrapDegrees180(targetHeadingDeg - cumulativeDeg);
+}
+
 double calibrateHeadingScale(double actualTurns, double measuredTurns) { return actualTurns / measuredTurns; }
 
 } // namespace sapphirelib::sensors

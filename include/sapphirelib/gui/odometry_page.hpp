@@ -72,6 +72,9 @@ public:
     /// happening.
     bool isCalibrating() const;
 
+    /// Busy for as long as isCalibrating() — see Page::isBusy().
+    bool isBusy() const override { return isCalibrating(); }
+
     const char* title() const override;
     void build(lv_obj_t* container) override;
     void update() override;

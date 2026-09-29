@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
+#include <vector>
 
 namespace sapphirelib::chassis {
 
@@ -24,6 +24,21 @@ pros::motor_brake_mode_e_t toProsBrakeMode(BrakeMode mode) {
         case BrakeMode::hold: return pros::E_MOTOR_BRAKE_HOLD;
     }
     return pros::E_MOTOR_BRAKE_COAST;
+}
+
+/// Mean of the finite entries — an unplugged motor reads PROS_ERR_F
+/// (infinity), and averaging that in would poison the whole reading.
+/// `fallback` if there are none.
+double finiteMean(const std::vector<double>& values, double fallback, bool* anyFinite = nullptr) {
+    double sum = 0.0;
+    int count = 0;
+    for (const double value : values) {
+        if (!std::isfinite(value)) continue;
+        sum += value;
+        ++count;
+    }
+    if (anyFinite != nullptr) *anyFinite = count > 0;
+    return count > 0 ? sum / count : fallback;
 }
 
 } // namespace
@@ -51,20 +66,21 @@ void MotorGroup::setBrakeMode(BrakeMode mode) {
 
 void MotorGroup::tarePosition() {
     motors_.tare_position_all();
+    lastPositionDeg_.store(0.0);
 }
 
 double MotorGroup::getPositionDegrees() const {
-    const auto positions = motors_.get_position_all();
-    if (positions.empty()) return 0.0;
-    return std::accumulate(positions.begin(), positions.end(), 0.0) /
-           static_cast<double>(positions.size());
+    bool anyAnswered = false;
+    const double degrees =
+        finiteMean(motors_.get_position_all(), lastPositionDeg_.load(), &anyAnswered);
+    if (anyAnswered) lastPositionDeg_.store(degrees);
+    return degrees;
 }
 
 double MotorGroup::getVelocityRPM() const {
-    const auto velocities = motors_.get_actual_velocity_all();
-    if (velocities.empty()) return 0.0;
-    return std::accumulate(velocities.begin(), velocities.end(), 0.0) /
-           static_cast<double>(velocities.size());
+    // A group with nothing answering isn't moving as far as anyone can tell;
+    // unlike position, 0 is the honest reading here.
+    return finiteMean(motors_.get_actual_velocity_all(), 0.0);
 }
 
 double MotorGroup::getTemperatureC() const {

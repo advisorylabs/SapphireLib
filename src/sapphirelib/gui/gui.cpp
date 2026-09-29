@@ -43,7 +43,18 @@ void Gui::addPage(std::unique_ptr<Page> page) {
     pages_.push_back(std::move(page));
 }
 
-void Gui::start(std::uint32_t periodMs) { timer_ = lv_timer_create(&Gui::timerTrampoline, periodMs, this); }
+void Gui::start(std::uint32_t periodMs) {
+    // A second timer would refresh every page twice as often.
+    if (timer_) return;
+    timer_ = lv_timer_create(&Gui::timerTrampoline, periodMs, this);
+}
+
+bool Gui::anyPageBusy() const {
+    for (const auto& page : pages_) {
+        if (page->isBusy()) return true;
+    }
+    return false;
+}
 
 void Gui::showWarning(const std::string& text) {
     if (warningActive_ && text == lv_label_get_text(headerLabel_)) return;

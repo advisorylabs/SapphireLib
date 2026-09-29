@@ -18,8 +18,10 @@
 namespace sapphirelib::diag {
 
 /// The device types SapphireLib knows how to check for. Extend as more
-/// sensor wrappers are added (e.g. distance, vision).
-enum class DeviceKind { motor, imu, rotation };
+/// sensor wrappers are added (e.g. vision, GPS). A check only asks the
+/// brain what's plugged into the port, so it covers devices SapphireLib
+/// doesn't wrap too — a mechanism's distance or optical sensor, say.
+enum class DeviceKind { motor, imu, rotation, distance, optical };
 
 /// One sensor's expected configuration.
 struct SensorCheck {
@@ -29,7 +31,8 @@ struct SensorCheck {
     /// Port as you'd pass it to the rest of SapphireLib — sign is allowed
     /// (negative = reversed motor) and ignored for the check, since a
     /// device is either plugged into a port or it isn't, regardless of
-    /// which direction a motor on it spins.
+    /// which direction a motor on it spins. Anything outside ±1-21 fails
+    /// the check as a config error.
     std::int8_t port;
 
     DeviceKind expected;

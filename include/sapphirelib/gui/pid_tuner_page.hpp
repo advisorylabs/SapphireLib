@@ -85,6 +85,9 @@ public:
     /// for the failure mode in more detail.
     bool isRunning() const;
 
+    /// Busy for as long as isRunning() — see Page::isBusy().
+    bool isBusy() const override { return isRunning(); }
+
     const char* title() const override;
     void build(lv_obj_t* container) override;
     void update() override;

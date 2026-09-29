@@ -10,7 +10,11 @@
 #pragma once
 
 #include "sapphirelib/util/angle.hpp"
+#include "sapphirelib/util/clock.hpp"
 #include "sapphirelib/util/log.hpp"
+#include "sapphirelib/util/sequence.hpp"
+#include "sapphirelib/util/timing.hpp"
+#include "sapphirelib/util/wait.hpp"
 #include "sapphirelib/version.hpp"
 
 #include "sapphirelib/chassis/drift_math.hpp"
@@ -32,6 +36,7 @@
 #include "sapphirelib/odom/rotation_tracking_wheel.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
 
+#include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/motion_queue.hpp"
 #include "sapphirelib/motion/path.hpp"
@@ -40,7 +45,27 @@
 #include "sapphirelib/sensors/imu.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 
+#include "sapphirelib/input/button_tracker.hpp"
+#include "sapphirelib/input/controller.hpp"
+#include "sapphirelib/input/controller_screen.hpp"
+
+#include "sapphirelib/mechanism/jam_detector.hpp"
+#include "sapphirelib/mechanism/piston.hpp"
+#include "sapphirelib/mechanism/position_control.hpp"
+#include "sapphirelib/mechanism/position_mechanism.hpp"
+#include "sapphirelib/mechanism/preset_ladder.hpp"
+#include "sapphirelib/mechanism/roller.hpp"
+
 #include "sapphirelib/diag/sensor_check.hpp"
+
+#include "sapphirelib/telemetry/channel.hpp"
+#include "sapphirelib/telemetry/characterization_tap.hpp"
+#include "sapphirelib/telemetry/csv_format.hpp"
+#include "sapphirelib/telemetry/event.hpp"
+#include "sapphirelib/telemetry/file_naming.hpp"
+#include "sapphirelib/telemetry/logger.hpp"
+#include "sapphirelib/telemetry/record.hpp"
+#include "sapphirelib/telemetry/record_ring.hpp"
 
 #include "sapphirelib/tuning/characterization_math.hpp"
 #include "sapphirelib/tuning/characterization_runner.hpp"
@@ -58,9 +83,15 @@
 namespace sapphirelib {
 
 /**
- * Call once at the start of `initialize()` in your PROS project before using
- * any SapphireLib functionality. Reserved for future setup (logging, task
- * scheduling, etc.) as later phases land.
+ * Call once at the start of `initialize()` in your PROS project, before using
+ * any other SapphireLib functionality. Today it only logs the library version
+ * to the USB terminal, so a terminal capture shows which build the robot was
+ * running.
+ *
+ * It deliberately starts nothing else. The GUI, odometry, telemetry logging
+ * and mechanism tasks are all opt-in: each starts only when your code calls
+ * its own `start()`/`startTask()`, so a team that doesn't want one never
+ * pays for it.
  */
 void initialize();
 

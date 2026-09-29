@@ -10,6 +10,10 @@ namespace {
 constexpr std::uint32_t kSelectedBgColor = 0x2563eb;
 constexpr std::uint32_t kSelectedTextColor = 0xffffff;
 
+/// What selectedName() returns with nothing registered. At namespace scope,
+/// so it's built during static init rather than behind a first-call guard.
+const std::string kNoRoutineName;
+
 void styleButton(lv_obj_t* button) {
     lv_obj_set_style_bg_color(button, lv_color_hex(kSelectedBgColor), LV_STATE_CHECKED);
     lv_obj_set_style_text_color(button, lv_color_hex(kSelectedTextColor), LV_STATE_CHECKED);
@@ -59,7 +63,15 @@ void AutonSelectorPage::select(std::size_t index) {
 
 void AutonSelectorPage::run() const {
     if (routines_.empty()) return;
-    if (routines_[selectedIndex_]->callback) routines_[selectedIndex_]->callback();
+    // Read the index once, so a tap landing mid-call can't check one
+    // routine's callback and then run another's.
+    const Routine& routine = *routines_[selectedIndex_.load()];
+    if (routine.callback) routine.callback();
+}
+
+const std::string& AutonSelectorPage::selectedName() const {
+    if (routines_.empty()) return kNoRoutineName;
+    return routines_[selectedIndex_.load()]->name;
 }
 
 void AutonSelectorPage::buttonClicked(lv_event_t* e) {

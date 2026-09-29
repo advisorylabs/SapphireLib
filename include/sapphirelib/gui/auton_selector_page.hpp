@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -35,6 +36,11 @@ public:
     /// registered.
     void run() const;
 
+    /// Name of the routine run() would execute right now, or "" if none are
+    /// registered — for a log line or telemetry event naming the routine,
+    /// or the controller screen. Safe to call from the autonomous task.
+    const std::string& selectedName() const;
+
     const char* title() const override;
     void build(lv_obj_t* container) override;
 
@@ -48,7 +54,11 @@ private:
     lv_obj_t* container_ = nullptr;
     lv_obj_t* list_ = nullptr;
     std::vector<std::unique_ptr<Routine>> routines_;
-    std::size_t selectedIndex_ = 0;
+
+    /// Written by the GUI task when a button is tapped, read by the
+    /// autonomous task in run()/selectedName() — atomic so those two never
+    /// race on it.
+    std::atomic<std::size_t> selectedIndex_{0};
 
     void select(std::size_t index);
     static void buttonClicked(lv_event_t* e);

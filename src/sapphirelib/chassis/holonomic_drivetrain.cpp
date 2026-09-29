@@ -6,7 +6,10 @@
 #include "pros/rtos.hpp"
 #include "sapphirelib/chassis/thermal_math.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
+#include "sapphirelib/sensors/imu_scale_math.hpp"
+#include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/util/angle.hpp"
+#include "sapphirelib/util/log.hpp"
 
 namespace sapphirelib::chassis {
 
@@ -14,6 +17,8 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kLoopDelayMs = 10;
+
+constexpr const char* kNoOdometry = "no odometry - call setOdometry() first, or pass one";
 
 /// Full motor voltage. holonomic() takes normalized [-1, 1] sticks while
 /// holonomicVolts() and the PIDs work in volts; this is the scale between
@@ -52,6 +57,25 @@ WheelMix mixHolonomic(double throttle, double strafe, double turn) {
             throttle + strafe - turn};
 }
 
+/// Logs a motion's `end` event (see docs/TELEMETRY_FORMAT.md) and hands its
+/// result back, so every way out of a motion reads `return finishMotion(...)`.
+motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& result) {
+    telemetry::event("motion", "end,%s,reason=%s,error=%.3f,ms=%u", kind,
+                     motion::exitReasonName(result.reason), result.finalError,
+                     static_cast<unsigned>(result.elapsedMs));
+    return result;
+}
+
+/// For a motion that can't start at all (no odometry to read, an empty
+/// path): says why on the terminal, and still logs a start/end pair — the
+/// start with no parameters — so a telemetry log shows the motion was asked
+/// for and why nothing happened.
+motion::MotionResult abortMotion(const char* kind, const char* why) {
+    SAPPHIRELIB_LOG_ERROR("motion", "%s: %s", kind, why);
+    telemetry::event("motion", "start,%s", kind);
+    return finishMotion(kind, motion::MotionResult{.reason = motion::ExitReason::aborted});
+}
+
 } // namespace
 
 HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t frontRightPort,
@@ -83,10 +107,10 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
     }
 
     // sensors::Imu's constructor already blocks until IMU calibration
-    // finishes, so getHeadingDeg() (used here and by
+    // finishes, so the heading (used here and by
     // driveDistance()/turnToHeading()/headingDeg()) is valid as soon as
     // this constructor returns.
-    fieldHeadingZeroDeg_ = imu_.getHeadingDeg();
+    fieldHeadingZeroDeg_ = rotationHeadingDeg();
 }
 
 sensors::Imu& HolonomicDrivetrain::imu() { return imu_; }
@@ -104,6 +128,21 @@ DriverInputMode HolonomicDrivetrain::driverInputMode() const { return driverInpu
 void HolonomicDrivetrain::setAxisModels(HolonomicAxisModels models) { *axisModels_.lock() = models; }
 
 HolonomicAxisModels HolonomicDrivetrain::axisModels() const { return *axisModels_.lock(); }
+
+void HolonomicDrivetrain::setOdometry(const odom::Odometry* odometry) { odometry_ = odometry; }
+
+AxisVolts HolonomicDrivetrain::appliedAxisVolts() const {
+    return AxisVolts{.forward = appliedForwardVolts_.load(),
+                     .strafe = appliedStrafeVolts_.load(),
+                     .turn = appliedTurnVolts_.load()};
+}
+
+void HolonomicDrivetrain::recordAppliedVolts(double forwardVolts, double strafeVolts,
+                                             double turnVolts) {
+    appliedForwardVolts_.store(forwardVolts);
+    appliedStrafeVolts_.store(strafeVolts);
+    appliedTurnVolts_.store(turnVolts);
+}
 
 void HolonomicDrivetrain::setDriftSource(const odom::TrackingWheel* verticalWheel,
                                          const odom::Odometry* odometry) {
@@ -156,8 +195,6 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
     backLeft_.moveVoltage(backLeft);
     backRight_.moveVoltage(backRight);
 
-    if (!asterisk_) return;
-
     // Recover the pure throttle/strafe/turn components from the four
     // already-mixed corner voltages (see mixHolonomic()): summing all four
     // cancels strafe and turn, leaving 4x throttle; each cross-combination
@@ -165,9 +202,16 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
     // lets the center wheels react correctly no matter which call site
     // produced the mix — holonomic() driver input, driveDistance()'s
     // heading-corrected drive, or turnToHeading()'s turn-only mix.
+    //
+    // For the same reason it's what appliedAxisVolts() reports, which is
+    // why it happens ahead of the Asterisk check below: every chassis gets
+    // a readout, center wheels or not.
     const double throttleVolts = (frontLeft + frontRight + backLeft + backRight) / 4.0;
     const double strafeVolts = (frontLeft - frontRight - backLeft + backRight) / 4.0;
     const double turnVolts = (frontLeft - frontRight + backLeft - backRight) / 4.0;
+    recordAppliedVolts(throttleVolts, strafeVolts, turnVolts);
+
+    if (!asterisk_) return;
 
     // Feedforward from what the corners are failing to deliver. Computed
     // from this tick's corner voltages rather than cached, because the same
@@ -280,7 +324,8 @@ void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn)
 
 double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
     const std::uint32_t now = pros::millis();
-    const double currentHeadingDeg = imu_.getHeadingDeg();
+    // Rotation frame, like heldHeadingDeg_ — see heldHeadingDeg().
+    const double currentHeadingDeg = rotationHeadingDeg();
     const double dtS = (now - lastHeadingHoldMs_) / 1000.0;
     const bool resuming =
         lastHeadingHoldMs_ == 0 || !(dtS > 0.0) || dtS > kHeadingHoldResumeGapS;
@@ -320,14 +365,20 @@ void HolonomicDrivetrain::holonomicFieldCentricHeadingHold(double throttle, doub
 
 void HolonomicDrivetrain::setHeadingHold(HeadingHoldConfig config) { headingHold_ = config; }
 
-double HolonomicDrivetrain::heldHeadingDeg() const { return heldHeadingDeg_; }
+double HolonomicDrivetrain::heldHeadingDeg() const {
+    return sensors::fieldHeadingDeg(heldHeadingDeg_, imu_.headingOffsetDeg());
+}
+
+double HolonomicDrivetrain::rotationHeadingDeg() {
+    return sensors::wrapDegrees360(imu_.getCumulativeHeadingDeg());
+}
 
 void HolonomicDrivetrain::fieldToRobot(double& throttle, double& strafe) {
     // Rotate the field-relative stick vector into the robot's current frame
     // by the heading it has picked up since the last field-heading zero —
     // matches pros::Imu::get_heading()'s clockwise-positive convention.
     const double headingDeltaRad =
-        wrapDegrees180(imu_.getHeadingDeg() - fieldHeadingZeroDeg_) * (kPi / 180.0);
+        wrapDegrees180(rotationHeadingDeg() - fieldHeadingZeroDeg_) * (kPi / 180.0);
     const double cosHeading = std::cos(headingDeltaRad);
     const double sinHeading = std::sin(headingDeltaRad);
     const double robotThrottle = throttle * cosHeading + strafe * sinHeading;
@@ -341,21 +392,38 @@ void HolonomicDrivetrain::holonomicFieldCentric(double throttle, double strafe, 
     holonomic(throttle, strafe, turn);
 }
 
-void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = imu_.getHeadingDeg(); }
+void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = rotationHeadingDeg(); }
 
-void HolonomicDrivetrain::moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
-                                       ExitConditions exit) {
-    moveToPointHolding(xIn, yIn, odometry.getPose().headingDeg, odometry, exit);
+motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn,
+                                                      const odom::Odometry& odometry,
+                                                      ExitConditions exit) {
+    const double holdHeadingDeg = odometry.getPose().headingDeg;
+    telemetry::event("motion",
+                     "start,moveToPoint,x=%.3f,y=%.3f,hold_deg=%.3f,threshold=%.3f,settle_ms=%u,"
+                     "timeout_ms=%u",
+                     xIn, yIn, holdHeadingDeg, exit.errorThreshold,
+                     static_cast<unsigned>(exit.settleTimeMs),
+                     static_cast<unsigned>(exit.timeoutMs));
+    return finishMotion("moveToPoint",
+                        moveToPointHolding(xIn, yIn, holdHeadingDeg, odometry, exit));
 }
 
-void HolonomicDrivetrain::moveToPointHolding(double xIn, double yIn, double holdHeadingDeg,
-                                              const odom::Odometry& odometry, ExitConditions exit) {
+motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn,
+                                                      ExitConditions exit) {
+    if (odometry_ == nullptr) return abortMotion("moveToPoint", kNoOdometry);
+    return moveToPoint(xIn, yIn, *odometry_, exit);
+}
+
+motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double yIn,
+                                                             double holdHeadingDeg,
+                                                             const odom::Odometry& odometry,
+                                                             ExitConditions exit) {
     drivePID_.reset();
     turnPID_.reset();
 
-    std::uint32_t settledForMs = 0;
-    std::uint32_t lastTick = pros::millis();
-    const std::uint32_t start = lastTick;
+    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitReason reason = motion::ExitReason::running;
+    double finalErrorIn = 0.0;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -375,30 +443,34 @@ void HolonomicDrivetrain::moveToPointHolding(double xIn, double yIn, double hold
 
         holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
 
-        const std::uint32_t now = pros::millis();
-        if (distanceIn <= exit.errorThreshold) {
-            settledForMs += now - lastTick;
-            if (settledForMs >= exit.settleTimeMs) break;
-        } else {
-            settledForMs = 0;
-        }
-        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+        finalErrorIn = distanceIn;
+        reason = tracker.update(distanceIn <= exit.errorThreshold, pros::millis());
+        if (reason != motion::ExitReason::running) break;
 
-        lastTick = now;
         pros::delay(kLoopDelayMs);
     }
 
     stop();
+    return motion::MotionResult{
+        .reason = reason, .finalError = finalErrorIn, .elapsedMs = tracker.elapsedMs()};
 }
 
-void HolonomicDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
-                                      const odom::Odometry& odometry, motion::PoseExitConditions exit) {
+motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
+                                                     const odom::Odometry& odometry,
+                                                     motion::PoseExitConditions exit) {
+    telemetry::event("motion",
+                     "start,moveToPose,x=%.3f,y=%.3f,heading_deg=%.3f,pos_threshold=%.3f,"
+                     "heading_threshold=%.3f,settle_ms=%u,timeout_ms=%u",
+                     xIn, yIn, headingDeg, exit.positionErrorThresholdIn,
+                     exit.headingErrorThresholdDeg, static_cast<unsigned>(exit.settleTimeMs),
+                     static_cast<unsigned>(exit.timeoutMs));
+
     drivePID_.reset();
     turnPID_.reset();
 
-    std::uint32_t settledForMs = 0;
-    std::uint32_t lastTick = pros::millis();
-    const std::uint32_t start = lastTick;
+    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitReason reason = motion::ExitReason::running;
+    double finalErrorIn = 0.0;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -415,34 +487,60 @@ void HolonomicDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
 
         holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
 
-        const std::uint32_t now = pros::millis();
-        if (distanceIn <= exit.positionErrorThresholdIn &&
-            std::fabs(headingError) <= exit.headingErrorThresholdDeg) {
-            settledForMs += now - lastTick;
-            if (settledForMs >= exit.settleTimeMs) break;
-        } else {
-            settledForMs = 0;
-        }
-        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+        const bool withinThreshold = distanceIn <= exit.positionErrorThresholdIn &&
+                                     std::fabs(headingError) <= exit.headingErrorThresholdDeg;
+        finalErrorIn = distanceIn;
+        reason = tracker.update(withinThreshold, pros::millis());
+        if (reason != motion::ExitReason::running) break;
 
-        lastTick = now;
         pros::delay(kLoopDelayMs);
     }
 
     stop();
+    return finishMotion("moveToPose", motion::MotionResult{.reason = reason,
+                                                           .finalError = finalErrorIn,
+                                                           .elapsedMs = tracker.elapsedMs()});
 }
 
-void HolonomicDrivetrain::followPath(const motion::Path& path, const odom::Odometry& odometry,
-                                      motion::PursuitConfig config) {
+motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
+                                                     motion::PoseExitConditions exit) {
+    if (odometry_ == nullptr) return abortMotion("moveToPose", kNoOdometry);
+    return moveToPose(xIn, yIn, headingDeg, *odometry_, exit);
+}
+
+motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
+                                                     const odom::Odometry& odometry,
+                                                     motion::PursuitConfig config) {
+    // Path's constructor doesn't reject an empty list, and .back() below
+    // would be undefined behavior on one.
+    if (path.waypoints().empty()) return abortMotion("followPath", "empty path");
+
+    telemetry::event("motion",
+                     "start,followPath,waypoints=%u,lookahead_in=%.3f,cruise_v=%.3f,timeout_ms=%u",
+                     static_cast<unsigned>(path.waypoints().size()), config.lookaheadIn,
+                     config.cruiseVoltage, static_cast<unsigned>(config.timeoutMs));
+
     std::size_t segmentIndex = 0;
     const motion::Waypoint& finalPoint = path.waypoints().back();
     const double holdHeadingDeg = odometry.getPose().headingDeg;
     turnPID_.reset();
+    const std::uint32_t startMs = pros::millis();
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
         const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
         if (distToFinalIn <= config.finalApproachIn) break;
+
+        // Checked after the distance, so reaching the final approach on the
+        // same tick the timer runs out still gets the settled stop there.
+        const std::uint32_t pursuitMs = pros::millis() - startMs;
+        if (config.timeoutMs > 0 && pursuitMs >= config.timeoutMs) {
+            stop();
+            return finishMotion("followPath",
+                                motion::MotionResult{.reason = motion::ExitReason::timedOut,
+                                                     .finalError = distToFinalIn,
+                                                     .elapsedMs = pursuitMs});
+        }
 
         const motion::LookaheadResult lookahead =
             motion::findLookaheadPoint(pose.xIn, pose.yIn, path, config.lookaheadIn, segmentIndex);
@@ -463,7 +561,18 @@ void HolonomicDrivetrain::followPath(const motion::Path& path, const odom::Odome
 
     // Keep holding the path's starting heading through the final approach,
     // rather than re-capturing whatever the chassis yawed to on the way.
-    moveToPointHolding(finalPoint.xIn, finalPoint.yIn, holdHeadingDeg, odometry, config.finalExit);
+    motion::MotionResult result = moveToPointHolding(finalPoint.xIn, finalPoint.yIn,
+                                                     holdHeadingDeg, odometry, config.finalExit);
+    // The final approach decides how the path ended, but the time is the
+    // whole path's.
+    result.elapsedMs = pros::millis() - startMs;
+    return finishMotion("followPath", result);
+}
+
+motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
+                                                     motion::PursuitConfig config) {
+    if (odometry_ == nullptr) return abortMotion("followPath", kNoOdometry);
+    return followPath(path, *odometry_, config);
 }
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {
@@ -471,60 +580,73 @@ double HolonomicDrivetrain::degreesToInches(double degrees) const {
     return (degrees / 360.0 / config_.externalGearRatio) * wheelCircumferenceIn;
 }
 
-void HolonomicDrivetrain::driveDistance(double inches, ExitConditions exit) {
-    const double startHeading = imu_.getHeadingDeg();
+double HolonomicDrivetrain::cornerAverageDegrees() const {
+    return (frontLeft_.getPositionDegrees() + frontRight_.getPositionDegrees() +
+            backLeft_.getPositionDegrees() + backRight_.getPositionDegrees()) /
+           4.0;
+}
 
-    frontLeft_.tarePosition();
-    frontRight_.tarePosition();
-    backLeft_.tarePosition();
-    backRight_.tarePosition();
+motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitConditions exit) {
+    telemetry::event("motion",
+                     "start,driveDistance,target_in=%.3f,threshold=%.3f,settle_ms=%u,timeout_ms=%u",
+                     inches, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
+                     static_cast<unsigned>(exit.timeoutMs));
+
+    // Rotation frame: only the drift from here matters, and a setPose() from
+    // another task mustn't read as a sudden heading error.
+    const double startHeading = rotationHeadingDeg();
+
+    // Measured from wherever the encoders already read instead of taring
+    // them. A tare is device-level, so it would also zero any
+    // MotorGroupTrackingWheel on these motors and jump the odometry pose
+    // back by everything driven so far.
+    const double startDegrees = cornerAverageDegrees();
     drivePID_.reset();
 
-    std::uint32_t settledForMs = 0;
-    std::uint32_t lastTick = pros::millis();
-    const std::uint32_t start = lastTick;
+    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitReason reason = motion::ExitReason::running;
+    double finalErrorIn = 0.0;
 
     while (true) {
-        const double traveledDegrees =
-            (frontLeft_.getPositionDegrees() + frontRight_.getPositionDegrees() +
-             backLeft_.getPositionDegrees() + backRight_.getPositionDegrees()) /
-            4.0;
-        const double traveledInches = degreesToInches(traveledDegrees);
+        const double traveledInches = degreesToInches(cornerAverageDegrees() - startDegrees);
         const double error = inches - traveledInches;
 
         const double output = drivePID_.update(inches, traveledInches);
 
         double correction = 0.0;
         if (config_.headingCorrectionKP != 0.0) {
-            const double headingError = wrapDegrees180(startHeading - imu_.getHeadingDeg());
+            const double headingError = wrapDegrees180(startHeading - rotationHeadingDeg());
             correction = config_.headingCorrectionKP * headingError;
         }
 
         const WheelMix mix = mixHolonomic(output, /*strafe=*/0.0, correction);
         setWheelVoltages(mix.frontLeft, mix.frontRight, mix.backLeft, mix.backRight);
 
-        const std::uint32_t now = pros::millis();
-        if (std::fabs(error) <= exit.errorThreshold) {
-            settledForMs += now - lastTick;
-            if (settledForMs >= exit.settleTimeMs) break;
-        } else {
-            settledForMs = 0;
-        }
-        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+        finalErrorIn = std::fabs(error);
+        reason = tracker.update(std::fabs(error) <= exit.errorThreshold, pros::millis());
+        if (reason != motion::ExitReason::running) break;
 
-        lastTick = now;
         pros::delay(kLoopDelayMs);
     }
 
     stop();
+    return finishMotion("driveDistance", motion::MotionResult{.reason = reason,
+                                                              .finalError = finalErrorIn,
+                                                              .elapsedMs = tracker.elapsedMs()});
 }
 
-void HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) {
+motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) {
+    telemetry::event("motion",
+                     "start,turnToHeading,target_deg=%.3f,threshold=%.3f,settle_ms=%u,"
+                     "timeout_ms=%u",
+                     headingDeg, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
+                     static_cast<unsigned>(exit.timeoutMs));
+
     turnPID_.reset();
 
-    std::uint32_t settledForMs = 0;
-    std::uint32_t lastTick = pros::millis();
-    const std::uint32_t start = lastTick;
+    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitReason reason = motion::ExitReason::running;
+    double finalErrorDeg = 0.0;
 
     while (true) {
         const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
@@ -536,20 +658,17 @@ void HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) 
         const WheelMix mix = mixHolonomic(/*throttle=*/0.0, /*strafe=*/0.0, output);
         setWheelVoltages(mix.frontLeft, mix.frontRight, mix.backLeft, mix.backRight);
 
-        const std::uint32_t now = pros::millis();
-        if (std::fabs(error) <= exit.errorThreshold) {
-            settledForMs += now - lastTick;
-            if (settledForMs >= exit.settleTimeMs) break;
-        } else {
-            settledForMs = 0;
-        }
-        if (exit.timeoutMs > 0 && (now - start) >= exit.timeoutMs) break;
+        finalErrorDeg = std::fabs(error);
+        reason = tracker.update(std::fabs(error) <= exit.errorThreshold, pros::millis());
+        if (reason != motion::ExitReason::running) break;
 
-        lastTick = now;
         pros::delay(kLoopDelayMs);
     }
 
     stop();
+    return finishMotion("turnToHeading", motion::MotionResult{.reason = reason,
+                                                              .finalError = finalErrorDeg,
+                                                              .elapsedMs = tracker.elapsedMs()});
 }
 
 double HolonomicDrivetrain::headingDeg() { return imu_.getHeadingDeg(); }
@@ -563,6 +682,10 @@ void HolonomicDrivetrain::stop(BrakeMode mode) {
     frontRight_.brake();
     backLeft_.brake();
     backRight_.brake();
+
+    // Braking commands no voltage, so appliedAxisVolts() shouldn't keep
+    // reporting the last tick of whatever motion just ended.
+    recordAppliedVolts(0.0, 0.0, 0.0);
 
     // Center wheels keep their own permanent coast brake mode (set at
     // construction) regardless of `mode` — see AsteriskConfig.

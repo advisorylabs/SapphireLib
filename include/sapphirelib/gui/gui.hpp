@@ -44,8 +44,9 @@ public:
     /// PROS task. LVGL isn't thread-safe: every callback that touches a
     /// widget has to run from the same context LVGL's own display task
     /// already drives its timers from, which is exactly what
-    /// lv_timer_create() guarantees and a raw pros::Task wouldn't. Call
-    /// once; addPage() still works for pages added after start().
+    /// lv_timer_create() guarantees and a raw pros::Task wouldn't. Only the
+    /// first call starts the timer — later calls do nothing; addPage() still
+    /// works for pages added after start().
     ///
     /// Only the *visible* tab's page is refreshed each tick (plus any page
     /// that opts in via Page::updatesWhenHidden()). Every registered page's
@@ -64,6 +65,17 @@ public:
 
     /// Restores the header to the normal brand text/color.
     void clearWarning();
+
+    /// True while any registered page is running a routine that drives the
+    /// robot on its own — see Page::isBusy(). Driver control should skip
+    /// commanding the drivetrain while this is true, so a new page that
+    /// drives the chassis is covered without anyone remembering to add it
+    /// to a hand-written check.
+    ///
+    /// Callable from any task (opcontrol()'s loop, say): it only reads each
+    /// page's own thread-safe flag. Not while pages are still being added,
+    /// though — build the screen first, as initialize() does.
+    bool anyPageBusy() const;
 
 private:
     lv_obj_t* header_;
