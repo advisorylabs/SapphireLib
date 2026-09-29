@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace sapphirelib {
 
 /// Proportional, integral, and derivative gains for a PID controller.
@@ -26,6 +28,69 @@ struct PIDGains {
     double kP = 0.0;
     double kI = 0.0;
     double kD = 0.0;
+};
+
+class PID;
+
+/// Everything one PID::update() worked out, not just what it returned — so a
+/// log (see telemetry::Logger::pid()) or a readout can show *why* the
+/// controller commanded what it did. Tuning needs the individual terms:
+/// "overshoots" is a kP/kD problem, "never quite arrives" an integral or
+/// friction one, and only the terms tell those apart.
+///
+/// `target` and `measurement` are exactly what the caller passed. Some loops
+/// fold the error into target and pass a measurement of 0 — the drivetrains'
+/// turn loops, and the pose motions' distance loops — so read `error`, not
+/// target or measurement, as the controller's view of how far off it was.
+struct PidStep {
+    /// The output hit Config::outputLimit and was clamped.
+    static constexpr std::uint8_t kSaturated = 1u << 0;
+    /// Config::slewRate limited this step's change in output.
+    static constexpr std::uint8_t kSlewLimited = 1u << 1;
+    /// Conditional-integration anti-windup rolled back this step's
+    /// integration (see Config::outputLimit).
+    static constexpr std::uint8_t kIntegralHeld = 1u << 2;
+    /// First update() since construction or reset(): no derivative yet, and
+    /// the start of a new response for anything splitting a log into steps.
+    static constexpr std::uint8_t kFirstStep = 1u << 3;
+    /// The dtS passed in was non-positive or implausibly large, so
+    /// Config::nominalDtS was used instead.
+    static constexpr std::uint8_t kDtFallback = 1u << 4;
+
+    double target = 0.0;
+    double measurement = 0.0;
+    double error = 0.0;
+
+    /// kP·error, kI·integral, kD·derivative — each already in output units.
+    double pTerm = 0.0;
+    double iTerm = 0.0;
+    double dTerm = 0.0;
+
+    /// The output after anti-windup but before slew limiting and clamping.
+    double rawOutput = 0.0;
+    /// What update() returned.
+    double output = 0.0;
+    /// The timestep actually used, in seconds.
+    double dtS = 0.0;
+    std::uint8_t flags = 0;
+};
+
+/// Receives every step of the PID it's attached to — see PID::setObserver().
+/// An interface rather than a std::function so an attached observer costs one
+/// indirect call on the loop's own task and PID stays allocation-free.
+class PidObserver {
+public:
+    virtual ~PidObserver() = default;
+
+    /// Called at the end of every update(), on whichever task called it, with
+    /// the step that update() just computed. Must not block or allocate: it
+    /// runs inside someone's control loop.
+    virtual void onPidUpdate(const PID& pid, const PidStep& step) = 0;
+
+    /// Called from reset() — but only when the PID had state to clear, so a
+    /// loop that resets every tick while idle (a lift resting on its hard
+    /// stop, say) doesn't report a reset every tick.
+    virtual void onPidReset(const PID& /*pid*/) {}
 };
 
 /// A single-axis PID controller. One instance drives one control loop (e.g.
@@ -59,7 +124,9 @@ public:
         double outputLimit = 0.0;
 
         /// Limits how much the output can change between consecutive
-        /// update() calls. 0 disables the limit.
+        /// update() calls — per call, not per second, so the same number
+        /// ramps twice as fast in a 10ms loop as in a 20ms one. 0 disables
+        /// the limit.
         double slewRate = 0.0;
 
         /// When true, the derivative term is computed from the change in
@@ -106,6 +173,30 @@ public:
     void setGains(PIDGains gains);
     const PIDGains& gains() const;
 
+    /// The config this PID was constructed with, gains as last set by
+    /// setGains(). For telemetry and readouts; there's no setter because
+    /// nothing but the gains is meant to change on a live controller.
+    const Config& config() const;
+
+    /// What the most recent update() computed (all zeros before the first).
+    /// Left alone by reset(), so a readout can still show the last step of a
+    /// motion that has finished. Read it from the task that calls update(),
+    /// or accept a torn read.
+    const PidStep& lastStep() const;
+
+    /// Attaches `observer` (nullptr detaches) to receive every step and every
+    /// state-clearing reset — how telemetry::Logger::pid() records a
+    /// controller without the PID knowing anything about SD cards, tasks, or
+    /// PROS.
+    ///
+    /// Not synchronized: attach before any task starts calling update() on
+    /// this PID (in initialize(), before the loop that runs it), not while it
+    /// is live. The observer must outlive the attachment. Copying a PID copies
+    /// this pointer, so an observer that cares should check which PID it was
+    /// handed (telemetry::PidProbe does).
+    void setObserver(PidObserver* observer);
+    PidObserver* observer() const;
+
 private:
     Config config_;
     double integral_ = 0.0;
@@ -113,6 +204,8 @@ private:
     double prevMeasurement_ = 0.0;
     double prevOutput_ = 0.0;
     bool hasPrev_ = false;
+    PidStep lastStep_;
+    PidObserver* observer_ = nullptr;
 };
 
 } // namespace sapphirelib
