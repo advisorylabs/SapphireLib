@@ -16,10 +16,14 @@
 #include "robot/macros.hpp"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 #include "pros/distance.hpp"
+#include "pros/error.h"
 #include "pros/motors.hpp"
 #include "pros/rotation.hpp"
 #include "robot/config.hpp"
@@ -29,6 +33,7 @@
 #include "sapphirelib/telemetry/logger.hpp"
 #include "sapphirelib/util/clock.hpp"
 #include "sapphirelib/util/sequence.hpp"
+#include "sapphirelib/util/wait.hpp"
 
 namespace robot::macros {
 
@@ -42,6 +47,8 @@ using sapphirelib::mechanism::Piston;
 using sapphirelib::mechanism::PositionMechanism;
 using sapphirelib::mechanism::PositionStep;
 using sapphirelib::mechanism::PresetLadder;
+using sapphirelib::tuning::GravityKind;
+using sapphirelib::tuning::MechanismCharacterizationConfig;
 
 // --- Speeds, in millivolts (12000 = full) ---
 constexpr std::int32_t kIntakeMv = 12700;
@@ -90,6 +97,25 @@ constexpr double kLiftRestDeg = 2.0;
 // and how long it waits for that before moving on anyway.
 constexpr double kLiftToleranceDeg = 15.0;
 constexpr std::uint32_t kLiftDescendTimeoutMs = 1000;
+
+// --- Lift Auto-Tune and Run Test (the PID page's Lift entry) ---
+// Auto-Tune drives the lift up and down between these two heights, stopping
+// each segment once it passes one — so keep both well inside the lift's real
+// travel (it takes a few degrees to brake), and start with the lift down.
+// TODO: these assume the placeholder level heights below; set them from the
+// real ones once those are measured.
+constexpr double kLiftTuneLowerDeg = 60.0;
+constexpr double kLiftTuneUpperDeg = 720.0;
+// Up steps fight gravity, so they get more volts than down steps, which it
+// helps.
+constexpr double kLiftTuneUpVolts = 8.0;
+constexpr double kLiftTuneDownVolts = 4.0;
+// Run Test: up to the first height, back down to the second, waiting for each
+// to settle (or the timeout), then back to wherever the level says.
+constexpr double kLiftTestHighDeg = 450.0;
+constexpr double kLiftTestLowDeg = 150.0;
+constexpr std::uint32_t kLiftTestMoveTimeoutMs = 2500;
+constexpr std::uint32_t kLiftTestDwellMs = 500;
 
 // Scoring modes: lift target at each level, in degrees of the lift's rotation
 // sensor up from where it was zeroed. Entry 0 is level 0 (claw piston
@@ -159,6 +185,13 @@ const Sequence<Phase>::Program kReseat{.steps = kReseatSteps};
 
 Sequence<Phase> sequence;
 
+// Set by liftTuningTest() from the PID page's task, read by update(): while
+// it's a number, the lift heads there instead of to its level.
+std::atomic<double> liftTestTarget{std::numeric_limits<double>::quiet_NaN()};
+
+// The "mech" telemetry channel, once attachTelemetry() has made it.
+sapphirelib::telemetry::Channel* mechLog = nullptr;
+
 struct State {
     // false = stowed: piston retracted, lift at level 0. Only R1 stows.
     bool clawDeployed = false;
@@ -176,6 +209,8 @@ bool pieceInClaw() {
 }
 
 double liftTargetDeg() {
+    const double testTarget = liftTestTarget.load();
+    if (std::isfinite(testTarget)) return testTarget;
     if (state.deployedIntake) return ladder.midpointBelow(1);
     if (sequence.running(kScore)) return ladder.midpointBelow(ladder.level());
     return ladder.levelPosition();
@@ -336,6 +371,20 @@ void update(Controller& controller) {
     lift.setTarget(liftTargetDeg());
     lift.update(now);
     showStatus(controller);
+
+    if (mechLog != nullptr) {
+        // What every mechanism was told this tick, for the analyzer's replay
+        // (the lift's own rows are in "lift"/"lift.act"). get_distance()
+        // reads PROS_ERR unplugged, which is logged as a gap.
+        const std::int32_t pieceMm = clawSensor.get_distance();
+        const std::optional<Phase> phase = sequence.current();
+        mechLog->record({intakeMv / 1000.0, clawMv / 1000.0, clawPiston.extended() ? 1.0 : 0.0,
+                         pieceMm == PROS_ERR ? std::numeric_limits<double>::quiet_NaN()
+                                             : static_cast<double>(pieceMm),
+                         static_cast<double>(ladder.level()), static_cast<double>(ladder.tableIndex()),
+                         phase ? static_cast<double>(*phase) : -1.0,
+                         state.clawDeployed ? 1.0 : 0.0});
+    }
 }
 
 void stop() {
@@ -364,6 +413,58 @@ void attachTelemetry(sapphirelib::telemetry::Logger& logger) {
     lift.setStepListener([channel = &act](const PositionStep& step) {
         channel->record({step.target, step.position, step.volts, static_cast<double>(step.law)});
     });
+    // The intake, claw and lift state machine, every opcontrol tick: volts
+    // sent to the intake and claw, the piston, the claw's distance reading
+    // (mm), the lift's level and scoring mode (0 ALLIANCE, 1 MEDIUM, 2
+    // CENTER), the running sequence step (-1 none; else Phase's order:
+    // scoreDescend, scoreOuttake, reseatLower, reseatRetract, reseatDeploy),
+    // and whether the claw is deployed.
+    mechLog = &logger.channel(
+        "mech", {"intake_v", "claw_v", "piston", "piece_mm", "level", "mode", "phase", "deployed"},
+        {.capacity = 128, .decimals = 2});
+}
+
+sapphirelib::mechanism::PositionMechanism& liftMechanism() { return lift; }
+
+MechanismCharacterizationConfig liftExperiment() {
+    return MechanismCharacterizationConfig{
+        .axis =
+            {
+                // Straight to the motors, at the characterization's own 10ms
+                // rate: the lift's loop (driven from opcontrol at 20ms) is
+                // told to keep its hands off for the run.
+                .actuate =
+                    [](double volts) {
+                        lift.motors().move_voltage(static_cast<std::int32_t>(volts * 1000.0));
+                    },
+                .measure = [] { return lift.position(); },
+                .stepVolts = kLiftTuneUpVolts,
+                .rampVoltsPerS = 6.0,
+                .rampMaxVolts = 10.0,
+                .maxSegmentMs = 2000,
+                .minSpeed = 10.0, // deg/s of the rotation sensor
+                .start = [] { lift.beginExternalControl(); },
+                .finish = [] { lift.endExternalControl(); },
+            },
+        .lowerLimit = kLiftTuneLowerDeg,
+        .upperLimit = kLiftTuneUpperDeg,
+        .downStepVolts = kLiftTuneDownVolts,
+        // initialize() sets the brake mode to hold, so this keeps the lift
+        // where it is between segments — which 0V wouldn't.
+        .hold = [] { lift.motors().brake(); },
+        .gravity = {.kind = GravityKind::constant},
+    };
+}
+
+void liftTuningTest() {
+    for (const double target : {kLiftTestHighDeg, kLiftTestLowDeg}) {
+        liftTestTarget.store(target);
+        // settled() only counts updates made for this target, so this can't
+        // return on the old one's result.
+        sapphirelib::waitUntil([] { return lift.settled(); }, kLiftTestMoveTimeoutMs, 20);
+        sapphirelib::delayMs(kLiftTestDwellMs);
+    }
+    liftTestTarget.store(std::numeric_limits<double>::quiet_NaN());
 }
 
 } // namespace robot::macros

@@ -1,9 +1,11 @@
 #include "sapphirelib/gui/pid_tuner_page.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <utility>
 
+#include "pros/misc.hpp"
 #include "pros/rtos.hpp"
 #include "sapphirelib/tuning/characterization_math.hpp"
 
@@ -121,7 +123,7 @@ void PidTunerPage::build(lv_obj_t* container) {
 
     makeTextButton(container_, 4, kActionRowY, 100, "Run Test", &PidTunerPage::runTestClicked, this);
     makeTextButton(container_, 110, kActionRowY, 110, "Auto-Tune", &PidTunerPage::autoTuneClicked,
-                   this);
+                   this, &autoTuneLabel_);
 
     toggleButton_ = makeTextButton(container_, 4, kToggleY, kToggleW, "",
                                    &PidTunerPage::toggleClicked, this, &toggleButtonLabel_);
@@ -151,6 +153,19 @@ void PidTunerPage::addAxis(std::string name,
     axis->name = std::move(name);
     axis->buildExperiment = std::move(buildExperiment);
     axis->onMeasured = std::move(onMeasured);
+    axes_.push_back(std::move(axis));
+}
+
+void PidTunerPage::addMechanismAxis(
+    std::string name, std::function<tuning::MechanismCharacterizationConfig()> buildExperiment,
+    std::function<void(const tuning::MechanismCharacterization&)> onMeasured) {
+    if (testRunning_.load()) return;
+    auto axis = std::make_unique<Axis>();
+    axis->group = name;
+    axis->name = std::move(name);
+    axis->mechanism = true;
+    axis->buildMechanismExperiment = std::move(buildExperiment);
+    axis->onMechanismMeasured = std::move(onMeasured);
     axes_.push_back(std::move(axis));
 }
 
@@ -248,6 +263,11 @@ const PidTunerPage::Axis* PidTunerPage::findAxis(const std::string& name) const 
 void PidTunerPage::refreshReadout() {
     char buf[192];
 
+    if (stopped_.load()) {
+        setLabelText(resultLabel_, "Stopped\nNothing applied");
+        return;
+    }
+
     const int failed = failedAxis_.load();
     if (failed >= 0 && failed < static_cast<int>(axes_.size())) {
         // Every failure mode the fit has — sensor sign backwards, travel
@@ -255,9 +275,9 @@ void PidTunerPage::refreshReadout() {
         // — shows up as some mix of a poor R² and too few moving samples, so
         // show both and name the usual suspects.
         const Axis& axis = *axes_[failed];
-        std::snprintf(buf, sizeof(buf),
-                      "%s: no fit\nR2 %.2f, %d pts\nCheck sensor sign, travel, volts",
-                      axis.name.c_str(), axis.result.fit.rSquared, axis.result.fit.samplesUsed);
+        std::snprintf(buf, sizeof(buf), "%s: no fit\nR2 %.2f, %d pts\nCheck sensor sign, %s, volts",
+                      axis.name.c_str(), axis.result.fit.rSquared, axis.result.fit.samplesUsed,
+                      axis.mechanism ? "limits" : "travel");
         setLabelText(resultLabel_, buf);
         return;
     }
@@ -284,12 +304,22 @@ void PidTunerPage::refreshReadout() {
     // produced: it's what to copy into source so a reboot doesn't need a
     // re-measure, and an implausible kS or lag is the quickest way to spot
     // a bad run.
-    const MotorFeedforward& model = axis->result.fit.model;
+    const MotorFeedforward& model = axis->result.fit.model.motion;
+    char kA[24];
+    if (axis->mechanism) {
+        std::snprintf(kA, sizeof(kA), "kA %.4f kG %.2f", model.kA, axis->result.fit.model.kG);
+    } else {
+        std::snprintf(kA, sizeof(kA), "kA %.4f", model.kA);
+    }
+    // "fric" is GainDesign::staticErrorBound: how far short static friction
+    // can leave this loop. Worth checking against the exit threshold.
     std::snprintf(buf, sizeof(buf),
-                  "%s model:\nkS %.2f kV %.4f\nkA %.4f\nR2 %.2f lag %.0fms\nsettle %.2fs\nPM %.0f%s\n(not saved)",
-                  axis->name.c_str(), model.kS, model.kV, model.kA, axis->result.fit.rSquared,
+                  "%s model:\nkS %.2f kV %.4f\n%s\nR2 %.2f lag %.0fms\nsettle %.2fs\nPM %.0f%s\n"
+                  "fric +-%.2g\n(not saved)",
+                  axis->name.c_str(), model.kS, model.kV, kA, axis->result.fit.rSquared,
                   axis->result.delayS * 1000.0, entry.design.settleTimeS,
-                  entry.design.phaseMarginDeg, entry.design.limitedByDelay ? " lag-capped" : "");
+                  entry.design.phaseMarginDeg, entry.design.limitedByDelay ? " lag-capped" : "",
+                  entry.design.staticErrorBound);
     setLabelText(resultLabel_, buf);
 }
 
@@ -312,11 +342,85 @@ void PidTunerPage::runSelectedTest() {
     });
 }
 
+std::string PidTunerPage::selectedGroup() const {
+    if (entries_.empty()) return "";
+    const Axis* axis = findAxis(entries_[selectedIndex_]->axis);
+    return axis != nullptr ? axis->group : "";
+}
+
+bool PidTunerPage::measureAxis(Axis& axis, std::vector<std::function<void()>>& finishes) {
+    // Stop button, or the robot disabled under it (VEXos ignores the motors
+    // then, so whatever the run records is no measurement at all).
+    const auto stopRequested = [this] {
+        return stopRequested_.load() || pros::competition::is_disabled();
+    };
+    const auto withStop = [&](std::function<bool()> own) {
+        return [own = std::move(own), stopRequested] { return stopRequested() || (own && own()); };
+    };
+
+    // Built fresh on this task, not at registration time — lets the factory
+    // capture "here" as this run's reference frame.
+    tuning::CharacterizationData data;
+    // The finish hook hands a mechanism's motors back to its own loop. That
+    // loop must not resume until the new gains are set: setGains() from this
+    // task racing an update() on the loop's task could tear a gain. So it's
+    // deferred to runAutoTune(), after the design.
+    const auto deferFinish = [&finishes](tuning::CharacterizationConfig& config) {
+        if (config.finish) finishes.push_back(std::move(config.finish));
+        config.finish = nullptr;
+    };
+    if (axis.mechanism) {
+        tuning::MechanismCharacterizationConfig config = axis.buildMechanismExperiment();
+        config.axis.shouldAbort = withStop(std::move(config.axis.shouldAbort));
+        deferFinish(config.axis);
+        axis.samplePeriodS = config.axis.samplePeriodMs / 1000.0;
+        data = tuning::runMechanismCharacterization(config);
+        axis.result = tuning::characterizeMechanism(data, config.gravity, config.axis.minSpeed);
+    } else {
+        tuning::CharacterizationConfig config = axis.buildExperiment();
+        config.shouldAbort = withStop(std::move(config.shouldAbort));
+        deferFinish(config);
+        axis.samplePeriodS = config.samplePeriodMs / 1000.0;
+        data = tuning::runCharacterization(config);
+        const tuning::AxisCharacterization result = tuning::characterizeAxis(data, config.minSpeed);
+        axis.result =
+            tuning::MechanismCharacterization{.ok = result.ok,
+                                              .fit = {.ok = result.fit.ok,
+                                                      .model = {.motion = result.fit.model},
+                                                      .rSquared = result.fit.rSquared,
+                                                      .samplesUsed = result.fit.samplesUsed},
+                                              .delayS = result.delayS};
+    }
+    if (data.aborted) {
+        stopped_.store(true);
+        axis.measured = false;
+        return false;
+    }
+    axis.measured = axis.result.ok;
+    if (!axis.measured) return false;
+
+    if (axis.mechanism) {
+        if (axis.onMechanismMeasured) axis.onMechanismMeasured(axis.result);
+    } else if (axis.onMeasured) {
+        axis.onMeasured(
+            tuning::AxisCharacterization{.ok = axis.result.ok,
+                                         .fit = {.ok = axis.result.fit.ok,
+                                                 .model = axis.result.fit.model.motion,
+                                                 .rSquared = axis.result.fit.rSquared,
+                                                 .samplesUsed = axis.result.fit.samplesUsed},
+                                         .delayS = axis.result.delayS});
+    }
+    return true;
+}
+
 void PidTunerPage::runAutoTune() {
     if (axes_.empty() || testRunning_.load()) return;
+    const std::string group = selectedGroup();
 
     testRunning_.store(true);
     autoTuneActive_.store(true);
+    stopRequested_.store(false);
+    stopped_.store(false);
     failedAxis_.store(-1);
 
     // Axis/Entry results are plain fields, not atomics: this task is their
@@ -324,47 +428,56 @@ void PidTunerPage::runAutoTune() {
     // reads them once it's false again. Entries can't be added or selected
     // mid-run either (both check testRunning_), so selectedIndex_ and the
     // vectors themselves are stable for the task's lifetime.
-    pros::Task([this] {
+    pros::Task([this, group] {
+        bool allMeasured = true;
+        std::vector<std::function<void()>> finishes;
         for (std::size_t i = 0; i < axes_.size(); ++i) {
             Axis& axis = *axes_[i];
+            if (axis.group != group) continue;
             measuringAxis_.store(static_cast<int>(i));
-
-            // Built fresh on this task, not at registration time — lets the
-            // factory capture "here" as this run's reference frame.
-            const tuning::CharacterizationConfig config = axis.buildExperiment();
-            const tuning::CharacterizationData data = tuning::runCharacterization(config);
-            axis.result = tuning::characterizeAxis(data, config.minSpeed);
-            axis.measured = axis.result.ok;
-
-            if (!axis.measured) {
+            if (!measureAxis(axis, finishes)) {
                 // Stop here rather than carry on: the robot is probably set
                 // up wrong (a reversed sensor, not enough room), and whatever
-                // is wrong likely affects the next axis too. Nothing has been
-                // applied yet, so every controller keeps its old gains.
-                failedAxis_.store(static_cast<int>(i));
+                // is wrong likely affects the next axis too — or someone
+                // tapped Stop. Nothing has been applied yet, so every
+                // controller keeps its old gains.
+                if (!stopped_.load()) failedAxis_.store(static_cast<int>(i));
+                allMeasured = false;
                 break;
             }
-            if (axis.onMeasured) axis.onMeasured(axis.result);
         }
         measuringAxis_.store(-1);
 
-        if (failedAxis_.load() < 0) {
+        if (allMeasured) {
+            // Only this group's controllers: the others keep whatever an
+            // earlier run designed for them.
             for (auto& entry : entries_) {
                 const Axis* axis = findAxis(entry->axis);
+                if (axis == nullptr || axis->group != group) continue;
                 entry->designed = false;
-                if (axis == nullptr || !axis->measured) continue;
+                if (!axis->measured) continue;
 
-                entry->design = tuning::designPositionGains(axis->result.fit.model, entry->response,
-                                                            axis->result.delayS);
+                // A loop ticking slower than the characterization sampled
+                // holds each command longer: on average half the extra
+                // period of latency the measurement didn't see.
+                const double slowerLoopS =
+                    std::fmax(0.0, entry->pid->config().nominalDtS - axis->samplePeriodS);
+                entry->design =
+                    tuning::designPositionGains(axis->result.fit.model.motion, entry->response,
+                                                axis->result.delayS + 0.5 * slowerLoopS);
                 if (!entry->design.ok) continue;
                 entry->pid->setGains(entry->design.gains);
                 entry->designed = true;
             }
             if (!entries_.empty()) setDisplayedGains(entries_[selectedIndex_]->pid->gains());
         }
+        // Stopped, failed or finished: every run that started gets its
+        // finish, now that any new gains are in place.
+        for (const auto& finish : finishes) finish();
 
         readoutDirty_.store(true);
         autoTuneActive_.store(false);
+        stopRequested_.store(false);
         testRunning_.store(false);
     });
 }
@@ -374,10 +487,15 @@ void PidTunerPage::update() {
     // going through setLabelText() rather than lv_label_set_text() is the
     // difference between invalidating this label once per state change and
     // once per tick.
+    const bool autoTuning = testRunning_.load() && autoTuneActive_.load();
+    setLabelText(autoTuneLabel_, autoTuning ? "Stop" : "Auto-Tune");
+
     if (testRunning_.load()) {
         const int measuring = measuringAxis_.load();
         if (!autoTuneActive_.load()) {
             setLabelText(statusLabel_, "Running...");
+        } else if (stopRequested_.load()) {
+            setLabelText(statusLabel_, "Stopping...");
         } else if (measuring >= 0 && measuring < static_cast<int>(axes_.size())) {
             char buf[48];
             std::snprintf(buf, sizeof(buf), "Measuring %s", axes_[measuring]->name.c_str());
@@ -432,7 +550,14 @@ void PidTunerPage::runTestClicked(lv_event_t* e) {
     static_cast<PidTunerPage*>(lv_event_get_user_data(e))->runSelectedTest();
 }
 void PidTunerPage::autoTuneClicked(lv_event_t* e) {
-    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->runAutoTune();
+    auto* page = static_cast<PidTunerPage*>(lv_event_get_user_data(e));
+    // The same button is Stop while Auto-Tune runs. The run notices within a
+    // sample period (see measureAxis()); a Run Test can't be stopped this way.
+    if (page->testRunning_.load()) {
+        if (page->autoTuneActive_.load()) page->stopRequested_.store(true);
+        return;
+    }
+    page->runAutoTune();
 }
 void PidTunerPage::toggleClicked(lv_event_t* e) {
     auto* page = static_cast<PidTunerPage*>(lv_event_get_user_data(e));

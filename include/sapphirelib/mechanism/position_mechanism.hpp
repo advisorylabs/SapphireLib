@@ -59,7 +59,8 @@ struct PositionStep {
     PositionMode mode = PositionMode::off;
     double target = 0.0;   ///< the last target set (whatever the mode)
     double position = 0.0; ///< NaN if the sensor didn't answer
-    double volts = 0.0;    ///< what the motors were sent; 0 when braking
+    double volts = 0.0;    ///< what the motors were sent; 0 when braking, NaN under
+                           ///< external control (whoever has them knows)
     bool atTarget = false; ///< position mode and within tolerance
     bool settled = false;  ///< see PositionMechanism::settled()
 };
@@ -77,8 +78,9 @@ struct PositionStep {
 ///   loops commanding one motor group fight.
 ///
 /// Thread safety: commands (setTarget/setVolts/holdPosition/stop/
-/// resetController) and queries (target/mode/position/isNear/atTarget/
-/// settled/law) may be called from any task. They go through lock-free
+/// resetController/setGravity/beginExternalControl/endExternalControl) and
+/// queries (target/mode/position/isNear/atTarget/settled/law/gravity/
+/// externalControl) may be called from any task. They go through lock-free
 /// atomics, never a mutex, so a competition task that PROS deletes mid-call
 /// can't leave a lock held. Command from one task at a time. update(),
 /// startTask(), setStepListener() and pid() changes belong to one owner.
@@ -124,6 +126,35 @@ public:
 
     double target() const;
     PositionMode mode() const;
+
+    /// Replaces the gravity feedforward — e.g. with what Auto-Tune just
+    /// measured (tuning::MechanismModel::gravityFeedforward()) — from any
+    /// task, taking effect at the next update. Its four fields are separate
+    /// atomics, so an update racing this call can mix old and new values for
+    /// that one update.
+    void setGravity(GravityFeedforward gravity);
+
+    /// The gravity feedforward in effect: the config's until setGravity().
+    GravityFeedforward gravity() const;
+
+    // --- Lending the motors out (any task) ---
+
+    /// Hands the motors to something else until endExternalControl() — a
+    /// tuning run driving them directly (tuning::runMechanismCharacterization()
+    /// through its start/finish hooks). Meanwhile update() and the task still
+    /// read the sensor and report every step (law external, volts NaN), but
+    /// never command the motors, and keep the PID reset. Commands are still
+    /// accepted, and take effect once the motors come back, so a driver loop
+    /// that sets a target every tick needn't know any of this is happening.
+    /// Not counted: one end undoes any number of begins.
+    void beginExternalControl();
+
+    /// Takes the motors back. The next update starts the loop fresh, on
+    /// whatever target (or mode) is current by then.
+    void endExternalControl();
+
+    /// True between beginExternalControl() and endExternalControl().
+    bool externalControl() const;
 
     // --- Queries (any task) ---
 
@@ -191,6 +222,8 @@ public:
     /// runs update().
     PID& pid();
 
+    /// The config as constructed — except gravity, which setGravity() can
+    /// change afterwards; read gravity() for the live one.
     const PositionConfig& config() const;
 
     /// Called at the end of every update, on the task that ran it: the
@@ -223,6 +256,12 @@ private:
     std::atomic<PositionLaw> law_{PositionLaw::off};
     std::atomic<bool> resetRequested_{false};
     std::atomic<bool> taskRunning_{false};
+    std::atomic<bool> external_{false};
+    // The live gravity feedforward (see setGravity()).
+    std::atomic<double> gravityConstantVolts_;
+    std::atomic<double> gravityCosineVolts_;
+    std::atomic<double> gravityHorizontalPosition_;
+    std::atomic<double> gravityArmDegreesPerUnit_;
 
     // Owned by whichever task runs step().
     GapDetector gap_;

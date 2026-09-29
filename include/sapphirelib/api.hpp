@@ -64,6 +64,7 @@
 #include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/telemetry/file_naming.hpp"
 #include "sapphirelib/telemetry/logger.hpp"
+#include "sapphirelib/telemetry/motor_row.hpp"
 #include "sapphirelib/telemetry/record.hpp"
 #include "sapphirelib/telemetry/record_ring.hpp"
 

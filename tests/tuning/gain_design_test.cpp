@@ -101,6 +101,8 @@ void testPolePlacementFormulas() {
     expectWithin(design.gains.kD, 2.0 * omega * kModel.kA - kModel.kV, 1e-9, "kD = 2ζω·kA − kV");
     expectWithin(design.gains.kI, 0.0, 0.0, "no integral");
     expectWithin(design.settleTimeS, 0.6, 1e-9, "achieves the requested settle time");
+    // Where static friction can stop a PD loop short: kP·error = kS.
+    expectWithin(design.staticErrorBound, kModel.kS / design.gains.kP, 1e-12, "friction band");
 }
 
 void testNegativeKdIsClamped() {

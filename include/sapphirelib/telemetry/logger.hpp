@@ -31,14 +31,16 @@
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/telemetry/channel.hpp"
 #include "sapphirelib/telemetry/event.hpp"
+#include "sapphirelib/telemetry/motor_row.hpp"
 
 namespace sapphirelib::telemetry {
 
-/// Channels one Logger can hold, its two event channels included.
-constexpr std::size_t kMaxChannels = 32;
+/// Channels one Logger can hold, its two event channels included. Room for a
+/// robot that logs every motor (Logger::motor()) on top of its PIDs.
+constexpr std::size_t kMaxChannels = 48;
 
-/// poll()/pose() sources one Logger can hold.
-constexpr std::size_t kMaxPolled = 16;
+/// poll()/pose()/motor() sources one Logger can hold.
+constexpr std::size_t kMaxPolled = 32;
 
 struct LoggerConfig {
     /// Folder for log files, "/usd/..." form. It must already exist on the
@@ -173,6 +175,22 @@ public:
     Channel& pose(const odom::Odometry& odometry, const char* name = "odom",
                   std::uint32_t periodMs = 10);
 
+    /// poll() for one V5 smart motor's health, read straight off its port
+    /// (no pros::Motor needed, and nothing is ever commanded): the volts it's
+    /// applying, current (A), temperature (°C), velocity (RPM), efficiency
+    /// (%) and fault bits — kMotorColumns, see motor_row.hpp. A negative port
+    /// reports volts and RPM in the reversed direction, as a pros::Motor on
+    /// that port would. An unplugged motor logs whole rows of NaN.
+    ///
+    /// The evidence for a robot that faded mid-match: V5 motors cut their own
+    /// power as they heat and say nothing, so only this shows it. Name it
+    /// "motor.<something>" by convention (the telemetry analyzer finds motor
+    /// channels by their columns either way). 100ms is plenty: temperature
+    /// moves over tens of seconds, and a stall shows in current for far longer
+    /// than that.
+    Channel& motor(const char* name, std::int8_t port, std::uint32_t periodMs = 100,
+                   ChannelOptions options = {.capacity = 32, .decimals = 2});
+
     /// Logs an `E` row: a marker the app can cut runs on (auton start/end, a
     /// driver's "that looked wrong" button, a macro firing). Formats on the
     /// calling task, so keep it out of tight loops — it's for markers, not
@@ -208,6 +226,11 @@ private:
         std::uint32_t lastMs = 0;
         bool polledOnce = false;
     };
+
+    /// poll()'s body, for a column list that isn't an initializer_list.
+    Channel& pollColumns(const char* name, const char* const* columns, std::size_t columnCount,
+                         std::uint32_t periodMs, std::function<void(double* values)> read,
+                         ChannelOptions options);
 
     /// Registration helper; the caller holds registrationMutex_.
     Channel& addChannelLocked(const char* name, ChannelKind kind, const char* const* columns,

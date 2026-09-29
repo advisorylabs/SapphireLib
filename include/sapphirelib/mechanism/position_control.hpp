@@ -112,10 +112,12 @@ enum class PositionLaw : std::uint8_t {
     sensorLost, ///< no position reading: brake, loop reset
     manual,     ///< open-loop volts (PositionMechanism::setVolts())
     off,        ///< brake: PositionMechanism::stop(), or its task while disabled
+    external,   ///< something else has the motors: a tuning run (see
+                ///< PositionMechanism::beginExternalControl())
 };
 
 /// A short printable name ("track", "seat", "rest", "no sensor", "manual",
-/// "off"), at most 9 characters so it fits on a controller line.
+/// "off", "external"), at most 9 characters so it fits on a controller line.
 const char* positionLawName(PositionLaw law);
 
 struct PositionCommand {
