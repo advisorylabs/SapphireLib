@@ -21,3 +21,7 @@ temp.errors
 
 # PROS CLI local state (machine-specific template cache paths)
 project.pros
+
+# Python bytecode (tools/telemetry/slt_read.py)
+__pycache__/
+*.pyc
