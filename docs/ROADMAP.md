@@ -95,8 +95,8 @@ outstanding** before this phase is truly done — see `examples/tank_chassis.cpp
 field. The odometry math is implemented and unit-tested for all four sensor configs (IMU + drive
 encoders only, IMU + vertical wheel, IMU + horizontal wheel, IMU + both), and compiles cleanly against
 the kernel; **on-bot verification against a taped-out field is still outstanding** for every config —
-the current test robot (`src/main.cpp`) has no tracking wheels wired up yet, so only the IMU +
-drive-encoder-fallback config can even be exercised on real hardware right now.
+the test robot now runs the IMU + vertical + horizontal wheel config (`src/robot/devices.cpp`), but
+none of them has been measured against a taped-out field yet.
 
 ---
 
@@ -157,8 +157,10 @@ defaults shipped here.
   - [x] Autonomous selector — `gui::AutonSelectorPage`: register named routines with `addRoutine()`, tap
         one on the brain screen to select it, `autonomous()` calls `run()`. Built on `lv_list`, not a
         hand-rolled layout.
-  - [x] Telemetry to brain screen (partial) — `gui::HomePage` shows battery %, competition
-        connection/mode status, and (if given an IMU) heading. SD-card logging is still open.
+  - [x] Telemetry to brain screen — `gui::HomePage` shows battery %, competition connection/mode
+        status, (if given an IMU) heading, and — once handed the SD logger with `setTelemetry()` —
+        its state (`SD: logging SL000042`, `SD: waiting for card`, `SD: FAULT`, ...), so a missing,
+        full or pulled card is noticed in the pits rather than after the match whose data it lost.
   - [x] SapphireLib's own default pages plug into the same `addPage()` a team's custom pages use — the
         requested "~2 custom pages, easy to expand" story is just calling `addPage()` a couple more
         times; nothing about the framework caps or special-cases the built-in ones.
@@ -187,7 +189,7 @@ defaults shipped here.
     no kI — feedforward's kS already removes the friction an integrator usually exists for. Delay is
     what textbook pole placement ignores and a V5 loop can't: the design checks the phase margin the
     measured delay leaves and backs ω off until it meets the spec, reporting that it did. One tap
-    therefore measures the robot once and tunes every controller from it — `src/main.cpp` gives Drive,
+    therefore measures the robot once and tunes every controller from it — `src/robot/tuning.cpp` gives Drive,
     Turn, and the new driver heading-hold PID (`HolonomicDrivetrain::headingHoldPID()`, split off from
     `turnPID()`) three different specs designed from two axis measurements. If any axis fails to fit
     (reversed sensor, too little travel, voltage under kS), the run stops and every controller keeps its
@@ -213,7 +215,38 @@ defaults shipped here.
     fixed before it shipped, by rereading the same thread-safety rule the rest of the page already
     followed.) Both drivetrains gained `drivePID()`/`turnPID()` accessors (same pattern as `imu()`) so the
     page can reach the controllers to tune.
-- [ ] Telemetry/logging to SD card
+- [x] Telemetry/logging to SD card — `sapphirelib::telemetry::Logger`, the data source for an
+      off-robot tuning app. It records every step of any `PID` (target, measurement, error, the P/I/D
+      terms, raw and final output, dt, flags) through a new `PID::setObserver()` hook — so neither the
+      drivetrains nor `PidTunerPage` had to change — plus the odometry pose, channels of your own
+      (`Channel::record()` from wherever the values are computed, or `poll()` on the logger's sampler
+      task), and low-rate events: each motion's start and end with its result, competition phase
+      changes, and markers of your own via `telemetry::event()`. One file per program run
+      (`/usd/sl/SLnnnnnn.CSV`, numbered because the brain has no clock), in a line-oriented CSV-style
+      format specified in `docs/TELEMETRY_FORMAT.md` and read by the standard-library-only
+      `tools/telemetry/slt_read.py`, which also pairs motion events into segments and slices a PID's
+      rows by them.
+      The rule it's built around is that logging never slows the code it records. A producer copies a
+      64-byte record into its channel's lock-free ring and moves on; a row that can't be taken right
+      now is dropped and *counted* (the counts land in the file) rather than waited for, since a
+      stalled control loop is worse than a gap a tuning app can see and step around. There's no mutex
+      anywhere on that path, for the same reason as everywhere else: PROS deletes competition tasks on
+      every mode change, and a mutex held at that moment stays locked. All SD work happens on a
+      low-priority writer task that merges the channels by timestamp and writes in large chunks every
+      250ms — on PROS 4.2.2 every write is a filesystem sync, so many small writes would cost far more
+      card time — and a sampler task polls sources and the competition state, forcing a write on every
+      phase change so the end of a match is on the card moments after the robot is disabled. It rides
+      out a card being pulled or filling up (a new file once the card is back, with `H`/`D` health rows
+      recording write latency and drops), falls back to the card's root when the `sl` folder is
+      missing (PROS can't create folders), and repeats each PID's config and gains at the top of every
+      file and again whenever they change, so gains the tuner page or Auto-Tune set mid-session are in
+      the log. `telemetry::tapCharacterization()` mirrors Auto-Tune's characterization runs into
+      `char.*` channels — a superset of `tuning::CharacterizationSample` — so an axis can be refit
+      offline from real runs without touching `tuning/`. The pure parts (the ring, channels and the PID
+      probe, number formatting golden-tested byte for byte against the format doc, file naming, the
+      characterization tap) are unit-tested under `tests/telemetry/`. **It hasn't written to a real
+      card yet**: real SD write latency, and what the V5 does when a card is pulled mid-write, have only
+      been exercised against a fake card on disk.
 - [x] Startup diagnostic checks (sensor connectivity) — `sapphirelib::diag`: `SensorCheck` (label + port +
       expected `DeviceKind`) checked against PROS's device registry (`pros::c::registry_get_plugged_type`)
       via `runCheck()`/`runChecks()`, without needing the device to already be constructed. `gui::
@@ -315,10 +348,10 @@ defaults shipped here.
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware** — tab bar height has been bumped twice in response to that
-testing (28 → 31 → 43px total). `src/main.cpp` wires up `Gui` with `HomePage` + `AutonSelectorPage` +
-`DiagnosticsPage` + `PidTunerPage` + `OdometryPage` against the real test chassis, now including a real
-`odom::Odometry` (drive-encoder fallback) so the auto-tune and odometry pages have live data to work
-with. IMU drift correction, PID tuning (manual and automatic), and sensor-port diagnostics are all
+testing (28 → 31 → 43px total). The robot program (`src/robot/screen.cpp`) wires up `Gui` with
+`HomePage` + `AutonSelectorPage` + `DiagnosticsPage` + `PidTunerPage` + `OdometryPage` against the real
+test chassis, including a real `odom::Odometry` (on two rotation-sensor tracking wheels) so the
+auto-tune and odometry pages have live data to work with. IMU drift correction, PID tuning (manual and automatic), and sensor-port diagnostics are all
 implemented and compile clean against the kernel, and — critically, now that a host compiler is available
 in this environment — every pure-math module's unit tests (`odom`, `motion`, `sensors`, `gui`, `tuning`)
 have actually been *run*, not just type-checked; that pass also caught and fixed a real bug where CI was
@@ -327,23 +360,221 @@ failing to link three of them due to unlisted cross-module dependencies (see
 robot (default `1.0` is a no-op); the new `DiagnosticsPage`/`PidTunerPage` widgets, and the auto-tune flow
 specifically, haven't had on-hardware time yet the way the rest of the GUI has — the identification and
 gain-design math is verified against a simulated axis (including delay and sensor noise), but the
-characterization voltages/travel in `src/main.cpp` are unmeasured starting points, and how the fit holds
+characterization voltages/travel in `src/robot/tuning.cpp` are unmeasured starting points, and how the fit holds
 up against real odometry noise, wheel slip, and backlash hasn't been checked. Still to come on the tuning
 side: motion profiles with feedforward and measured-velocity feedback in `moveToPoint()`/`followPath()`
 (per-axis gains, so strafing stops borrowing the forward axis's), and an automated path-tracking
-validation run. SD-card telemetry and motor-fault diagnostics haven't been started.
+validation run — for which the SD telemetry now records the data (see above), though it hasn't run
+against a real card yet. Motor-fault diagnostics haven't been started.
 
 ---
 
-## Phase 5 — Subsystem & Utility Support
+## Phase 5 — Subsystem & Utility Support ⬅ *in progress, alongside Phase 4*
 **Goal:** Everything else a competition robot needs.
 
-- Generic subsystem/mechanism class pattern (intake, arm, lift, etc.)
-- Async task utilities for mechanism control alongside drive/auton
-- Math/geometry utility library (angle wrapping, vector math, spline helpers)
-- Controller input utilities (button macros, rumble feedback, deadzone handling)
+- [x] Generic subsystem/mechanism class pattern (intake, arm, lift, etc.) — `sapphirelib::mechanism`,
+      built as primitives rather than a framework: no subsystem base class, scheduler, or command
+      groups, because those add indirection and ordering rules to learn while removing nothing from a
+      robot's file. A driver macro system already has the right shape — one per-tick function whose
+      `else if` chain states the robot's priorities, with every output recomputed from state each tick
+      — so each primitive replaces one piece of the machinery teams otherwise hand-roll around that
+      function. `docs/MACROS.md` is the guide, and `examples/macros.cpp` a complete example.
+  - `PositionMechanism` — a lift, an arm, or anything else a motor group drives to a position read off
+    a sensor: PID plus gravity feedforward (constant for an elevator, scaled by `cos(angle)` for an
+    arm), an optional seat-and-rest at a hard stop (drive down onto it, then rest at 0V instead of
+    pushing into it forever), braking when the sensor stops answering, a manual volts override, and
+    settle detection. Commands and queries go through lock-free atomics, so any task may call them
+    and a deleted competition task can't orphan a lock. The control law itself
+    (`computePositionCommand()`) is pure, and is checked bit for bit against the hand-written lift
+    loop it replaced, over 1.2 million simulated ticks with sensor dropouts, in
+    `tests/mechanism/position_control_test.cpp`.
+  - `Piston` — a pneumatic that knows how long it's been in its current state ("outtake once the claw
+    has had 400ms to deploy"). `Roller` — an intake or conveyor with an optional pure `JamDetector`: a
+    roller told to spin that isn't turning gets a short reverse pulse, then goes back to the command
+    (`tests/mechanism/jam_detector_test.cpp`). `PresetLadder` — named tables of preset positions,
+    stepped a level at a time (one table per scoring mode, say).
+- [x] Async task utilities for mechanism control alongside drive/auton (the mechanism side):
+  - `PositionMechanism::startTask()` runs a mechanism on its own fixed-period task, so a lift keeps
+    holding while autonomous blocks on a drivetrain motion, and `moveTo()`/`waitUntilSettled()` wait
+    on it with a timeout. Or drive it from your own loop with `update(now)` — the same class, no task.
+    While disabled the task brakes with its PID cleared, so nothing winds up while VEXos ignores the
+    motors.
+  - `Sequence<StepId>` — timed step programs ("dip the lift, outtake for 500ms, go up a level")
+    advanced from driver control one tick at a time instead of blocking it, with at most one
+    transition per update so every step gets at least one tick; the same program runs to completion
+    from autonomous with `runBlocking()`. Checked against a verbatim copy of the robot's hand-rolled
+    phase machine over 10,000 random driver traces in `tests/util/sequence_test.cpp`.
+  - `waitUntil()` — a blocking wait that always has a timeout, since a wait with no way out is how a
+    robot sits frozen for the rest of a match when a sensor comes unplugged.
+  - Underneath them: `util/timing.hpp` (wrap-safe `elapsedMs()`, `Stopwatch`, `TimedFlag`,
+    `GapDetector` — none of which read a clock, so "take now once per tick and hand it to everything"
+    is the only way to use them) and `util/clock.hpp`, the seam that lets `waitUntil()` and
+    `runBlocking()` run under host tests with a fake clock.
+  - Async *drivetrain* motions are still open — see "Deferred cleanup" below.
+- [ ] Math/geometry utility library (angle wrapping, vector math, spline helpers) — angle wrapping
+      exists (`util/angle.hpp`, from Phase 1); vector math and spline helpers don't yet.
+- [x] Controller input utilities (button macros, rumble feedback, deadzone handling) —
+      `sapphirelib::input::Controller`: `update()` samples every button and stick once per tick, then
+      `pressed()`/`released()`/`held()`/`heldMs()`/`longPressed()`/`repeated()`/`combo()` can be asked
+      as often as you like. Edges come from comparing this tick's sample with the last one
+      (`ButtonTracker`, pure), not from PROS's `get_digital_new_press()`, whose "already seen" flag
+      only updates when a button is *read* — so a button skipped for a while fires late, two readers
+      steal presses from each other, and a two-button combo written with `&&` only works in one order
+      (the bug behind the robot's old B+DOWN shortcut). Sampled every tick, it reports exactly what
+      `get_digital_new_press()` would have, checked against a copy of the kernel's latch logic over
+      400,000 random ticks. `resumed()` flags the loop having stopped and restarted (autonomous, a
+      disable), so stale sequence and PID state can be dropped. `ControllerScreen` keeps three lines
+      of text plus a rumble queue, and sends at most one write per 60ms and only what changed, since
+      V5 controllers silently drop text sent faster than about every 50ms. Sticks come normalized to
+      [-1, 1] and read 0 while the controller is disconnected; `applyDeadband()`, next to
+      `curveJoystick()`, zeroes the count or two a stick reads at rest.
 
-**Deliverable:** A robot's full software stack can be built on SapphireLib alone.
+**Deliverable:** A robot's full software stack can be built on SapphireLib alone. 96671H's own
+intake/claw/lift macros (`src/robot/macros.cpp`) now run on these primitives, and the port was checked
+piece by piece against the code it replaced: the lift law bit for bit, the score/re-seat sequences
+phase for phase, the controller screen write for write, and button edges against the kernel's latch.
+Still outstanding: none of it has had hardware time beyond those equivalence tests, and task mode
+(`startTask()`) isn't exercised by the robot at all yet — its lift is still driven from opcontrol, as
+before, so nothing holds it during autonomous.
+
+---
+
+## Library Cleanup (LemLib/EZ-Template-inspired)
+**Goal:** Make the existing API cleaner and more intuitive — closer to what a LemLib or EZ-Template
+user expects — without dropping features or changing how any motion drives.
+
+- [x] `MotionResult` from every blocking motion — `driveDistance()`, `turnToHeading()`,
+      `moveToPoint()`, `moveToPose()` and `followPath()` on both drivetrains returned `void`, so a
+      routine couldn't tell a motion that arrived from one that timed out against a wall. They now
+      return `motion::MotionResult` (settled / timed out / aborted, the final error, and how long it
+      ran), and their shared settle/timeout bookkeeping moved into a pure `motion::ExitTracker`,
+      checked against a verbatim copy of the old inline loop in `tests/motion/exit_tracker_test.cpp`.
+      A simulator harness replaying both drivetrains' old and new code confirmed that every motor
+      command, and when it was sent, is unchanged in every scenario it covered. Each motion also logs
+      a `motion` start/end event to the SD telemetry, when a logger is running.
+- [x] `setOdometry()` — set the pose source once, then write `moveToPoint(24, 24)` instead of passing
+      the odometry to every call, the way LemLib users expect. The overloads that take an `Odometry`
+      work unchanged; with none set, the new ones log an error and return `aborted` without moving.
+- [x] Sane exit defaults — `ExitConditions::errorThreshold` had no initializer, so `{}` or
+      `{.timeoutMs = 1500}` meant a threshold of 0: a motion that could never settle and always ran to
+      its timeout. It now defaults to 1.0 (inches; `turnToHeading()`'s default argument uses 2.0
+      degrees), `PoseExitConditions` to 1in and 2°, and `moveToPoint()`/`moveToPose()` gained default
+      arguments. Every threshold documents its units.
+- [x] `driveDistance()` measures from wherever the encoders read when it starts, instead of taring
+      them. A tare is device-level, so it also zeroed a `MotorGroupTrackingWheel` on the same motors
+      (the drive-encoder odometry config) and jumped the pose back by everything driven so far.
+- [x] `followPath()` guards — an empty path was undefined behavior (`.back()` on an empty vector) and
+      now returns `aborted`; `PursuitConfig::timeoutMs` (default 10s, added as the last field so
+      existing initializers stay valid) caps the pursuit phase, which used to end only by reaching the
+      final approach, so a blocked robot chased the path for the rest of autonomous.
+- [x] Robustness against disconnected devices and task races:
+  - `sensors::Imu` skips non-finite reads. One `PROS_ERR_F` (unplugged, or recalibrating after a
+    brownout) used to turn heading into NaN for the rest of the program, taking turns, odometry and
+    heading hold with it. A failed read also drops the baseline, so when the sensor comes back reading
+    near 0 that restart isn't counted as a turn — heading loses only what the chassis actually turned
+    during the gap. Its cumulative tracking is now lock-free atomics: it's read from the
+    odometry task, the GUI and competition tasks at once, and two readers racing on the old code could
+    count one rotation twice. `calibrated()` reports whether calibration worked, and a failure is
+    logged.
+  - `RotationTrackingWheel` holds its last good reading while the sensor isn't answering (an
+    unplugged sensor used to move the pose ~515,000in), and `MotorGroup::getPositionDegrees()`/
+    `getVelocityRPM()` skip motors that aren't answering (one unplugged drive motor made
+    `driveDistance()`'s error -inf). A group where *nothing* answers — every holonomic corner is a
+    one-motor group — holds its last position instead of reading 0, since a jump to 0 from however far
+    the motor had turned is just as much a runaway once `driveDistance()` measures from a start
+    reading.
+  - `Odometry::startTask()`, `MotionQueue::run()` and `Gui::start()` ignore a second call instead of
+    starting a second worker, and `SensorCheck` reports an out-of-range port as a config error.
+- [x] Smaller additions — `appliedAxisVolts()` on both drivetrains (the forward/strafe/turn volts
+      last commanded, for telemetry and model fitting); `Page::isBusy()` and `Gui::anyPageBusy()`, so
+      driver control can stand aside while a GUI routine (an offset calibration, a tuner run) drives
+      the chassis; `AutonSelectorPage::selectedName()`; `DeviceKind::distance`/`optical` in
+      diagnostics; and `PID::setObserver()`/`lastStep()`/`config()`, which telemetry builds on.
+- [x] Project layout — the robot program moved out of one long `main.cpp` into `include/robot/` +
+      `src/robot/` (namespace `robot`): every port written once, in `config.hpp`; devices behind
+      accessors backed by function-local statics, built in a known order from `initialize()` rather
+      than during static initialization, which is no place for the IMU's blocking calibration;
+      autonomous routines in `autons.cpp`; tuning, telemetry, driver control and the macros each in a
+      file of their own; and `main.cpp` down to the competition callbacks. The `Makefile` now keeps
+      everything under `src/` except `src/sapphirelib/` out of the library archive — an allowlist, so a
+      new robot file can't silently ship inside `sapphirelib.a`.
+- [x] Tooling — `.clang-format` now matches the house style (it indented namespace contents, which the
+      code never has, so the CI format gate reported thousands of violations and couldn't pass), with
+      `tuning/` left out of the CI check until Auto-Tune lands; `make check-examples` compiles every
+      example against the current headers so they can't silently rot; and CI's test loop handles
+      header-only modules and tests that need extra sources.
+- [x] One field heading frame — `Odometry::setPose()` (and the constructor's `startPose`) used to
+      ignore the heading: every update overwrote it with the raw IMU heading, so the field frame was
+      locked to wherever the robot faced at calibration, and an autonomous that started at
+      `{x, y, 270}` got rotated x/y axes and turn targets 90° off. `sensors::Imu` now has a heading
+      offset (`setHeadingDeg()`/`headingOffsetDeg()`) that `getHeadingDeg()` applies, and `setPose()`
+      sets it on the Imu odometry shares with the drivetrain — so the pose, `turnToHeading()`,
+      `moveToPose()`, and the Home page all read the same field heading after one call. Two frames,
+      each where it belongs: `getCumulativeHeadingDeg()` stays unshifted rotation since construction,
+      so everything that only takes differences of it (Auto-Tune's turn experiment, the offset
+      calibration spin, Asterisk drift correction) can't see a re-frame; and the things that track a
+      physical direction — field-centric "forward", driver heading hold, `driveDistance()`'s heading
+      correction — work in that rotation frame too, so a `setPose()` never moves the driver's forward
+      or makes heading hold spin to chase a target that just jumped. Odometry re-expresses its
+      previous heading in the current frame, so a re-frame between two updates isn't read as a turn
+      (which would have fired the tracking wheels' arc correction), and travel from before a
+      `setPose()` never lands in the new pose, even with the chassis moving: `setPose()` takes the
+      readings the next update measures from, and an update already in flight is discarded. The offset math and the
+      re-framing property are unit-tested in `tests/sensors/imu_scale_math_test.cpp` and
+      `tests/odom/odometry_math_test.cpp`. Robots that start at heading 0 (this one does) see no
+      change beyond the IMU's few milliseconds of drift between chassis and odometry construction.
+
+### Deferred cleanup
+Worth doing, but each one changes behavior, touches every call site, or wants on-robot validation
+first:
+
+- [ ] Config-struct constructors for the drivetrains — eleven positional arguments with `/*name=*/`
+      comments is exactly the complaint about LemLib's stable API, and a `Config` struct would also
+      make explicit that `headingHoldPID()` is silently built from the turn PID's config. Add it as a
+      delegating constructor first (non-breaking) and deprecate the positional one later.
+- [ ] Per-motion params and unified exit types — `chassis::ExitConditions` and
+      `motion::PoseExitConditions` live in different namespaces, and `motion_config.hpp` and the
+      chassis headers include each other. Move the exit types to `motion/` (keeping an alias) and add
+      LemLib-style per-call params (`maxVolts`, `minVolts`, `earlyExitIn`, `reverse`): today the only
+      speed limit is each PID's shared `outputLimit`.
+- [ ] Explicit `calibrate()` — move the IMU's blocking calibration out of the drivetrain constructor,
+      so the chassis can be an ordinary global and the accessors become optional. It changes
+      constructor semantics, so it goes with the config-struct change.
+- [ ] Async motions on one persistent motion task per drivetrain — `moveToPoint(..., {.async =
+      true})`, then `waitUntil(inches)` to fire a mechanism mid-path, `waitUntilDone()`, `cancel()`.
+      The request is copied into the task, never captured by reference; there's one long-lived task,
+      not one per motion; and it cancels itself on any competition-state change — each of those avoids
+      a known LemLib or EZ-Template bug. `MotionQueue` becomes a thin layer over it, and its lifetime
+      hazard (a queue declared inside `autonomous()` leaves its worker running on freed memory) goes
+      away. Needs the two items above first.
+- [ ] Shorter names through C++20 inline namespaces — `sapphirelib::HolonomicDrivetrain` alongside
+      `sapphirelib::chassis::HolonomicDrivetrain`, source-compatible. It touches every file's namespace
+      line, `tuning/` included, so it waits for Auto-Tune to land.
+- [ ] Driver-control API consolidation — `holonomic` / `holonomicFieldCentric` / `holonomicHeadingHold`
+      / `holonomicFieldCentricHeadingHold` is combinatorial naming. One call with options
+      (`{.fieldCentric = true, .headingHold = true}`), or a stored mode, would replace them. Add first,
+      remove later.
+- [ ] `PID::Config::slewRate` per second — it's per call while the gains are per second, so the same
+      number ramps twice as fast in a 10ms loop as in a 20ms one. Add a per-second field, then
+      deprecate the old one.
+- [ ] Kill-safe shared pose and config — `Odometry`'s pose and the drivetrain's axis models are
+      `MutexVar`s that competition tasks lock. If PROS deletes the task inside that microsecond window,
+      the odometry task blocks forever: a tiny probability with a catastrophic outcome. Replace them
+      with atomics or a seqlock, with or before the async motions.
+- [ ] Tank `moveToPoint()` near the target — the bearing is the `atan2` of a vanishing vector, and the
+      steering flips direction whenever the target crosses 90°, so the robot can oscillate or spin in
+      the settle window. The usual fix: inside a small radius, freeze the heading and drive on
+      `distance·cos(headingError)`.
+- [ ] `OdometryPage` calibration timeout — the offset-calibration spin has none, so a blocked spin
+      never ends and keeps driver control locked out (through `isBusy()`) until restart, and a
+      non-finite IMU reading ends it at once and writes NaN offsets into the live odometry.
+- [ ] Keyed GUI warnings — the header has a single warning slot, and `DiagnosticsPage` clears it every
+      250ms while its checks pass, wiping anyone else's `showWarning()`.
+- [ ] Registering the lift with `PidTunerPage` — `addController(lift.pid())` works mechanically, but
+      opcontrol runs the macros ahead of its busy check, so the macros' `lift.update()` would fight a
+      tuner test motion. Gate the macros while a tuner run is active first. (Auto-Tune's model also has
+      no gravity term, so a lift's fit would be biased; the logged `lift.act` rows keep what a later
+      gravity fit needs.)
 
 ---
 

@@ -5,11 +5,16 @@ TabWidth: 4
 UseTab: Never
 ColumnLimit: 100
 AccessModifierOffset: -4
-NamespaceIndentation: All
+# The code base has never indented namespace contents; this used to say All,
+# which made every existing file fail the CI format check.
+NamespaceIndentation: None
 PointerAlignment: Left
 BreakBeforeBraces: Attach
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true
+IndentCaseLabels: true
 SortIncludes: true
 IncludeBlocks: Preserve
 SpaceAfterCStyleCast: true
