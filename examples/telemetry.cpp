@@ -3,11 +3,13 @@
  *
  * Phase 4 example: SD-card telemetry with telemetry::Logger, on a tank chassis
  * with one vertical tracking wheel. Logs every step of the drivetrain's PIDs,
- * the odometry pose, the volts the drivetrain commanded, the battery, a custom
- * channel recorded from driver control, and event markers — one file per
- * program run, for tuning off the robot. docs/TELEMETRY_FORMAT.md is the file
- * format (and what each column means for tuning); tools/telemetry/slt_read.py
- * reads it on a computer.
+ * the odometry pose, the volts the drivetrain commanded, every motor's health,
+ * the battery, a custom channel recorded from driver control, and event
+ * markers — one file per program run, for tuning and troubleshooting off the
+ * robot. docs/TELEMETRY_FORMAT.md is the file format (and what each column
+ * means for tuning); open the files in tools/analyzer/index.html to see what
+ * went wrong in a match, replay it, and tune from it, or read them with
+ * tools/telemetry/slt_read.py.
  *
  * Needs a FAT32 microSD card with an `sl` folder at its root. The V5 can't
  * create folders, so make it on a computer once; without it, files land in
@@ -129,6 +131,19 @@ void initialize() {
         values[0] = pros::battery::get_voltage() / 1000.0;
         values[1] = pros::battery::get_capacity();
     });
+
+    // Each motor's volts, current, temperature, speed, efficiency and fault
+    // bits, every 100ms: how a motor that overheated (V5 motors cut their own
+    // current as they heat, and say so nowhere else), stalled, or came
+    // unplugged mid-match shows up in the log. The analyzer finds motor
+    // channels by these columns, so any names work.
+    log.motor("motor.l1", 1);
+    log.motor("motor.l2", -2);
+    log.motor("motor.l3", 3);
+    log.motor("motor.r1", -4);
+    log.motor("motor.r2", 5);
+    log.motor("motor.r3", -6);
+    log.motor("motor.intake", 12);
 
     // A channel of your own, recorded wherever the values are computed.
     intakeLog = &log.channel("intake", {"volts", "rpm"});

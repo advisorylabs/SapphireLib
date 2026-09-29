@@ -21,8 +21,9 @@ change that breaks one shows up at once. Run it after changing any public header
   routine that drives to field points with `setOdometry()` + `moveToPoint(x, y)`.
 - [`telemetry.cpp`](telemetry.cpp) — Phase 4: SD-card logging with `telemetry::Logger` on a tank
   chassis with one vertical tracking wheel: the drivetrain's PIDs, the pose, the commanded axis volts,
-  the battery, a channel of your own, event markers, and the `SD:` status line on `HomePage`. See
-  [`docs/TELEMETRY_FORMAT.md`](../docs/TELEMETRY_FORMAT.md) for what lands in the file.
+  every motor's health, the battery, a channel of your own, event markers, and the `SD:` status line
+  on `HomePage`. See [`docs/TELEMETRY_FORMAT.md`](../docs/TELEMETRY_FORMAT.md) for what lands in the
+  file, and [`tools/analyzer/`](../tools/analyzer/) for reading it.
 - [`macros.cpp`](macros.cpp) — Phase 5: a small driver macro system for a hypothetical robot — an arm
   with cosine gravity feedforward on its own task, a clamp piston, an intake roller with anti-jam,
   preset levels, and a score `Sequence` that also runs from autonomous. It's the complete example

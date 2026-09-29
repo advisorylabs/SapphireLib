@@ -11,13 +11,14 @@ going.
 3. Format what you change with `clang-format` (`.clang-format` is in the repo root and matches the
    house style below). New files: `clang-format -i <file>`. Existing files: format only the lines you
    touched (`git clang-format` does exactly that) until they get their one-time format pass, so your
-   diff stays about your change. `tuning/` is left out of that pass until model-based Auto-Tune lands.
+   diff stays about your change.
 4. Build from the PROS toolchain, never a bare `make` from a shell with another ARM GCC on `PATH` (see
    `docs/SETUP.md` step 4 for why). If you changed a public header, also run `make check-examples`.
 5. Open a PR into `master`. CI must pass before merge: the build, the host-side unit tests, the
-   telemetry reader's self-test, and the formatting check. (Until the one-time format pass, the
-   formatting check also fails on older files nobody touched; make sure none of its complaints are
-   about lines you wrote.)
+   telemetry reader's self-test, the telemetry analyzer's tests
+   (`node --test tools/analyzer/test/*.test.js`), and the formatting check. (Until the one-time
+   format pass, the formatting check also fails on older files nobody touched; make sure none of its
+   complaints are about lines you wrote.)
 6. At least one other team member should review before merging — two sets of eyes catches a lot before
    it hits a competition robot.
 
