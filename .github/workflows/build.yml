@@ -88,10 +88,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: node --test tools/analyzer/test/*.test.js
 
-      # Still fails on files written before .clang-format was fixed to match
-      # the house style, until they get their one-time format pass. (tuning/
-      # had its pass when model-based Auto-Tune landed, and is checked like
-      # everything else now.)
+      # The whole library has had its one-time format pass, so this should stay
+      # green: run clang-format on what you change.
       - name: Check formatting
         if: ${{ !cancelled() }}
         run: |

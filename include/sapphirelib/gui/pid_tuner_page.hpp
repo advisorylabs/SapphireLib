@@ -53,8 +53,7 @@ public:
      * @param onMeasured receives each successful measurement on the tuning task, e.g. to install it
      * with HolonomicDrivetrain::setAxisModels(). nullptr by default
      */
-    void addAxis(std::string name,
-                 std::function<tuning::CharacterizationConfig()> buildExperiment,
+    void addAxis(std::string name, std::function<tuning::CharacterizationConfig()> buildExperiment,
                  std::function<void(const tuning::AxisCharacterization&)> onMeasured = nullptr);
 
     /**

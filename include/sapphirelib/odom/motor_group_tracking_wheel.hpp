@@ -27,7 +27,7 @@ public:
      * @param externalGearRatio motor rotations per wheel rotation. 1 by default
      */
     MotorGroupTrackingWheel(chassis::MotorGroup& motors, double wheelDiameterIn,
-                             double externalGearRatio = 1.0);
+                            double externalGearRatio = 1.0);
 
     double getDistanceIn() const override;
     void reset() override;

@@ -51,6 +51,6 @@ struct LookaheadResult {
  * @return LookaheadResult the lookahead point and its segment
  */
 LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, double lookaheadIn,
-                                    std::size_t fromIndex);
+                                   std::size_t fromIndex);
 
 } // namespace sapphirelib::motion

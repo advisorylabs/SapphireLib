@@ -55,13 +55,9 @@ void MotorGroup::moveVelocity(double rpm) {
     motors_.move_velocity(static_cast<std::int32_t>(rpm));
 }
 
-void MotorGroup::brake() {
-    motors_.brake();
-}
+void MotorGroup::brake() { motors_.brake(); }
 
-void MotorGroup::setBrakeMode(BrakeMode mode) {
-    motors_.set_brake_mode_all(toProsBrakeMode(mode));
-}
+void MotorGroup::setBrakeMode(BrakeMode mode) { motors_.set_brake_mode_all(toProsBrakeMode(mode)); }
 
 void MotorGroup::tarePosition() {
     motors_.tare_position_all();
@@ -89,9 +85,7 @@ double MotorGroup::getTemperatureC() const {
     return hottest;
 }
 
-Gearset MotorGroup::gearset() const {
-    return gearset_;
-}
+Gearset MotorGroup::gearset() const { return gearset_; }
 
 double MotorGroup::maxRPM() const {
     switch (gearset_) {

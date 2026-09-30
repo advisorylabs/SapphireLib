@@ -54,16 +54,12 @@ motion::MotionResult abortMotion(const char* kind, const char* why) {
 } // namespace
 
 TankDrivetrain::TankDrivetrain(std::initializer_list<std::int8_t> leftPorts,
-                                std::initializer_list<std::int8_t> rightPorts, Gearset gearset,
-                                std::uint8_t imuPort, DrivetrainConfig config,
-                                PID::Config drivePIDConfig, PID::Config turnPIDConfig,
-                                double imuHeadingScale)
-    : left_(leftPorts, gearset),
-      right_(rightPorts, gearset),
-      imu_(imuPort, imuHeadingScale),
-      config_(config),
-      drivePID_(drivePIDConfig),
-      turnPID_(turnPIDConfig) {}
+                               std::initializer_list<std::int8_t> rightPorts, Gearset gearset,
+                               std::uint8_t imuPort, DrivetrainConfig config,
+                               PID::Config drivePIDConfig, PID::Config turnPIDConfig,
+                               double imuHeadingScale)
+    : left_(leftPorts, gearset), right_(rightPorts, gearset), imu_(imuPort, imuHeadingScale),
+      config_(config), drivePID_(drivePIDConfig), turnPID_(turnPIDConfig) {}
 
 sensors::Imu& TankDrivetrain::imu() { return imu_; }
 
@@ -74,9 +70,8 @@ PID& TankDrivetrain::turnPID() { return turnPID_; }
 void TankDrivetrain::setOdometry(const odom::Odometry* odometry) { odometry_ = odometry; }
 
 AxisVolts TankDrivetrain::appliedAxisVolts() const {
-    return AxisVolts{.forward = appliedForwardVolts_.load(),
-                     .strafe = 0.0,
-                     .turn = appliedTurnVolts_.load()};
+    return AxisVolts{
+        .forward = appliedForwardVolts_.load(), .strafe = 0.0, .turn = appliedTurnVolts_.load()};
 }
 
 void TankDrivetrain::setSideVoltages(double leftVolts, double rightVolts) {
@@ -278,7 +273,8 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
 
         setSideVoltages(forwardOutput + turnOutput, forwardOutput - turnOutput);
 
-        const double headingErrorToFinalDeg = std::fabs(wrapDegrees180(headingDeg - pose.headingDeg));
+        const double headingErrorToFinalDeg =
+            std::fabs(wrapDegrees180(headingDeg - pose.headingDeg));
         const bool withinThreshold = distanceToTargetIn <= exit.positionErrorThresholdIn &&
                                      headingErrorToFinalDeg <= exit.headingErrorThresholdDeg;
         finalErrorIn = distanceToTargetIn;
@@ -319,7 +315,8 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
-        const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
+        const double distToFinalIn =
+            std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
         if (distToFinalIn <= config.finalApproachIn) break;
 
         // check the timeout after the distance, so reaching the final approach on the same tick

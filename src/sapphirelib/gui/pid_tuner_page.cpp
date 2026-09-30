@@ -99,15 +99,20 @@ void PidTunerPage::build(lv_obj_t* container) {
 
     kiLabel_ = lv_label_create(container_);
     lv_obj_set_pos(kiLabel_, 4, kRowY0 + kRowHeight + 5);
-    makeIconButton(container_, kBtnMinusX, kRowY0 + kRowHeight, "-", &PidTunerPage::kiMinusClicked, this);
-    makeIconButton(container_, kBtnPlusX, kRowY0 + kRowHeight, "+", &PidTunerPage::kiPlusClicked, this);
+    makeIconButton(container_, kBtnMinusX, kRowY0 + kRowHeight, "-", &PidTunerPage::kiMinusClicked,
+                   this);
+    makeIconButton(container_, kBtnPlusX, kRowY0 + kRowHeight, "+", &PidTunerPage::kiPlusClicked,
+                   this);
 
     kdLabel_ = lv_label_create(container_);
     lv_obj_set_pos(kdLabel_, 4, kRowY0 + 2 * kRowHeight + 5);
-    makeIconButton(container_, kBtnMinusX, kRowY0 + 2 * kRowHeight, "-", &PidTunerPage::kdMinusClicked, this);
-    makeIconButton(container_, kBtnPlusX, kRowY0 + 2 * kRowHeight, "+", &PidTunerPage::kdPlusClicked, this);
+    makeIconButton(container_, kBtnMinusX, kRowY0 + 2 * kRowHeight, "-",
+                   &PidTunerPage::kdMinusClicked, this);
+    makeIconButton(container_, kBtnPlusX, kRowY0 + 2 * kRowHeight, "+",
+                   &PidTunerPage::kdPlusClicked, this);
 
-    makeTextButton(container_, 4, kActionRowY, 100, "Run Test", &PidTunerPage::runTestClicked, this);
+    makeTextButton(container_, 4, kActionRowY, 100, "Run Test", &PidTunerPage::runTestClicked,
+                   this);
     makeTextButton(container_, 110, kActionRowY, 110, "Auto-Tune", &PidTunerPage::autoTuneClicked,
                    this, &autoTuneLabel_);
 
@@ -185,7 +190,8 @@ void PidTunerPage::addSelectorButton(Entry& entry, std::size_t row) {
     lv_label_set_text(label, entry.name.c_str());
     lv_obj_center(label);
     styleSelectorButton(entry.selectorButton);
-    lv_obj_add_event_cb(entry.selectorButton, &PidTunerPage::selectorClicked, LV_EVENT_CLICKED, this);
+    lv_obj_add_event_cb(entry.selectorButton, &PidTunerPage::selectorClicked, LV_EVENT_CLICKED,
+                        this);
 }
 
 void PidTunerPage::select(std::size_t index) {
@@ -195,7 +201,8 @@ void PidTunerPage::select(std::size_t index) {
         if (entry->selectorButton) lv_obj_remove_state(entry->selectorButton, LV_STATE_CHECKED);
     }
     selectedIndex_ = index;
-    if (entries_[index]->selectorButton) lv_obj_add_state(entries_[index]->selectorButton, LV_STATE_CHECKED);
+    if (entries_[index]->selectorButton)
+        lv_obj_add_state(entries_[index]->selectorButton, LV_STATE_CHECKED);
 
     setDisplayedGains(entries_[index]->pid->gains());
     readoutDirty_.store(true);

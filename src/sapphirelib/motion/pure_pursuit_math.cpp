@@ -28,7 +28,7 @@ LocalOffset toLocalFrame(double dxIn, double dyIn, double headingDeg) {
 }
 
 LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, double lookaheadIn,
-                                    std::size_t fromIndex) {
+                                   std::size_t fromIndex) {
     const std::vector<Waypoint>& points = path.waypoints();
     const Vec2 center{xIn, yIn};
 

@@ -42,8 +42,8 @@ void HomePage::update() {
     setLabelText(batteryLabel_, buf);
 
     const char* stateText = pros::competition::is_autonomous() ? "Autonomous"
-                             : pros::competition::is_disabled() ? "Disabled"
-                                                                 : "Driver Control";
+                            : pros::competition::is_disabled() ? "Disabled"
+                                                               : "Driver Control";
     std::snprintf(buf, sizeof(buf), "%s%s", stateText,
                   pros::competition::is_connected() ? " (field connected)" : "");
     setLabelText(statusLabel_, buf);

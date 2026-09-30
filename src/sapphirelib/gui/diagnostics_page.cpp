@@ -86,8 +86,8 @@ void DiagnosticsPage::update() {
         // restyling a label redraws it like retexting does, so only recolor when the verdict flips
         if (row.ok != result.ok) {
             row.ok = result.ok;
-            lv_obj_set_style_text_color(row.label,
-                                        lv_color_hex(result.ok ? kOkColor : kFailColor), 0);
+            lv_obj_set_style_text_color(row.label, lv_color_hex(result.ok ? kOkColor : kFailColor),
+                                        0);
         }
         setLabelText(row.label, buf);
     }

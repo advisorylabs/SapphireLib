@@ -51,8 +51,8 @@ double PID::update(double target, double measurement, double dtS) {
     if (config_.outputLimit > 0.0 && integralDelta != 0.0 &&
         std::fabs(output) > config_.outputLimit && (output > 0.0) == (integralDelta > 0.0)) {
         integral_ -= integralDelta;
-        output = config_.gains.kP * error + config_.gains.kI * integral_ +
-                 config_.gains.kD * derivative;
+        output =
+            config_.gains.kP * error + config_.gains.kI * integral_ + config_.gains.kD * derivative;
         flags |= PidStep::kIntegralHeld;
     }
 
@@ -104,28 +104,16 @@ void PID::reset() {
     if (hadState && observer_ != nullptr) observer_->onPidReset(*this);
 }
 
-void PID::setGains(PIDGains gains) {
-    config_.gains = gains;
-}
+void PID::setGains(PIDGains gains) { config_.gains = gains; }
 
-const PIDGains& PID::gains() const {
-    return config_.gains;
-}
+const PIDGains& PID::gains() const { return config_.gains; }
 
-const PID::Config& PID::config() const {
-    return config_;
-}
+const PID::Config& PID::config() const { return config_; }
 
-const PidStep& PID::lastStep() const {
-    return lastStep_;
-}
+const PidStep& PID::lastStep() const { return lastStep_; }
 
-void PID::setObserver(PidObserver* observer) {
-    observer_ = observer;
-}
+void PID::setObserver(PidObserver* observer) { observer_ = observer; }
 
-PidObserver* PID::observer() const {
-    return observer_;
-}
+PidObserver* PID::observer() const { return observer_; }
 
 } // namespace sapphirelib

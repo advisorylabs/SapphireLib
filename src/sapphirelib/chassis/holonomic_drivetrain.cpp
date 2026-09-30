@@ -67,21 +67,15 @@ motion::MotionResult abortMotion(const char* kind, const char* why) {
 } // namespace
 
 HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t frontRightPort,
-                                          std::int8_t backLeftPort, std::int8_t backRightPort,
-                                          Gearset gearset, std::uint8_t imuPort,
-                                          DrivetrainConfig config, PID::Config drivePIDConfig,
-                                          PID::Config turnPIDConfig, double imuHeadingScale,
-                                          std::optional<AsteriskConfig> asterisk)
-    : frontLeft_({frontLeftPort}, gearset),
-      frontRight_({frontRightPort}, gearset),
-      backLeft_({backLeftPort}, gearset),
-      backRight_({backRightPort}, gearset),
-      imu_(imuPort, imuHeadingScale),
-      config_(config),
-      drivePID_(drivePIDConfig),
-      turnPID_(turnPIDConfig),
-      headingHoldPID_(turnPIDConfig),
-      asterisk_(asterisk) {
+                                         std::int8_t backLeftPort, std::int8_t backRightPort,
+                                         Gearset gearset, std::uint8_t imuPort,
+                                         DrivetrainConfig config, PID::Config drivePIDConfig,
+                                         PID::Config turnPIDConfig, double imuHeadingScale,
+                                         std::optional<AsteriskConfig> asterisk)
+    : frontLeft_({frontLeftPort}, gearset), frontRight_({frontRightPort}, gearset),
+      backLeft_({backLeftPort}, gearset), backRight_({backRightPort}, gearset),
+      imu_(imuPort, imuHeadingScale), config_(config), drivePID_(drivePIDConfig),
+      turnPID_(turnPIDConfig), headingHoldPID_(turnPIDConfig), asterisk_(asterisk) {
     if (asterisk_) {
         const std::initializer_list<std::int8_t> middleLeftPorts{asterisk_->middleLeftPort};
         const std::initializer_list<std::int8_t> middleRightPorts{asterisk_->middleRightPort};
@@ -109,7 +103,9 @@ void HolonomicDrivetrain::setDriverInputMode(DriverInputMode mode) { driverInput
 
 DriverInputMode HolonomicDrivetrain::driverInputMode() const { return driverInputMode_.load(); }
 
-void HolonomicDrivetrain::setAxisModels(HolonomicAxisModels models) { *axisModels_.lock() = models; }
+void HolonomicDrivetrain::setAxisModels(HolonomicAxisModels models) {
+    *axisModels_.lock() = models;
+}
 
 HolonomicAxisModels HolonomicDrivetrain::axisModels() const { return *axisModels_.lock(); }
 
@@ -169,7 +165,7 @@ void HolonomicDrivetrain::refreshThermalFractions() {
 }
 
 void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, double backLeft,
-                                            double backRight) {
+                                           double backRight) {
     frontLeft_.moveVoltage(frontLeft);
     frontRight_.moveVoltage(frontRight);
     backLeft_.moveVoltage(backLeft);
@@ -237,7 +233,8 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
     middleRight_->moveVoltage(rightVolts);
 }
 
-void HolonomicDrivetrain::holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts) {
+void HolonomicDrivetrain::holonomicVolts(double forwardVolts, double strafeVolts,
+                                         double turnVolts) {
     const WheelMix mix = mixHolonomic(forwardVolts, strafeVolts, turnVolts);
 
     // scale the whole mix down (never up) so no wheel goes past 12V, keeping the direction
@@ -275,8 +272,7 @@ double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
     // rotation frame, like heldHeadingDeg_
     const double currentHeadingDeg = rotationHeadingDeg();
     const double dtS = (now - lastHeadingHoldMs_) / 1000.0;
-    const bool resuming =
-        lastHeadingHoldMs_ == 0 || !(dtS > 0.0) || dtS > kHeadingHoldResumeGapS;
+    const bool resuming = lastHeadingHoldMs_ == 0 || !(dtS > 0.0) || dtS > kHeadingHoldResumeGapS;
     lastHeadingHoldMs_ = now;
 
     if (resuming) {
@@ -302,7 +298,7 @@ void HolonomicDrivetrain::holonomicHeadingHold(double throttle, double strafe, d
 }
 
 void HolonomicDrivetrain::holonomicFieldCentricHeadingHold(double throttle, double strafe,
-                                                            double turnInput) {
+                                                           double turnInput) {
     fieldToRobot(throttle, strafe);
     holonomicHeadingHold(throttle, strafe, turnInput);
 }
@@ -351,8 +347,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn,
                         moveToPointHolding(xIn, yIn, holdHeadingDeg, odometry, exit));
 }
 
-motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn,
-                                                      ExitConditions exit) {
+motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn, ExitConditions exit) {
     if (odometry_ == nullptr) return abortMotion("moveToPoint", kNoOdometry);
     return moveToPoint(xIn, yIn, *odometry_, exit);
 }
@@ -468,7 +463,8 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
-        const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
+        const double distToFinalIn =
+            std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
         if (distToFinalIn <= config.finalApproachIn) break;
 
         // check the timeout after the distance, so reaching the final approach on the same tick
@@ -500,8 +496,8 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
     }
 
     // keep holding the path's starting heading through the final approach
-    motion::MotionResult result = moveToPointHolding(finalPoint.xIn, finalPoint.yIn,
-                                                     holdHeadingDeg, odometry, config.finalExit);
+    motion::MotionResult result = moveToPointHolding(finalPoint.xIn, finalPoint.yIn, holdHeadingDeg,
+                                                     odometry, config.finalExit);
     // the final approach decides how the path ended, but the time covers the whole path
     result.elapsedMs = pros::millis() - startMs;
     return finishMotion("followPath", result);
