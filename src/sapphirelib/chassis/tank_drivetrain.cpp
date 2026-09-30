@@ -317,7 +317,11 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
         const odom::Pose pose = odometry.getPose();
         const double distToFinalIn =
             std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
-        if (distToFinalIn <= config.finalApproachIn) break;
+        // near the end and on the last segment, so a lap that ends where it started still runs
+        if (motion::reachedFinalApproach(distToFinalIn, config.finalApproachIn, segmentIndex,
+                                         path.waypoints().size())) {
+            break;
+        }
 
         // check the timeout after the distance, so reaching the final approach on the same tick
         // still gets the settled stop

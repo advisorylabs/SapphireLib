@@ -69,4 +69,13 @@ LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, dou
     return LookaheadResult{bestPoint, bestIndex};
 }
 
+bool reachedFinalApproach(double distanceToFinalIn, double finalApproachIn,
+                          std::size_t segmentIndex, std::size_t waypointCount) {
+    // the last segment runs from waypoint count - 2 to count - 1; findLookaheadPoint() reports
+    // count - 1 once the whole rest of the path is within the lookahead. Written as a sum so a
+    // one-waypoint path (no segments at all) counts as already there
+    const bool onLastSegment = segmentIndex + 2 >= waypointCount;
+    return onLastSegment && distanceToFinalIn <= finalApproachIn;
+}
+
 } // namespace sapphirelib::motion

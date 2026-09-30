@@ -320,7 +320,7 @@ public:
      *
      * Chases a point lookaheadIn ahead on the path at a constant voltage, then switches to
      * moveToPoint() for the last waypoint so it slows down and settles there. Holds the starting
-     * heading the whole way
+     * heading the whole way. The path may end where it starts, for a lap
      *
      * @param path the waypoints to follow
      * @param odometry where to read the pose from
