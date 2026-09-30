@@ -21,10 +21,39 @@ jobs:
       - name: Install PROS CLI
         run: pip install pros-cli
 
-      - name: Pull PROS kernel + build
+      # The kernel template (headers, libpros.a, linker scripts, common.mk) and
+      # project.pros are committed, so there's no project to create. The build
+      # needs two things that aren't in the repo: the ARM GCC that PROS ships
+      # (see docs/SETUP.md) and firmware/liblvgl.a, which `firmware/*.a` in
+      # .gitignore keeps out.
+      - name: Cache ARM toolchain
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/arm-gnu-toolchain
+          key: arm-gnu-toolchain-14.3.rel1-x86_64
+
+      - name: Install ARM toolchain
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
         run: |
-          pros conduct new . --no-default-libs --force
-          pros make
+          mkdir -p ~/arm-gnu-toolchain
+          curl -fsSL https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz \
+            | tar -xJ -C ~/arm-gnu-toolchain --strip-components=1
+
+      - name: Fetch liblvgl.a
+        run: |
+          pros conduct apply liblvgl@9.2.0 --force-apply --force
+          # apply also rewrites the template's headers and project.pros; put
+          # back what's committed so CI builds the repo plus only the archive
+          git checkout -- .
+          test -f firmware/liblvgl.a
+
+      - name: Build
+        run: |
+          export PATH="$HOME/arm-gnu-toolchain/bin:$PATH"
+          arm-none-eabi-g++ -dumpfullversion
+          make -j"$(nproc)"
+          make check-examples
 
       # The checks below each run even if an earlier step failed
       # (`!cancelled()`), so one red step can't hide the others' results: a
