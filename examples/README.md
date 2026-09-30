@@ -24,6 +24,11 @@ change that breaks one shows up at once. Run it after changing any public header
   every motor's health, the battery, a channel of your own, event markers, and the `SD:` status line
   on `HomePage`. See [`docs/TELEMETRY_FORMAT.md`](../docs/TELEMETRY_FORMAT.md) for what lands in the
   file, and [`tools/analyzer/`](../tools/analyzer/) for reading it.
+- [`localization.cpp`](localization.cpp): Monte Carlo localization on a holonomic chassis with two
+  tracking wheels and four distance sensors, one per side: building a `MonteCarloLocalizer` on the
+  odometry, the `setPose()` every autonomous starts with, the localizer's status on the controller
+  screen, and turning correction off and on to compare. See
+  [`docs/LOCALIZATION.md`](../docs/LOCALIZATION.md), and try it first in [`tools/sim/`](../tools/sim/).
 - [`macros.cpp`](macros.cpp) (Phase 5): a small driver macro system for a hypothetical robot, an arm
   with cosine gravity feedforward on its own task, a clamp piston, an intake roller with anti-jam,
   preset levels, and a score `Sequence` that also runs from autonomous. It's the complete example

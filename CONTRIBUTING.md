@@ -16,8 +16,9 @@ going.
 4. Build from the PROS toolchain, never a bare `make` from a shell with another ARM GCC on `PATH` (see
    `docs/SETUP.md` step 4 for why). If you changed a public header, also run `make check-examples`.
 5. Open a PR into `master`. CI must pass before merge: the build, the host-side unit tests, the
-   telemetry reader's self-test, the telemetry analyzer's tests
-   (`node --test tools/analyzer/test/*.test.js`), and the library's formatting check.
+   telemetry reader's self-test, the telemetry analyzer's and the simulator's tests
+   (`node --test tools/analyzer/test/*.test.js`, `node --test tools/sim/test/*.test.js`), and the
+   library's formatting check.
 6. At least one other team member should review before merging: two sets of eyes catches a lot before
    it hits a competition robot.
 
@@ -66,6 +67,12 @@ own; if a test needs more than its own module's `.cpp`, add a `case` entry for i
 `.github/workflows/build.yml` to match that build line. When you change behavior that a test pins
 down, keep a copy of the old logic in the test and check the new code against it, the way
 `tests/mechanism/position_control_test.cpp` does for the lift.
+
+Some pure modules have JavaScript ports the browser tools run: `tuning/`, `control/pid.cpp` and
+`mechanism/position_control.cpp` in the analyzer (`tools/analyzer/js/model.js`), and `localization/`,
+`util/random.hpp`, `odom/odometry_math.cpp`, `Odometry`, `MonteCarloLocalizer` and the holonomic
+motions in the simulator (`tools/sim/js/`). Change the C++, change the port: both sides' tests share
+golden values, so CI catches a port that no longer matches.
 
 Anything that touches `pros::` types is tested on-bot. When you open a PR touching motion/control
 code, note in the PR description:
