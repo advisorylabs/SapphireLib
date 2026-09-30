@@ -6,7 +6,7 @@
  * screen, autons, tuning, telemetry, driver control, and the intake/claw/lift
  * macros).
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "main.h"
@@ -27,7 +27,7 @@ void initialize() {
     sapphirelib::initialize();
 
     // The GUI shell first, ahead of any hardware, so the branded header is
-    // on the screen even if a device below blocks or faults — see screen().
+    // on the screen even if a device below blocks or faults, see screen().
     robot::screen();
     SAPPHIRELIB_LOG_INFO("init", "GUI shell created");
 
@@ -112,11 +112,11 @@ void opcontrol() {
 
         // Skip driving from the sticks while a GUI routine (the Odom page's
         // offset calibration, or a PID tuner test or Auto-Tune run) is
-        // driving the chassis on its own — see robot::screenBusy().
+        // driving the chassis on its own, see robot::screenBusy().
         if (!robot::screenBusy()) robot::drive(controller);
 
         // A resets field-centric "forward"; B+DOWN runs the selected auton,
-        // off the field only. Every tick, busy or not — see shortcuts().
+        // off the field only. Every tick, busy or not, see shortcuts().
         robot::shortcuts(controller);
 
         pros::delay(robot::kDriverLoopMs);

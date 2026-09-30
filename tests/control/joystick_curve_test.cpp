@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::curveJoystick and applyDeadband — no
+// Host-side unit test for sapphirelib::curveJoystick and applyDeadband, no
 // PROS/embedded dependencies, so it builds and runs with a normal desktop
 // compiler.
 //

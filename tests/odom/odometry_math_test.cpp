@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::odom::computeOdometryDelta and
-// calibrateTrackingWheelOffsetIn — no PROS/embedded dependencies, so it
+// calibrateTrackingWheelOffsetIn, no PROS/embedded dependencies, so it
 // builds and runs with a normal desktop compiler.
 //
 // Build & run:
@@ -65,7 +65,7 @@ void testPureRotationDoesNotDriftWithCorrectOffset() {
 
 void testHeadingWrapAcrossSeam() {
     // Heading crossing the 0/360 seam (355 -> 5) is a +10 degree turn, not
-    // -350 — this should behave identically to the small-turn case above,
+    // -350; this should behave identically to the small-turn case above,
     // not send the average heading off to ~180.
     const auto delta = computeOdometryDelta(/*lastHeadingDeg=*/355.0, /*headingDeg=*/5.0,
                                              /*verticalDeltaIn=*/10.0, /*horizontalDeltaIn=*/0.0,
@@ -79,7 +79,7 @@ void testReframingRotatesTheDeltaButIsNotATurn() {
     // Odometry::update() re-expresses the previous heading in the current
     // heading frame (rotation + offset) so that a setPose() between updates
     // shifts both endpoints by the same amount. That has to be exactly a
-    // rotation of the field-frame delta — with no change to how much the
+    // rotation of the field-frame delta, with no change to how much the
     // robot is considered to have turned, or the tracking-wheel arc
     // correction would fire for a turn that never happened.
     const double offsets[] = {0.0, 90.0, -90.0, 180.0, 233.7, -721.0};
@@ -96,7 +96,7 @@ void testReframingRotatesTheDeltaButIsNotATurn() {
             const double expectedDy = -base.dxIn * std::sin(rad) + base.dyIn * std::cos(rad);
             expectNear(shifted.dxIn, expectedDx, "re-framed delta: dx");
             expectNear(shifted.dyIn, expectedDy, "re-framed delta: dy");
-            // Same distance traveled — the arc correction saw the same turn.
+            // Same distance traveled, the arc correction saw the same turn.
             expectNear(std::hypot(shifted.dxIn, shifted.dyIn), std::hypot(base.dxIn, base.dyIn),
                        "re-framed delta: length");
         }

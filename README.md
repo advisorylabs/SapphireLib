@@ -22,27 +22,27 @@ PID tuning is still per-robot work you'll do after pulling it in. See
 
 ## What's in the box
 
-- **Chassis** — `TankDrivetrain` and `HolonomicDrivetrain` (mecanum/X-drive, with optional "Asterisk"
+- **Chassis**: `TankDrivetrain` and `HolonomicDrivetrain` (mecanum/X-drive, with optional "Asterisk"
   center wheels): `driveDistance()`/`turnToHeading()`, arcade/tank/holonomic driver control,
   field-centric and heading-hold modes, and `curveJoystick()`/`applyDeadband()` stick shaping.
-- **Odometry** — `odom::Odometry` on a background task, for any of the four sensor configurations below.
-- **Motion** — `moveToPoint()`, `moveToPose()` (boomerang on tank), and pure-pursuit `followPath()` on
+- **Odometry**: `odom::Odometry` on a background task, for any of the four sensor configurations below.
+- **Motion**: `moveToPoint()`, `moveToPose()` (boomerang on tank), and pure-pursuit `followPath()` on
   both drivetrains, plus `MotionQueue`. Every blocking motion returns a `MotionResult`, so a routine
   can tell a motion that settled from one that timed out against something.
-- **GUI** — a tab-based brain-screen UI: home/status, autonomous selector, live odometry, sensor
+- **GUI**: a tab-based brain-screen UI with home/status, autonomous selector, live odometry, sensor
   diagnostics, and a PID tuner. Opt-in, and your own pages plug into the same `addPage()`.
-- **Tuning** — manual PID tuning from the brain screen, and Auto-Tune: it measures each drive axis's
-  model — or a lift's or arm's, gravity included — and places every controller's poles from it. Also
+- **Tuning**: manual PID tuning from the brain screen, and Auto-Tune, which measures each drive axis's
+  model (or a lift's or arm's, gravity included) and places every controller's poles from it. Also
   IMU heading-scale calibration.
-- **Macros & mechanisms** — `input::Controller` (button edges, hold times, combos, a throttled
+- **Macros & mechanisms**: `input::Controller` (button edges, hold times, combos, a throttled
   controller screen), `PositionMechanism` (lifts and arms: PID plus gravity feedforward, on your loop
   or its own task), `Piston`, `Roller` with anti-jam, `PresetLadder`, `Sequence`, and `waitUntil()`.
   See the guide, [`docs/MACROS.md`](docs/MACROS.md).
-- **Telemetry** — `telemetry::Logger` records PID steps, pose, motor health (temperature, current,
+- **Telemetry**: `telemetry::Logger` records PID steps, pose, motor health (temperature, current,
   derating, disconnects), your own channels, and events to the SD card, one file per program run,
   without ever blocking the code it records. Format:
   [`docs/TELEMETRY_FORMAT.md`](docs/TELEMETRY_FORMAT.md); reader: `tools/telemetry/slt_read.py`.
-- **Telemetry analyzer** — [`tools/analyzer/`](tools/analyzer/): open `index.html` in a browser (no
+- **Telemetry analyzer** ([`tools/analyzer/`](tools/analyzer/)): open `index.html` in a browser (no
   install, works offline) and drop the SD card's logs on it. It lists what went wrong in a match
   (overheating, derating, disconnects, stalls, battery sag, timed-out motions), replays the match on a
   small field-and-lift view next to synced charts, and tunes controllers from the log: it refits
@@ -151,8 +151,8 @@ Library headers and sources mirror each other by module: `chassis/`, `control/`,
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
 
 ## Team
 
-Team 96671H — Hitmen
+Team 96671H: Hitmen

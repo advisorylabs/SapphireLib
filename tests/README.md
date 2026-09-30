@@ -2,7 +2,7 @@
 
 Host-side unit tests for the parts of SapphireLib that have no PROS/embedded dependency (pure math:
 `sapphirelib::PID`, `sapphirelib::curveJoystick`, ...). These build and run with a normal desktop
-compiler — no PROS CLI or ARM toolchain needed — and run in CI on every push (see
+compiler, no PROS CLI or ARM toolchain needed, and run in CI on every push (see
 `.github/workflows/build.yml`).
 
 Chassis/odometry code that touches `pros::` types isn't unit-testable this way; that gets validated

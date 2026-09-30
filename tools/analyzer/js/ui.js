@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — ui.js
+ * SapphireLib telemetry analyzer: ui.js
  *
  * Small DOM helpers shared by the views. Text always goes in through
  * textContent: channel names, event messages and file names all come from a
@@ -7,7 +7,7 @@
  *
  * Browser only: window.SA.ui.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function () {
   'use strict';
@@ -108,14 +108,14 @@
   }
 
   function fmt(value, digits = 2) {
-    if (value === null || value === undefined || Number.isNaN(value)) return '—';
+    if (value === null || value === undefined || Number.isNaN(value)) return '-';
     if (!Number.isFinite(value)) return value > 0 ? '∞' : '−∞';
     return value.toFixed(digits);
   }
 
   /** Significant-figure formatting for gains and model constants. */
   function sig(value, digits = 3) {
-    if (value === null || value === undefined || Number.isNaN(value)) return '—';
+    if (value === null || value === undefined || Number.isNaN(value)) return '-';
     if (!Number.isFinite(value)) return '∞';
     if (value === 0) return '0';
     const abs = Math.abs(value);

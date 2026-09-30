@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::input::ControllerScreen — no
+// Host-side unit test for sapphirelib::input::ControllerScreen, no
 // PROS/embedded dependencies, so it builds and runs with a normal desktop
 // compiler.
 //
@@ -149,7 +149,7 @@ struct PortedController {
 
 /// One line's content: which of the robot's line formats, and its values.
 /// Every format here yields a non-empty line, as every robot_macros line
-/// does — the one place the port differs is an *empty* line after a restart
+/// does, the one place the port differs is an *empty* line after a restart
 /// (see testInvalidateResendsEmptyLines).
 struct LineSpec {
     int kind = 0;

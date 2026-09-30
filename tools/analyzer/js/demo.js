@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — demo.js
+ * SapphireLib telemetry analyzer: demo.js
  *
  * Builds realistic SLT v1 logs by simulating the robot, for trying the
  * analyzer without a robot and as its test fixture. Nothing here is recorded
@@ -22,7 +22,7 @@
  *
  * Plain script: window.SA.demo in a browser, require('./demo.js') in Node.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {

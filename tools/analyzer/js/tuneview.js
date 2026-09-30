@@ -1,9 +1,9 @@
 /*
- * SapphireLib telemetry analyzer — tuneview.js
+ * SapphireLib telemetry analyzer: tuneview.js
  *
  * The Tune tab: tuning from a log. The analyzer can't drive the robot, so it
- * works from what the robot already recorded — Auto-Tune's characterization
- * runs (char.* channels), or ordinary driving in a match — and does the rest
+ * works from what the robot already recorded (Auto-Tune's characterization
+ * runs in char.* channels, or ordinary driving in a match) and does the rest
  * the way the robot would (tuning.js, with model.js's ports of the robot's
  * math): fit the model, design each controller, replay the log's real targets
  * through the model with the gains the robot had and with the new ones, and
@@ -11,7 +11,7 @@
  *
  * Browser only: SA.views.tune.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function () {
   'use strict';
@@ -51,7 +51,7 @@
         h('h3', null, 'Tuning from a log'),
         h('p', null, 'The analyzer can\'t drive the robot, and doesn\'t need to: a log already holds what ' +
           'Auto-Tune measures. Its characterization runs (the PID page\'s Auto-Tune, logged as char.*) are ' +
-          'refit here with the robot\'s own math, and ordinary match driving works too — the volts every ' +
+          'refit here with the robot\'s own math, and ordinary match driving works too: the volts every ' +
           'system was sent, next to where it went. From the model, each controller is designed the way the ' +
           'robot designs it, then judged by replaying this log\'s real targets through the model: with the ' +
           'gains the robot had, and with the new ones. Copy the C++, flash, and the next log shows whether ' +
@@ -135,7 +135,7 @@
           if (!system.controllers.length) {
             right.append(h('section', { class: 'panel' }, h('p', { class: 'muted' },
               'No controller in this log runs on this axis (Strafe has none on this robot), so there\'s ' +
-              'nothing to design — but the model is used by the driver stick mode; see the code below.')));
+              'nothing to design, but the model is used by the driver stick mode; see the code below.')));
           }
           right.append(codePanel(app, systems, system, source, fit));
         }
@@ -411,7 +411,7 @@
             const m = r.result.metrics;
             return h('tr', null, h('td', null, r.label),
               h('td', { class: restClass(m.meanHoldError) }, Number.isFinite(m.meanHoldError)
-                ? `${Math.abs(m.meanHoldError).toFixed(1)} ${m.meanHoldError > 0 ? 'low' : 'high'}` : '—'),
+                ? `${Math.abs(m.meanHoldError).toFixed(1)} ${m.meanHoldError > 0 ? 'low' : 'high'}` : '-'),
               h('td', { class: withinClass(m.withinFraction) }, `${Math.round(m.withinFraction * 100)}%`),
               h('td', { class: 'num' }, fmt(m.rmsError, 1)),
               h('td', { class: 'num' }, `${Math.round(m.saturatedFraction * 100)}%`));

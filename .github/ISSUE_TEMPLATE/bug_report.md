@@ -22,4 +22,4 @@ What you expected to happen.
 Paste any relevant output.
 
 **Additional context**
-Anything else useful — tuning constants, field conditions, etc.
+Anything else useful: tuning constants, field conditions, etc.

@@ -1,14 +1,14 @@
 /*
- * SapphireLib telemetry analyzer — tuning.js
+ * SapphireLib telemetry analyzer: tuning.js
  *
  * Offline tuning from logs: the practical half of "a tuner in the analyzer".
- * The analyzer can't drive the robot, but it doesn't need to — a log already
+ * The analyzer can't drive the robot, but it doesn't need to: a log already
  * holds what Auto-Tune measures (its char.* runs, and in any match the
  * volts every mechanism was sent next to where it went). So this module:
  *
  *   1. finds the tunable systems in a log: the drivetrain's axes and every
  *      position mechanism (a pid channel "X" with an "X.act" channel);
- *   2. extracts fit data — from Auto-Tune runs, or passively from ordinary
+ *   2. extracts fit data from Auto-Tune runs, or passively from ordinary
  *      driving over any time range;
  *   3. fits the model with the robot's own math (model.js), designs gains for
  *      each controller with the robot's own pole placement, and
@@ -19,7 +19,7 @@
  *
  * Plain script: window.SA.tuning in a browser, require('./tuning.js') in Node.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
@@ -131,8 +131,8 @@
   /**
    * Passive fit data for a mechanism over [t0, t1] from its X.act rows: the
    * volts it was sent against where it went. Braked and external rows (law
-   * no sensor, off, external) have no known volts, so they're NaN — skipped
-   * by the fit.
+   * no sensor, off, external) have no known volts, so they're NaN, which
+   * the fit skips.
    */
   function mechanismSamples(log, system, t0, t1) {
     const act = log.get(system.actChannel);
@@ -223,7 +223,7 @@
   /**
    * Fits passively recorded data. With no clean steps to time a delay from,
    * the delay is found by trying each shift and keeping the best-explaining
-   * one — the same regression, asked "which lag makes this make sense".
+   * one: the same regression, asked "which lag makes this make sense".
    */
   function fitPassive(system, samples, gravity = system.gravity, maxShift = 10) {
     const period = medianPeriod(samples);
@@ -264,7 +264,7 @@
   // --- Design ---------------------------------------------------------------------------
 
   /**
-   * Designs one controller from a fit, as PidTunerPage does — including the
+   * Designs one controller from a fit, as PidTunerPage does, including the
    * extra latency a loop slower than the characterization's sampling adds.
    */
   function design(fit, controller, spec = controller.spec, samplePeriodS = 0.01) {
@@ -321,7 +321,7 @@
   /**
    * Replays a mechanism's recorded targets over [t0, t1] through the fitted
    * plant under `gains` and `gravityVolts` (constant feedforward, as
-   * GravityFeedforward::constantVolts — or the fit's shape if `useFitShape`),
+   * GravityFeedforward::constantVolts, or the fit's shape if `useFitShape`),
    * with the seat-and-rest law at the floor. Returns { t, x, u, target,
    * recorded, metrics }, `recorded` being the logged position at each step.
    */
@@ -383,7 +383,7 @@
 
   /**
    * How well a trajectory tracked its targets: RMS error, the fraction of time
-   * within `band`, the fraction at full volts, and where it came to rest —
+   * within `band`, the fraction at full volts, and where it came to rest,
    * the error at the end of each steady target it had stopped moving at
    * (targets at the lowest level, where it rests on its floor, excluded).
    */

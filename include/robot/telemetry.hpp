@@ -5,7 +5,7 @@
  * The file format, and what every channel below means for tuning, is in
  * docs/TELEMETRY_FORMAT.md.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #pragma once
@@ -21,11 +21,11 @@ namespace robot {
 /// and the Home page says so.
 sapphirelib::telemetry::Logger& logger();
 
-/// Registers every channel this robot logs — the drivetrain's three PIDs
+/// Registers every channel this robot logs: the drivetrain's three PIDs
 /// ("drive", "turn", "hold"), the odometry pose ("odom"), the drivetrain's
 /// applied axis volts ("chassis"), the battery ("batt"), every motor's health
 /// ("motor.*"), the driver's controller ("driver", see logDriver()), and the
-/// macros' channels (macros::attachTelemetry(): "lift", "lift.act", "mech") —
+/// macros' channels (macros::attachTelemetry(): "lift", "lift.act", "mech"),
 /// then starts the logger's tasks.
 ///
 /// Call once from initialize(), after initDevices() and before anything can
@@ -39,7 +39,7 @@ void startTelemetry();
 /// Records this tick's controller sample in the "driver" channel: both
 /// sticks, every button held (as a bitmask, bit i = input::Button i), and
 /// whether the controller is connected. Call once per opcontrol tick, right
-/// after controller.update() — a robot that stops answering its driver is
+/// after controller.update(), a robot that stops answering its driver is
 /// either this (connected drops to 0) or everything downstream of it, and the
 /// log should say which.
 void logDriver(const sapphirelib::input::Controller& controller);

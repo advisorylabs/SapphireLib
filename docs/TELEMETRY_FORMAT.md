@@ -4,7 +4,7 @@
 events to the V5's SD card while the robot runs, one file per program run. This document is the
 contract the telemetry analyzer (`tools/analyzer/`) and any other reader code against. The encoder (`src/sapphirelib/telemetry/csv_format.cpp`) is
 golden-tested byte for byte against it (`tests/telemetry/csv_format_test.cpp`), and
-`tools/telemetry/slt_read.py` is the reference reader — standard library only, with a
+`tools/telemetry/slt_read.py` is the reference reader, standard library only, with a
 `--selftest` that parses the same golden file.
 
 Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives](#directives) ·
@@ -19,7 +19,7 @@ Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives]
 - ASCII text. Every line ends in LF (`\n`). No BOM, no CR.
 - One file per program run, plus a new file after each recovered SD fault (card pulled and
   reinserted, say).
-- Name: `SLnnnnnn.CSV` — `SL`, six zero-padded digits, `.CSV` — in `/usd/sl/` (the `sl` folder at
+- Name: `SLnnnnnn.CSV`: `SL`, six zero-padded digits, `.CSV`, in `/usd/sl/` (the `sl` folder at
   the card's root). Always a legal 8.3 name: the V5 has no confirmed long-file-name support.
 - The brain has no clock, so files are numbered, not dated: each new file takes the next number
   after the highest already in the folder, starting at `SL000001.CSV`. Newer runs have higher
@@ -44,7 +44,7 @@ Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives]
 - Only an `E` row's message can contain commas. It is the last field and runs to the end of the
   line.
 - Channel and column names match `[A-Za-z0-9_.-]{1,31}`. Event tags follow the same rule with at
-  most 15 characters. Event messages are printable ASCII (anything else — CR and LF above all — is
+  most 15 characters. Event messages are printable ASCII (anything else, CR and LF above all, is
   written as a space), at most 191 characters.
 
 **Numbers**
@@ -220,12 +220,12 @@ names to match on.
 
 | Channel | Kind | Columns | Source |
 |---|---|---|---|
-| `sys` | events | — | Competition phases (`phase`). |
-| `events` | events | — | Everything else: `motion`, `auton`, `tune`, ... |
+| `sys` | events | - | Competition phases (`phase`). |
+| `events` | events | - | Everything else: `motion`, `auton`, `tune`, ... |
 | `drive` | pid | pid columns | The drivetrain's `drivePID()`: distance loops. |
 | `turn` | pid | pid columns | The drivetrain's `turnPID()`: turns, heading hold/steering in point and path motions. |
 | `hold` | pid | pid columns | The drivetrain's `headingHoldPID()`: driver-control heading hold. |
-| `odom` | samples | `x,y,heading` | Odometry pose — inches, inches, degrees 0–360 — every 10 ms while enabled. |
+| `odom` | samples | `x,y,heading` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. |
 | `chassis` | samples | `fwd_v,strafe_v,turn_v` | The volts the drivetrain last commanded on each axis, before each motor's ±12 V clamp, every 10 ms while enabled. A snapshot, possibly one tick torn across the three fields; `strafe_v` is always 0 on a tank. |
 | `batt` | samples | `volts,pct,amps,temp` | Battery voltage, charge (%), current drawn (A) and pack temperature (°C), every 200 ms. A failed read is `nan`. |
 | `motor.<name>` | samples | `volts,amps,temp,rpm,eff,faults` | One per motor, every 100 ms: see [Motor channels](#motor-channels). 96671H logs `motor.fl`, `fr`, `bl`, `br`, `ml`, `mr` (drivetrain), `motor.liftA`, `liftB`, `intake` and `claw`. |
@@ -245,7 +245,7 @@ names to match on.
 | 3 | no sensor | no position reading: motors braked, loop reset |
 | 4 | manual | open-loop volts |
 | 5 | off | braked: stopped, or disabled |
-| 6 | external | something else has the motors — an Auto-Tune run (`beginExternalControl()`); `volts` is `nan` |
+| 6 | external | something else has the motors: an Auto-Tune run (`beginExternalControl()`); `volts` is `nan` |
 
 ### Motor channels
 
@@ -255,16 +255,16 @@ names to match on.
 |---|---|---|
 | `volts` | V | `motor_get_voltage()`: what the motor is applying |
 | `amps` | A | `motor_get_current_draw()` |
-| `temp` | °C | `motor_get_temperature()` — the V5 reports it in 5 °C steps |
+| `temp` | °C | `motor_get_temperature()`; the V5 reports it in 5 °C steps |
 | `rpm` | RPM | `motor_get_actual_velocity()`, at the output shaft (after the cartridge) |
 | `eff` | % | `motor_get_efficiency()`: 100 is free-spinning, 0 is stalled while powered |
 | `faults` | bits | `motor_get_faults()`: 1 over temperature, 2 H-bridge fault, 4 over current, 8 H-bridge over current |
 
-- A single reading that failed is `nan`. A motor that answers nothing at all — unplugged, or a dead
-  cable — logs a whole row of `nan`, never zeros: read a run of all-`nan` rows as "disconnected"
+- A single reading that failed is `nan`. A motor that answers nothing at all (unplugged, or a dead
+  cable) logs a whole row of `nan`, never zeros: read a run of all-`nan` rows as "disconnected"
   (and a channel that's all `nan` from the start as "never plugged in", or a placeholder port).
 - V5 motors protect themselves from heat by limiting their own current: to 50 % at 55 °C, 25 % at
-  60 °C, 12.5 % at 65 °C, and 0 at 70 °C. Nothing else in the log says so — a mechanism that
+  60 °C, 12.5 % at 65 °C, and 0 at 70 °C. Nothing else in the log says so: a mechanism that
   weakens late in a match shows it here, as `temp` climbing through those steps while `amps`
   flattens under a full-power command. The over-temperature fault bit comes on at the top end.
 
@@ -272,13 +272,13 @@ names to match on.
 
 - `err` is always the controller's true error. `target` and `meas` are exactly what the caller
   passed. SapphireLib's turn loops and its `moveToPoint`/`moveToPose`/`followPath` distance and
-  heading loops pass the error as `target` and `0` as `meas` — so for those, read `err`, and get
+  heading loops pass the error as `target` and `0` as `meas`, so for those, read `err`, and get
   the physical position from `odom`.
 - `p`, `i`, `d` are the three terms in output units (kP·err, kI·∫err, kD·derivative); `u_raw` is
   their sum after anti-windup, before slew limiting and clamping; `out` is what the PID returned.
   The terms can differ from `u_raw` in the last bit.
-- `out` is in volts for the drivetrains and the lift. What actually reached the motors — after
-  feedforward, mixing and clamping — is in `chassis` (per drivetrain axis) and `lift.act`.
+- `out` is in volts for the drivetrains and the lift. What actually reached the motors, after
+  feedforward, mixing and clamping, is in `chassis` (per drivetrain axis) and `lift.act`.
 - `dt` is the timestep the PID used. The real loop period is the `t_us` difference between
   successive `S` rows; a gap much larger than `dt` means the loop was held up. The `hold` PID
   passes a measured dt, so there the two agree.
@@ -297,7 +297,7 @@ app can refit offline from real runs and compare against what the robot fitted (
 events record).
 
 Each row is a superset of `tuning::CharacterizationSample{timeMs, volts, position}`: `volts` is
-the voltage applied at that tick and `pos` the position measured just before it — inches along
+the voltage applied at that tick and `pos` the position measured just before it: inches along
 the axis for `char.fwd`/`char.strafe`, cumulative (unwrapped) degrees for `char.turn`, and the
 lift's own degrees for `char.lift`. To rebuild the runner's `CharacterizationData`:
 
@@ -319,7 +319,7 @@ lift's own degrees for `char.lift`. To rebuild the runner's `CharacterizationDat
    mechanism, the difference between going up and coming down pins down kG. Differentiate
    position within a segment, never across the gap between two. Feed the result to the same math
    the robot uses (`tuning::fitFeedforward()`/`characterizeAxis()`, or `characterizeMechanism()`
-   with the lift's gravity shape — constant for 96671H's lift;
+   with the lift's gravity shape, which is constant for 96671H's lift;
    `include/sapphirelib/tuning/characterization_math.hpp`).
 
 `slt_read.py`'s `characterization_segments()` does steps 2–3. The telemetry analyzer

@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib's clock-free timing primitives
-// (elapsedMs, Stopwatch, TimedFlag, GapDetector) — no PROS/embedded
+// (elapsedMs, Stopwatch, TimedFlag, GapDetector), no PROS/embedded
 // dependencies, so it builds and runs with a normal desktop compiler.
 //
 // util/timing.hpp is header-only, so there's no source file to link.
@@ -20,7 +20,7 @@ using sapphirelib::TimedFlag;
 
 namespace {
 
-// Everything here is constexpr, so it's usable in constant expressions too —
+// Everything here is constexpr, so it's usable in constant expressions too,
 // which also proves none of it reads a clock behind the caller's back.
 static_assert(elapsedMs(1000u, 1250u) == 250u);
 static_assert(elapsedMs(0xFFFFFF00u, 0x10u) == 0x110u);
@@ -105,7 +105,7 @@ void testTimedFlagSetRecordsOnlyRealChanges() {
     assert(flag.set(true, 1000u)); // changed
     assert(flag.value());
 
-    // Setting the same value every tick must not restart the count — this is
+    // Setting the same value every tick must not restart the count; this is
     // what lets per-tick code call set() unconditionally.
     assert(!flag.set(true, 1100u));
     assert(!flag.set(true, 1200u));

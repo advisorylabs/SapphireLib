@@ -1,4 +1,4 @@
-// Host-side golden test for sapphirelib::telemetry's SLT v1 encoder — no
+// Host-side golden test for sapphirelib::telemetry's SLT v1 encoder, no
 // PROS/embedded dependencies. Every expected string here is byte-for-byte
 // what the robot writes to the SD card, and what docs/TELEMETRY_FORMAT.md
 // and tools/telemetry/slt_read.py promise; kGoldenFile below is also embedded
@@ -65,7 +65,7 @@ void checkNumber(double value, int decimals, const char* expected) {
 }
 
 /// Runs `format` into a buffer of exactly the expected size (must succeed),
-/// then one byte short (must return 0 — never half a line).
+/// then one byte short (must return 0; never half a line).
 template <typename Format> void checkLine(Format format, const std::string& expected) {
     std::vector<char> buffer(expected.size() + 16, '#');
     const std::size_t length = format(buffer.data(), expected.size());

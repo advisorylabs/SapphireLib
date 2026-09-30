@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * SapphireLib telemetry analyzer — build.js
+ * SapphireLib telemetry analyzer: build.js
  *
  * Bundles the analyzer into one self-contained HTML file, for handing to
  * someone as a single attachment or keeping on a laptop without the repo:
@@ -12,7 +12,7 @@
  * order, and nothing else changes: the page behaves exactly like index.html.
  * No dependencies. dist/ is ignored by git; index.html stays the source.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 'use strict';
 

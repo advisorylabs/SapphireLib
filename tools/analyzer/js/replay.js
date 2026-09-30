@@ -1,17 +1,17 @@
 /*
- * SapphireLib telemetry analyzer — replay.js
+ * SapphireLib telemetry analyzer: replay.js
  *
  * The replay: the match played back from its log. A field view rebuilt from
  * odometry (the robot's footprint, heading, trail, the motion's target, and
  * each drive motor colored by temperature), a side view of the lift (carriage
  * against target, the control law it was in, the volts it was sent, the
- * claw), live motor tiles, the battery and the driver's controller — all at
+ * claw), live motor tiles, the battery and the driver's controller, all at
  * one moment, scrubbed on a timeline or played at speed, with charts whose
  * playhead follows.
  *
  * Browser only: window.SA.replay and SA.views.replay.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function () {
   'use strict';
@@ -328,7 +328,7 @@
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     const lawName = SA.model.LAW_NAMES[law] || '?';
-    ctx.fillText(`${Number.isFinite(volts) ? `${volts.toFixed(1)} V` : 'volts —'} · ${lawName}`, barX0, barY + 12);
+    ctx.fillText(`${Number.isFinite(volts) ? `${volts.toFixed(1)} V` : 'volts -'} · ${lawName}`, barX0, barY + 12);
   }
 
   function liftGeometry(app) {
@@ -494,7 +494,7 @@
           const temp = v('temp');
           const gone = fresh && Number.isNaN(v('volts')) && Number.isNaN(temp);
           tile.el.classList.toggle('gone', gone);
-          tile.temp.textContent = Number.isFinite(temp) ? `${temp.toFixed(0)}°C` : gone ? 'unplugged' : '—';
+          tile.temp.textContent = Number.isFinite(temp) ? `${temp.toFixed(0)}°C` : gone ? 'unplugged' : '-';
           tile.bar.style.width = `${Math.max(0, Math.min(1, ((temp || 0) - 20) / 50)) * 100}%`;
           tile.bar.style.background = heatColor(temp);
           clear(tile.badges);

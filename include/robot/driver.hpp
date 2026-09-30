@@ -4,7 +4,7 @@
  * Driver control: the controller, the stick drive, and the developer
  * shortcuts that only work off the field.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #pragma once
@@ -20,7 +20,7 @@ namespace robot {
 inline constexpr std::uint32_t kDriverLoopMs = 20;
 
 /// The driver's controller. It lives at namespace scope, never as a local in
-/// opcontrol(), so its button history survives opcontrol() restarting — see
+/// opcontrol(), so its button history survives opcontrol() restarting, see
 /// sapphirelib::input::Controller's class comment.
 sapphirelib::input::Controller& controller();
 
@@ -29,13 +29,13 @@ sapphirelib::input::Controller& controller();
 /// over the motors.
 void drive(sapphirelib::input::Controller& controller);
 
-/// Button shortcuts that aren't driving, checked every tick — including while
+/// Button shortcuts that aren't driving, checked every tick, including while
 /// a GUI routine is busy, since a button press is only seen on the one tick
 /// it happens:
 ///   - A redefines "forward" for field-centric driving as whichever way the
 ///     chassis faces now (it never moves the chassis, so it's safe any time).
 ///   - B+DOWN (pressed together, either order) runs the autonomous routine
-///     picked on the brain screen — but only with no competition switch or
+///     picked on the brain screen, but only with no competition switch or
 ///     field connected, so it can't fire during a real match, and not while a
 ///     GUI routine is driving the chassis. It stops the intake, claw, and lift
 ///     first (macros::stop()), and blocks until the routine ends.

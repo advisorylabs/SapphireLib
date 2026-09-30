@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::telemetry's log file naming — no
+// Host-side unit test for sapphirelib::telemetry's log file naming, no
 // PROS/embedded dependencies, so it builds and runs with a normal desktop
 // compiler.
 //

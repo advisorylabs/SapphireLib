@@ -30,7 +30,7 @@ existed). If a fresh clone fails to link with undefined `lv_...` symbols, re-app
 `project.pros` records (`pros conduct apply liblvgl@9.2.0`), or copy the file from a teammate's
 checkout.
 
-## 4. Build — from the PROS toolchain
+## 4. Build: from the PROS toolchain
 
 **Always build with the ARM toolchain that ships with PROS** (currently GCC 14.3.1): from VS Code's
 PROS integrated terminal, or a shell with the PROS toolchain's `usr/bin` first on `PATH`. Check with:
@@ -57,7 +57,7 @@ program, so nothing else would notice them going stale), run this after changing
 make check-examples
 ```
 
-The library's pure modules also have host-side unit tests that build with any desktop `g++` — see
+The library's pure modules also have host-side unit tests that build with any desktop `g++`, see
 [`tests/README.md`](../tests/README.md). CI runs them on every push.
 
 ## 5. Upload to a brain
@@ -77,7 +77,7 @@ pros make template
 
 This compiles `src/sapphirelib/**` into `bin/sapphirelib.a` and runs `pros c create-template` to stage a
 `template/` directory containing the public headers (`include/sapphirelib/**/*.hpp`) plus the compiled
-archive — this is what a consumer's `pros conduct apply` pulls in, so `src/sapphirelib/**` itself is never
+archive; this is what a consumer's `pros conduct apply` pulls in, so `src/sapphirelib/**` itself is never
 shipped. Zip the contents of the resulting `template/` directory and attach it to a GitHub Release (tag
 `v<version>`, matching `SAPPHIRELIB_VERSION` in `include/sapphirelib/version.hpp` and `VERSION` in the
 root `Makefile`) so others can download it and run:
@@ -87,12 +87,12 @@ pros conduct fetch path/to/sapphirelib@<version>.zip
 pros conduct apply sapphirelib
 ```
 
-inside their own kernel project. Exact flag names can drift between PROS CLI versions — check
+inside their own kernel project. Exact flag names can drift between PROS CLI versions; check
 `pros conduct --help` (or `pros c --help`) against what you have installed if a command above doesn't
 match.
 
-The template is every module under `include/sapphirelib/` — chassis, control, odom, motion, sensors,
-input, mechanism, telemetry, tuning, gui, diag and util — and nothing else. The robot program never
+The template is every module under `include/sapphirelib/` (chassis, control, odom, motion, sensors,
+input, mechanism, telemetry, tuning, gui, diag and util) and nothing else. The robot program never
 ships: the `Makefile` keeps everything under `src/` except `src/sapphirelib/` out of the library
 archive (an allowlist, so a new robot file can't slip in by accident), and only
 `include/sapphirelib/` headers are template files, so `include/robot/` stays behind too. A consumer's
@@ -107,13 +107,13 @@ pros conduct apply <kernel-version>
 
 ## Troubleshooting
 
-- **"bin/ was built with arm-none-eabi-g++ X but Y is first on PATH"** — the toolchain guard from step
+- **"bin/ was built with arm-none-eabi-g++ X but Y is first on PATH"**: the toolchain guard from step
   4. Build from the PROS toolchain, or `make clean` if you meant to switch.
-- **Builds and uploads, then the screen stays black** — if it isn't your own code hanging in
+- **Builds and uploads, then the screen stays black**: if it isn't your own code hanging in
   `initialize()`, suspect a mixed-toolchain image: the guard can only compare against a stamp, and a
   `bin/` built before the guard existed has none. `make clean`, then rebuild from the PROS toolchain.
-- **"kernel does not support kernel version None"** — your PROS CLI couldn't reach
+- **"kernel does not support kernel version None"**: your PROS CLI couldn't reach
   `pros.cs.purdue.edu` to resolve available kernel templates. Check your network/firewall; VEX's template
   server occasionally rate-limits or blocks automated environments (e.g. CI, sandboxed dev containers).
-- **VS Code PROS extension** is the easiest path if the CLI gives you trouble — it handles kernel
+- **VS Code PROS extension** is the easiest path if the CLI gives you trouble; it handles kernel
   resolution through the same backend but with better error surfacing.

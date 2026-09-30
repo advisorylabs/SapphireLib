@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::wrapDegrees180 — no PROS/embedded
+// Host-side unit test for sapphirelib::wrapDegrees180, no PROS/embedded
 // dependencies, so it builds and runs with a normal desktop compiler.
 //
 // Build & run:

@@ -4,10 +4,10 @@
  * PidTunerPage wiring: the round-trip test motions, the Auto-Tune
  * experiments, and what happens with their results. Every characterization
  * run is also mirrored into the SD log (char.fwd/char.strafe/char.turn/
- * char.lift), so an axis can be refit offline from real runs — the telemetry
+ * char.lift), so an axis can be refit offline from real runs. The telemetry
  * analyzer's Tune tab (tools/analyzer) does exactly that.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "robot/tuning.hpp"
@@ -45,12 +45,12 @@ using sapphirelib::tuning::ResponseSpec;
 
 namespace {
 
-// Round-trip test motions for PidTunerPage — repeated "Run Test" taps don't
+// Round-trip test motions for PidTunerPage: repeated "Run Test" taps don't
 // walk the robot off the field, since each one returns to where it started.
 void driveTuningTest() {
     drivetrain().driveDistance(24);
-    // driveDistance() is relative — it measures from wherever the encoders
-    // read when it starts — so coming back is -24, not 0 (0 would settle
+    // driveDistance() is relative; it measures from wherever the encoders
+    // read when it starts, so coming back is -24, not 0 (0 would settle
     // instantly where it already is).
     drivetrain().driveDistance(-24);
 }
@@ -64,7 +64,7 @@ void turnTuningTest() {
 //
 // Auto-Tune measures each axis below (forward, strafe, turn) by driving it
 // through short voltage ramps and steps, fits a model of it, and designs
-// every controller's gains from those models — see PidTunerPage's class
+// every controller's gains from those models, see PidTunerPage's class
 // comment. It needs clear floor: each translation segment travels up to
 // kTranslationTravelIn from where it started (plus coasting), alternating
 // direction so the robot ends up roughly where it began, and the turn axis
@@ -83,7 +83,7 @@ constexpr double kTranslationTravelIn = 30.0;
 constexpr double kTranslationStepVolts = 6.0;
 constexpr double kTurnStepVolts = 6.0;
 
-// How each controller should behave — see tuning::ResponseSpec. All three
+// How each controller should behave, see tuning::ResponseSpec. All three
 // are designed from the same axis measurements; only these specs differ.
 constexpr ResponseSpec kDriveResponse{.settleTimeS = 0.6, .dampingRatio = 1.0};
 constexpr ResponseSpec kTurnResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
@@ -91,7 +91,7 @@ constexpr ResponseSpec kTurnResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
 // that snaps onto it as hard as an autonomous turn feels twitchy and fights
 // them whenever the robot gets bumped.
 constexpr ResponseSpec kHeadingHoldResponse{.settleTimeS = 0.9, .dampingRatio = 1.0};
-// The lift, designed from its own measurement (with gravity) — see
+// The lift, designed from its own measurement (with gravity), see
 // macros::liftExperiment(). Its loop runs at the 20ms opcontrol tick, which
 // the design allows for.
 constexpr ResponseSpec kLiftResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
@@ -105,7 +105,7 @@ enum class TranslationAxis { forward, strafe };
 
 CharacterizationConfig translationExperiment(TranslationAxis axis) {
     // Captured by value into `measure` below, so every sample reads distance
-    // along *this* run's starting heading — the open-loop voltages don't
+    // along *this* run's starting heading. The open-loop voltages don't
     // hold heading, and the live heading can drift slightly over a run.
     const Pose reference = odometry().getPose();
 
@@ -143,7 +143,7 @@ CharacterizationConfig turnExperiment() {
 }
 
 /// `experiment`, with every sample it takes also recorded into `channel`
-/// (see tapCharacterization() — the run itself is unchanged), and a
+/// (see tapCharacterization(), the run itself is unchanged), and a
 /// `tune,start,<axis>` event marking where this axis's rows begin in the log.
 /// Called on the tuning task, at the start of each axis's run.
 CharacterizationConfig logged(const char* axis, CharacterizationConfig experiment,
@@ -154,8 +154,8 @@ CharacterizationConfig logged(const char* axis, CharacterizationConfig experimen
 
 // Installs one freshly measured axis on the drivetrain, for
 // DriverInputMode::velocity, and logs it over `pros terminal` and to the SD
-// log — the only places the strafe model shows up, since no PID tab entry
-// uses that axis. Not persisted — copy the logged numbers into a
+// log, the only places the strafe model shows up, since no PID tab entry
+// uses that axis. Not persisted; copy the logged numbers into a
 // setAxisModels() call in initDevices() to keep them.
 void installModel(MotorFeedforward HolonomicAxisModels::*axis, const char* name,
                   const AxisCharacterization& result) {
@@ -190,7 +190,7 @@ void installLiftModel(const MechanismCharacterization& result) {
 } // namespace
 
 void registerTuning(PidTunerPage& page) {
-    // Each axis's samples, mirrored into the SD log as the run takes them —
+    // Each axis's samples, mirrored into the SD log as the run takes them,
     // the same (volts, position) pairs Auto-Tune fits on the robot, so the
     // app can refit offline from real runs. Only the experiment factories
     // are wrapped; tuning/ doesn't know. Created here, during initialize(),

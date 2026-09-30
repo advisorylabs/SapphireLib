@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::Sequence — no PROS/embedded
+// Host-side unit test for sapphirelib::Sequence, no PROS/embedded
 // dependencies, so it builds and runs with a normal desktop compiler.
 //
 // util/sequence.hpp is header-only. runBlocking() reads time through
@@ -178,7 +178,7 @@ void testUntilIsCheckedFirstAndNotOnTheEnteringTick() {
 
     assert(sequence.update(150) == SequenceUpdate::running);
     assert(bChecks == 1);
-    // Still asked on the tick its timeout ends it — once per update.
+    // Still asked on the tick its timeout ends it, once per update.
     assert(sequence.update(200) == SequenceUpdate::finished);
     assert(bChecks == 2);
     assert(sequence.lastExitWasTimeout());
@@ -1125,7 +1125,7 @@ void testMatchesTheOriginalPhaseMachine() {
         const int ticks = 100 + static_cast<int>(rng() % 700);
         for (int t = 0; t < ticks; ++t) {
             // 20ms ticks with scheduler jitter, and now and then a gap
-            // (autonomous, a disable, a blocking routine) — including right at
+            // (autonomous, a disable, a blocking routine), including right at
             // the 100ms restart threshold.
             const double gapRoll = unit(rng);
             now += gapRoll < 0.005   ? 100u + static_cast<std::uint32_t>(rng() % 2)
@@ -1171,7 +1171,7 @@ void testMatchesTheOriginalPhaseMachine() {
             // The one intended difference: a GapDetector reports a restart on
             // its very first call, while the original only did once the clock
             // had passed 100ms. On the first tick there's nothing to drop, so
-            // it changes no output — which the rest of the comparison checks.
+            // it changes no output, which the rest of the comparison checks.
             TickOutput comparable = actual;
             if (t == 0) comparable.restarted = expected.restarted;
 

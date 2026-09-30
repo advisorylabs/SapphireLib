@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — model.js
+ * SapphireLib telemetry analyzer: model.js
  *
  * The robot's own tuning and control math, ported line for line so the
  * analyzer refits, redesigns and simulates from logged data exactly the way
@@ -12,8 +12,8 @@
  *   motor thermal derating src/sapphirelib/chassis/thermal_math.cpp
  *
  * Each port keeps the C++'s order of operations, so on the same data it
- * produces the same numbers to the last bit or two (only libm calls — log,
- * exp, atan2 — may differ in their final bit). test/model.test.js holds it to
+ * produces the same numbers to the last bit or two (only the libm calls log,
+ * exp and atan2 may differ in their final bit). test/model.test.js holds it to
  * the golden case in tests/tuning/characterization_math_test.cpp. Change one
  * side, change the other.
  *
@@ -23,7 +23,7 @@
  * Plain script: works as a browser <script> (window.SA.model) and as a Node
  * module (require('./model.js')), with no dependencies.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
@@ -639,8 +639,8 @@
   // --- Plant simulation ---------------------------------------------------------
 
   /**
-   * A simulated axis obeying a MechanismModel — kA·a = u − kS·sign(v) −
-   * kG·g(x) − kV·v, with static friction — and a command latency. Commands
+   * A simulated axis obeying a MechanismModel (kA·a = u − kS·sign(v) −
+   * kG·g(x) − kV·v, with static friction) and a command latency. Commands
    * are clamped to ±12V (what a V5 motor can apply); `hold()` freezes it like
    * a motor on its hold brake. Integrated in 1ms steps.
    */
@@ -704,7 +704,7 @@
 
   /**
    * Open-loop replay: drives the model with a recorded voltage series and
-   * returns the positions it predicts, to overlay on what was measured —
+   * returns the positions it predicts, to overlay on what was measured,
    * the most direct check that a fitted model describes the robot. `volts`
    * NaN means held. Samples are { t (s), volts, position }; the simulation
    * restarts from the measured state after any gap longer than `maxGapS`.

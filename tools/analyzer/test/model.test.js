@@ -1,8 +1,8 @@
-// Tests for js/model.js — the analyzer's ports of the robot's tuning and
+// Tests for js/model.js: the analyzer's ports of the robot's tuning and
 // control math. Run: node --test tools/analyzer/test/
 //
 // The golden case is the one in tests/tuning/characterization_math_test.cpp:
-// the same deterministic data (no RNG, no libm — only + - * / and compares,
+// the same deterministic data (no RNG, no libm; only + - * / and compares,
 // so both languages build it bit for bit) must give the C++ numbers. That's
 // what keeps the analyzer's refits honest about what Auto-Tune would do.
 'use strict';

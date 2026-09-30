@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::PID — no PROS/embedded dependencies,
+// Host-side unit test for sapphirelib::PID, no PROS/embedded dependencies,
 // so it builds and runs with a normal desktop compiler.
 //
 // Besides the control math itself, this covers what the telemetry hook added
@@ -374,7 +374,7 @@ public:
         const double error = target - measurement;
 
         // Integral of error over time, so kI carries per-second units and stays
-        // valid across a change of loop period — see PIDGains' comment.
+        // valid across a change of loop period, see PIDGains' comment.
         const double integralDelta = error * dtS;
         integral_ += integralDelta;
         if (config_.integralLimit > 0.0) {
@@ -394,7 +394,7 @@ public:
 
         // Conditional-integration anti-windup: if the output is already pinned
         // at the limit and this tick's error only pushes it further out, that
-        // integration can't affect the plant — it just accumulates charge that
+        // integration can't affect the plant; it just accumulates charge that
         // has to be paid back as overshoot once the error finally reverses. Roll
         // it back and recompute instead. Only meaningful when an output limit
         // exists to saturate against.

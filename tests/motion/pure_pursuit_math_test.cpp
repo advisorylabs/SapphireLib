@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::motion::toLocalFrame and
-// findLookaheadPoint — no PROS/embedded dependencies, so it builds and runs
+// findLookaheadPoint, no PROS/embedded dependencies, so it builds and runs
 // with a normal desktop compiler.
 //
 // Build & run:
@@ -49,7 +49,7 @@ void testToLocalFrameAtHeadingEast() {
 
 void testToLocalFrameRoundTrip() {
     // Rotating into the local frame and back out (same formula both
-    // directions — the rotation matrix here is its own inverse) should
+    // directions, the rotation matrix here is its own inverse) should
     // recover the original field-frame displacement.
     const double dxIn = 7.0;
     const double dyIn = -3.0;
@@ -72,7 +72,7 @@ void testLookaheadFindsIntersectionOnCurrentSegment() {
 
 void testLookaheadSkipsAheadAcrossSegments() {
     // Chassis already 8in up the path, one segment behind it (fromIndex=1)
-    // — the lookahead point should be found on segment 1 (10 -> 20), not
+    // the lookahead point should be found on segment 1 (10 -> 20), not
     // regress to segment 0.
     const Path path({Waypoint{0.0, 0.0}, Waypoint{0.0, 10.0}, Waypoint{0.0, 20.0}});
     const auto result = findLookaheadPoint(/*xIn=*/0.0, /*yIn=*/8.0, path, /*lookaheadIn=*/4.0,
@@ -82,7 +82,7 @@ void testLookaheadSkipsAheadAcrossSegments() {
 }
 
 void testLookaheadFallsBackToFinalWaypointNearEnd() {
-    // Chassis within lookahead radius of the whole remaining path — no
+    // Chassis within lookahead radius of the whole remaining path, no
     // circle intersection exists, so pursuit should converge on the last
     // waypoint instead.
     const Path path({Waypoint{0.0, 0.0}, Waypoint{0.0, 10.0}});

@@ -1,8 +1,8 @@
-// Tests for js/tuning.js — offline tuning from logs. Run: node --test
+// Tests for js/tuning.js: offline tuning from logs. Run: node --test
 // tools/analyzer/test/*.test.js
 //
 // The demo logs come from a simulation with known physics, so the fits can be
-// checked against the truth — and the Auto-Tune refits against what the
+// checked against the truth, and the Auto-Tune refits against what the
 // (simulated) robot itself reported, which they must match: same data, same
 // math.
 'use strict';

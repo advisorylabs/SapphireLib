@@ -4,7 +4,7 @@
  * Wires the robot's devices into the SD-card log. The char.* channels Auto-Tune
  * logs into are registered with the tuner, in tuning.cpp.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "robot/telemetry.hpp"
@@ -37,7 +37,7 @@ Channel* driverLog = nullptr;
 
 Logger& logger() {
     // A function-local static, like the devices: constructing a Logger only
-    // sets up its tables — no tasks and no card access until start().
+    // sets up its tables, no tasks and no card access until start().
     static Logger instance({.directory = "/usd/sl", .robotName = "96671H"});
     return instance;
 }
@@ -57,7 +57,7 @@ void startTelemetry() {
     log.pose(odometry(), "odom", 10);
 
     // What the drivetrain actually commanded on each axis (the PIDs' "out" is
-    // only the loop's share, before mixing and heading correction) — the
+    // only the loop's share, before mixing and heading correction): the
     // input side of the chassis's response, for fitting its model offline.
     // Read from the sampler task; appliedAxisVolts() is safe from any task.
     log.poll(
@@ -72,7 +72,7 @@ void startTelemetry() {
 
     // The battery: sag under load skews any kV fitted from this log, and a
     // deep sag under a burst of current is how a brownout starts. Volts,
-    // charge, current drawn (A) and the pack's temperature, 5 times a second —
+    // charge, current drawn (A) and the pack's temperature, 5 times a second,
     // fast enough to catch a sag, slow enough to cost nothing.
     log.poll(
         "batt", {"volts", "pct", "amps", "temp"}, 200,
@@ -105,7 +105,7 @@ void startTelemetry() {
     log.motor("motor.liftA", ports::kLiftA);
     log.motor("motor.liftB", ports::kLiftB);
     // Placeholder ports today (see config.hpp): until they're real these log
-    // NaN, which the analyzer reports as "never answered" — a reminder, not a
+    // NaN, which the analyzer reports as "never answered", a reminder, not a
     // fault.
     log.motor("motor.intake", ports::kIntake);
     log.motor("motor.claw", ports::kClawMotor);
