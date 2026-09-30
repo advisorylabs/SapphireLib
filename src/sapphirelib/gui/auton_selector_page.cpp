@@ -31,7 +31,8 @@ void AutonSelectorPage::build(lv_obj_t* container) {
     for (auto& routine : routines_) {
         routine->button = lv_list_add_button(list_, nullptr, routine->name.c_str());
         styleButton(routine->button);
-        lv_obj_add_event_cb(routine->button, &AutonSelectorPage::buttonClicked, LV_EVENT_CLICKED, this);
+        lv_obj_add_event_cb(routine->button, &AutonSelectorPage::buttonClicked, LV_EVENT_CLICKED,
+                            this);
     }
     if (!routines_.empty()) select(0);
 }
@@ -44,7 +45,8 @@ void AutonSelectorPage::addRoutine(std::string name, std::function<void()> routi
     if (container_) {
         entry->button = lv_list_add_button(list_, nullptr, entry->name.c_str());
         styleButton(entry->button);
-        lv_obj_add_event_cb(entry->button, &AutonSelectorPage::buttonClicked, LV_EVENT_CLICKED, this);
+        lv_obj_add_event_cb(entry->button, &AutonSelectorPage::buttonClicked, LV_EVENT_CLICKED,
+                            this);
     }
 
     const bool wasEmpty = routines_.empty();

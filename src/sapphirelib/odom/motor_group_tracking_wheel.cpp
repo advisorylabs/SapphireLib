@@ -6,8 +6,8 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 } // namespace
 
-MotorGroupTrackingWheel::MotorGroupTrackingWheel(chassis::MotorGroup& motors, double wheelDiameterIn,
-                                                   double externalGearRatio)
+MotorGroupTrackingWheel::MotorGroupTrackingWheel(chassis::MotorGroup& motors,
+                                                 double wheelDiameterIn, double externalGearRatio)
     : motors_(motors), wheelDiameterIn_(wheelDiameterIn), externalGearRatio_(externalGearRatio) {
     motors_.tarePosition();
 }

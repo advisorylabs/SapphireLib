@@ -16,14 +16,8 @@ struct DeratingPoint {
 // the V5's derating steps (50% at 55C, 25% at 60C, 12.5% at 65C, off at 70C), each widened
 // into a ~2C ramp so the curve is continuous. Must stay sorted by tempC
 constexpr DeratingPoint kDeratingCurve[] = {
-    {54.0, 1.0},
-    {56.0, 0.5},
-    {59.0, 0.5},
-    {61.0, 0.25},
-    {64.0, 0.25},
-    {66.0, 0.125},
-    {69.0, 0.125},
-    {71.0, 0.0},
+    {54.0, 1.0},  {56.0, 0.5},   {59.0, 0.5},   {61.0, 0.25},
+    {64.0, 0.25}, {66.0, 0.125}, {69.0, 0.125}, {71.0, 0.0},
 };
 
 constexpr std::size_t kDeratingPointCount = sizeof(kDeratingCurve) / sizeof(kDeratingCurve[0]);
@@ -54,9 +48,8 @@ double thermalPowerFraction(double tempC) {
 }
 
 CenterCorrection centerThermalCorrection(CornerValues commandedVolts,
-                                         CornerValues survivingFraction,
-                                         double centerPowerFraction, double gain,
-                                         double maxVolts) {
+                                         CornerValues survivingFraction, double centerPowerFraction,
+                                         double gain, double maxVolts) {
     if (gain <= 0.0 || maxVolts <= 0.0) return CenterCorrection{};
 
     // volts each corner was asked for and isn't producing

@@ -66,10 +66,10 @@ public:
      * @endcode
      */
     HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t frontRightPort,
-                         std::int8_t backLeftPort, std::int8_t backRightPort, Gearset gearset,
-                         std::uint8_t imuPort, DrivetrainConfig config, PID::Config drivePIDConfig,
-                         PID::Config turnPIDConfig, double imuHeadingScale = 1.0,
-                         std::optional<AsteriskConfig> asterisk = std::nullopt);
+                        std::int8_t backLeftPort, std::int8_t backRightPort, Gearset gearset,
+                        std::uint8_t imuPort, DrivetrainConfig config, PID::Config drivePIDConfig,
+                        PID::Config turnPIDConfig, double imuHeadingScale = 1.0,
+                        std::optional<AsteriskConfig> asterisk = std::nullopt);
 
     /**
      * @brief Drive with robot-centric holonomic control

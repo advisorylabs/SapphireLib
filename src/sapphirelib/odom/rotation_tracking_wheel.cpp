@@ -9,7 +9,7 @@ constexpr double kPi = 3.14159265358979323846;
 } // namespace
 
 RotationTrackingWheel::RotationTrackingWheel(std::int8_t port, double wheelDiameterIn,
-                                              double externalGearRatio)
+                                             double externalGearRatio)
     : rotation_(port), wheelDiameterIn_(wheelDiameterIn), externalGearRatio_(externalGearRatio) {
     rotation_.reset_position();
 }

@@ -27,8 +27,8 @@ struct PoseDelta {
  * @return PoseDelta movement on the field
  */
 PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double verticalDeltaIn,
-                                double horizontalDeltaIn, double verticalOffsetIn,
-                                double horizontalOffsetIn);
+                               double horizontalDeltaIn, double verticalOffsetIn,
+                               double horizontalOffsetIn);
 
 /**
  * @brief Work out a tracking wheel's offset from a turn in place

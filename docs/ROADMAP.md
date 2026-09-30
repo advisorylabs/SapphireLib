@@ -555,9 +555,11 @@ user expects — without dropping features or changing how any motion drives.
       new robot file can't silently ship inside `sapphirelib.a`.
 - [x] Tooling — `.clang-format` now matches the house style (it indented namespace contents, which the
       code never has, so the CI format gate reported thousands of violations and couldn't pass), with
-      `tuning/` left out of the CI check until Auto-Tune landed (it's in now); `make check-examples` compiles every
-      example against the current headers so they can't silently rot; and CI's test loop handles
-      header-only modules and tests that need extra sources.
+      `tuning/` left out of the CI check until Auto-Tune landed. The whole library has since had its
+      one-time format pass, so the check passes; `make check-examples` compiles every example against
+      the current headers so they can't silently rot; and CI's test loop handles header-only modules
+      and tests that need extra sources. The library's comments follow LemLib's style (Doxygen
+      `@brief`/`@param` blocks with examples on the main API, short lowercase inline notes).
 - [x] One field heading frame — `Odometry::setPose()` (and the constructor's `startPose`) used to
       ignore the heading: every update overwrote it with the raw IMU heading, so the field frame was
       locked to wherever the robot faced at calibration, and an autonomous that started at
@@ -604,7 +606,7 @@ first:
       away. Needs the two items above first.
 - [ ] Shorter names through C++20 inline namespaces — `sapphirelib::HolonomicDrivetrain` alongside
       `sapphirelib::chassis::HolonomicDrivetrain`, source-compatible. It touches every file's namespace
-      line; `tuning/` has had its format pass now, so nothing's waiting on it.
+      line; the library has had its format pass now, so nothing's waiting on it.
 - [ ] Driver-control API consolidation — `holonomic` / `holonomicFieldCentric` / `holonomicHeadingHold`
       / `holonomicFieldCentricHeadingHold` is combinatorial naming. One call with options
       (`{.fieldCentric = true, .headingHold = true}`), or a stored mode, would replace them. Add first,

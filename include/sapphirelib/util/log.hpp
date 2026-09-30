@@ -45,19 +45,19 @@ inline const char* logLevelTag(LogLevel level) {
  * SAPPHIRELIB_LOG_INFO("lift", "reached level %d", level);
  * @endcode
  */
-#define SAPPHIRELIB_LOG(level, tag, fmt, ...)                                                    \
-    do {                                                                                         \
-        if (static_cast<int>(level) >= SAPPHIRELIB_LOG_LEVEL) {                                  \
-            std::printf("[%8lu][%-5s][%s] " fmt "\n", static_cast<unsigned long>(pros::millis()), \
-                         sapphirelib::detail::logLevelTag(level), tag, ##__VA_ARGS__);            \
-        }                                                                                         \
+#define SAPPHIRELIB_LOG(level, tag, fmt, ...)                                                      \
+    do {                                                                                           \
+        if (static_cast<int>(level) >= SAPPHIRELIB_LOG_LEVEL) {                                    \
+            std::printf("[%8lu][%-5s][%s] " fmt "\n", static_cast<unsigned long>(pros::millis()),  \
+                        sapphirelib::detail::logLevelTag(level), tag, ##__VA_ARGS__);              \
+        }                                                                                          \
     } while (0)
 
-#define SAPPHIRELIB_LOG_DEBUG(tag, fmt, ...)                                                     \
+#define SAPPHIRELIB_LOG_DEBUG(tag, fmt, ...)                                                       \
     SAPPHIRELIB_LOG(sapphirelib::LogLevel::Debug, tag, fmt, ##__VA_ARGS__)
-#define SAPPHIRELIB_LOG_INFO(tag, fmt, ...)                                                       \
+#define SAPPHIRELIB_LOG_INFO(tag, fmt, ...)                                                        \
     SAPPHIRELIB_LOG(sapphirelib::LogLevel::Info, tag, fmt, ##__VA_ARGS__)
-#define SAPPHIRELIB_LOG_WARN(tag, fmt, ...)                                                       \
+#define SAPPHIRELIB_LOG_WARN(tag, fmt, ...)                                                        \
     SAPPHIRELIB_LOG(sapphirelib::LogLevel::Warn, tag, fmt, ##__VA_ARGS__)
-#define SAPPHIRELIB_LOG_ERROR(tag, fmt, ...)                                                      \
+#define SAPPHIRELIB_LOG_ERROR(tag, fmt, ...)                                                       \
     SAPPHIRELIB_LOG(sapphirelib::LogLevel::Error, tag, fmt, ##__VA_ARGS__)

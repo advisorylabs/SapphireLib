@@ -60,8 +60,7 @@ double thermalPowerFraction(double tempC);
  * @return CenterCorrection what to add to the center wheels
  */
 CenterCorrection centerThermalCorrection(CornerValues commandedVolts,
-                                         CornerValues survivingFraction,
-                                         double centerPowerFraction, double gain,
-                                         double maxVolts);
+                                         CornerValues survivingFraction, double centerPowerFraction,
+                                         double gain, double maxVolts);
 
 } // namespace sapphirelib::chassis

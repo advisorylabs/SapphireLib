@@ -36,7 +36,8 @@ void Odometry::update() {
     const double headingDeg = sensors::fieldHeadingDeg(rotationDeg, offsetDeg);
     const double lastHeadingDeg = lastRotationDeg_ + offsetDeg;
 
-    const double verticalIn = sensors_.vertical ? sensors_.vertical->getDistanceIn() : lastVerticalIn_;
+    const double verticalIn =
+        sensors_.vertical ? sensors_.vertical->getDistanceIn() : lastVerticalIn_;
     const double horizontalIn =
         sensors_.horizontal ? sensors_.horizontal->getDistanceIn() : lastHorizontalIn_;
 

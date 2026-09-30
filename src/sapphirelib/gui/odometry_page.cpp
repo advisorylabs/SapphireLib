@@ -34,7 +34,8 @@ constexpr std::uint32_t kCalibrationLoopDelayMs = 10;
 OdometryPage::OdometryPage(odom::Odometry& odometry, double fieldWidthIn, double fieldHeightIn)
     : odometry_(odometry), fieldWidthIn_(fieldWidthIn), fieldHeightIn_(fieldHeightIn) {}
 
-void OdometryPage::enableOffsetCalibration(sensors::Imu& imu, const odom::TrackingWheel* verticalWheel,
+void OdometryPage::enableOffsetCalibration(sensors::Imu& imu,
+                                           const odom::TrackingWheel* verticalWheel,
                                            const odom::TrackingWheel* horizontalWheel,
                                            std::function<void(double)> setSpin, double spinPower,
                                            double turns) {
@@ -99,7 +100,8 @@ void OdometryPage::build(lv_obj_t* container) {
     lv_obj_set_pos(calibStatusLabel_, kCalibrateColumnX, kCalibrateStatusY);
     lv_obj_set_width(calibStatusLabel_, kCalibrateColumnWidthPx);
     lv_label_set_long_mode(calibStatusLabel_, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(calibStatusLabel_, calibSetSpin_ ? "Spin the bot free, then tap Calibrate" : "");
+    lv_label_set_text(calibStatusLabel_,
+                      calibSetSpin_ ? "Spin the bot free, then tap Calibrate" : "");
 
     update();
 }
@@ -108,12 +110,14 @@ void OdometryPage::update() {
     const odom::Pose pose = odometry_.getPose();
 
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "X: %.1f  Y: %.1f  H: %.1f deg", pose.xIn, pose.yIn, pose.headingDeg);
+    std::snprintf(buf, sizeof(buf), "X: %.1f  Y: %.1f  H: %.1f deg", pose.xIn, pose.yIn,
+                  pose.headingDeg);
     setLabelText(poseLabel_, buf);
 
     const ScreenPoint dot = fieldToScreen(pose.xIn, pose.yIn, fieldWidthIn_, fieldHeightIn_,
                                           fieldViewWidthPx_, fieldViewHeightPx_);
-    const ScreenPoint tip = headingIndicatorEndpoint(dot.x, dot.y, pose.headingDeg, kHeadingLineLengthPx);
+    const ScreenPoint tip =
+        headingIndicatorEndpoint(dot.x, dot.y, pose.headingDeg, kHeadingLineLengthPx);
 
     // only move the dot and line when they'd land on a different pixel. Odometry noise moves a
     // still robot a fraction of a pixel, and LVGL redraws on every set_pos() whether it moved or
@@ -145,7 +149,8 @@ void OdometryPage::update() {
     } else if (calibResultsReady_.load()) {
         char calibBuf[64];
         if (calibVertical_ && calibHorizontal_) {
-            std::snprintf(calibBuf, sizeof(calibBuf), "Vertical: %.2fin  Horizontal: %.2fin (applied)",
+            std::snprintf(calibBuf, sizeof(calibBuf),
+                          "Vertical: %.2fin  Horizontal: %.2fin (applied)",
                           calibVerticalOffsetIn_.load(), calibHorizontalOffsetIn_.load());
         } else if (calibVertical_) {
             std::snprintf(calibBuf, sizeof(calibBuf), "Vertical offset: %.2fin (applied)",
@@ -188,13 +193,15 @@ void OdometryPage::runCalibration() {
         odom::OdometryConfig config = odometry_.getConfig();
         if (calibVertical_) {
             const double wheelDistanceIn = calibVertical_->getDistanceIn() - startVerticalIn;
-            const double offsetIn = odom::calibrateTrackingWheelOffsetIn(wheelDistanceIn, rotatedRadians);
+            const double offsetIn =
+                odom::calibrateTrackingWheelOffsetIn(wheelDistanceIn, rotatedRadians);
             calibVerticalOffsetIn_.store(offsetIn);
             config.verticalOffsetIn = offsetIn;
         }
         if (calibHorizontal_) {
             const double wheelDistanceIn = calibHorizontal_->getDistanceIn() - startHorizontalIn;
-            const double offsetIn = odom::calibrateTrackingWheelOffsetIn(wheelDistanceIn, rotatedRadians);
+            const double offsetIn =
+                odom::calibrateTrackingWheelOffsetIn(wheelDistanceIn, rotatedRadians);
             calibHorizontalOffsetIn_.store(offsetIn);
             config.horizontalOffsetIn = offsetIn;
         }

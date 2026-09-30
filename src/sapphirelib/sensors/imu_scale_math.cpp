@@ -24,6 +24,8 @@ double headingOffsetFor(double targetHeadingDeg, double cumulativeDeg) {
     return wrapDegrees180(targetHeadingDeg - cumulativeDeg);
 }
 
-double calibrateHeadingScale(double actualTurns, double measuredTurns) { return actualTurns / measuredTurns; }
+double calibrateHeadingScale(double actualTurns, double measuredTurns) {
+    return actualTurns / measuredTurns;
+}
 
 } // namespace sapphirelib::sensors

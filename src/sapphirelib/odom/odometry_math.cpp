@@ -14,8 +14,8 @@ constexpr double kDegToRad = kPi / 180.0;
 } // namespace
 
 PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double verticalDeltaIn,
-                                double horizontalDeltaIn, double verticalOffsetIn,
-                                double horizontalOffsetIn) {
+                               double horizontalDeltaIn, double verticalOffsetIn,
+                               double horizontalOffsetIn) {
     const double dThetaDeg = wrapDegrees180(headingDeg - lastHeadingDeg);
     const double dThetaRad = dThetaDeg * kDegToRad;
 
