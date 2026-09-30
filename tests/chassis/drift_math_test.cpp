@@ -37,8 +37,10 @@ void testForwardMotionDuringPureStrafeIsDrift() {
 }
 
 void testRotationArcIsNotDrift() {
-    // Wheel 3.5in right of center: a 90 degree clockwise turn rolls it
-    // 3.5 * pi/2 inches "forward" with no translation at all.
+    // Wheel 3.5in LEFT of center (offset +3.5): a 90 degree clockwise turn
+    // rolls it 3.5 * pi/2 inches forward with no translation at all, the
+    // way a tank's left side drives forward on a right turn. (A right-side
+    // wheel rolls backward, and has a negative offset.)
     expectNear(strafeDriftIn(3.5 * kPi / 2.0, 3.5, 90.0, 0.4, 0.0, 10.0), 0.0, "rotation arc");
     expectNear(strafeDriftIn(3.5 * kPi / 2.0 + 0.2, 3.5, 90.0, 0.4, 0.0, 10.0), 0.2,
                "drift on top of rotation arc");
