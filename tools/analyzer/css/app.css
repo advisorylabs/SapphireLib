@@ -47,14 +47,13 @@
   --series-7: #4a3aa7;
   --series-8: #e34948;
 
-  /* Motor temperature, one warm hue light→dark; 55°C is where V5 derates. */
-  --heat-0: #fbe6d5;
-  --heat-1: #f5bc8c;
-  --heat-2: #ec8a4b;
-  --heat-3: #c9521d;
-  --heat-4: #8c2e08;
-  --heat-ink-light: #0e1117;
-  --heat-ink-dark: #ffffff;
+  /* Motor temperature, green (cool) to red (hot); 55°C is where V5 derates.
+     Lightness steps too, so the bins still separate without red/green vision. */
+  --heat-0: #67d283;
+  --heat-1: #e3d53a;
+  --heat-2: #ec9400;
+  --heat-3: #df5200;
+  --heat-4: #a21924;
 
   --font-display: 'Barlow Semi Condensed', 'Arial Narrow', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -94,11 +93,11 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-8: #e66767;
-    --heat-0: #33241b;
-    --heat-1: #6e3818;
-    --heat-2: #b24f1c;
-    --heat-3: #e2682a;
-    --heat-4: #ff9d5f;
+    --heat-0: #359658;
+    --heat-1: #ddca33;
+    --heat-2: #ea9000;
+    --heat-3: #e74f00;
+    --heat-4: #c51c2b;
     color-scheme: dark;
   }
 }
@@ -131,11 +130,11 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
-  --heat-0: #33241b;
-  --heat-1: #6e3818;
-  --heat-2: #b24f1c;
-  --heat-3: #e2682a;
-  --heat-4: #ff9d5f;
+  --heat-0: #359658;
+  --heat-1: #ddca33;
+  --heat-2: #ea9000;
+  --heat-3: #e74f00;
+  --heat-4: #c51c2b;
   color-scheme: dark;
 }
 
