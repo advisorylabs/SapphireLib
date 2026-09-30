@@ -1,19 +1,3 @@
-/**
- * \file sapphirelib/input/controller_screen.hpp
- *
- * The controller's three-line text screen (and rumble) as retained state
- * plus a write scheduler. Set what each line should say whenever you like;
- * takeWrite() hands back at most one thing to send per call, only after the
- * minimum interval since the last send, and only for a line whose text
- * differs from what the controller last accepted. That is what stops a
- * controller screen from dropping text: V5 controllers silently discard
- * writes that arrive faster than about every 50ms, counted across all lines.
- * Pure; input::Controller does the actual sending. See
- * tests/input/controller_screen_test.cpp.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <array>
@@ -23,70 +7,97 @@
 
 namespace sapphirelib::input {
 
-/// Not thread-safe: set lines and take writes from one task (the one that
-/// runs your per-tick function).
+/**
+ * @brief The controller's three line screen and rumble, with writes spaced out
+ *
+ * Set what each line should say whenever you like. takeWrite() hands back at most one thing to
+ * send, only after the minimum interval, and only for a line that changed. V5 controllers drop
+ * writes sent faster than about every 50ms. input::Controller does the sending
+ *
+ * @note not thread-safe, so use it from one task
+ */
 class ControllerScreen {
 public:
     static constexpr std::size_t kLines = 3;
 
-    /// Visible columns per line. Lines are cut to this and padded to it when
-    /// sent, so a shorter line fully overwrites a longer one.
+    // visible columns per line. Lines are cut and padded to this, so a shorter line fully covers a
+    // longer one
     static constexpr std::size_t kColumns = 15;
 
-    /// Longest rumble pattern the controller takes ('.' short, '-' long, ' ' pause).
+    // longest rumble pattern ('.' short, '-' long, ' ' pause)
     static constexpr std::size_t kMaxRumbleChars = 8;
 
     enum class WriteKind : std::uint8_t { none, line, rumble };
 
-    /// One thing to send: a line's text, or a rumble pattern. Self-contained
-    /// (the text is copied in), so it stays valid whatever changes next.
+    /**
+     * @brief One thing to send: a line's text or a rumble pattern. The text is copied in
+     */
     struct Write {
         WriteKind kind = WriteKind::none;
         std::uint8_t line = 0;
         std::array<char, kColumns + 1> text{};
     };
 
-    /// `minWriteIntervalMs` is the spacing between sends. Keep it above the
-    /// controller's ~50ms limit.
+    /**
+     * @brief Construct a new ControllerScreen
+     *
+     * @param minWriteIntervalMs time between sends, in milliseconds. Keep it above 50. 60 by
+     * default
+     */
     explicit ControllerScreen(std::uint32_t minWriteIntervalMs = 60);
 
-    /// printf-style. The result is cut to kColumns characters, as snprintf
-    /// into a kColumns + 1 buffer would cut it. Out-of-range lines are
-    /// ignored. Safe to call every tick: nothing is sent unless the text
-    /// differs from what's shown. The arguments may include line() itself
-    /// (e.g. to append to what a line already says).
+    /**
+     * @brief Set a line, printf style
+     *
+     * Cut to 15 characters. Safe to call every tick, since nothing is sent unless the text changed
+     *
+     * @param line line number, 0-2. Others are ignored
+     * @param format printf format string
+     *
+     * @b Example
+     * @code {.cpp}
+     * master.screen().setLine(1, "BATT %3.0f%%", pros::battery::get_capacity());
+     * @endcode
+     */
     void setLine(std::size_t line, const char* format, ...) __attribute__((format(printf, 3, 4)));
     void setLineV(std::size_t line, const char* format, std::va_list args);
 
-    /// The text line `line` is meant to show (not necessarily sent yet); ""
-    /// for an out-of-range line.
+    /**
+     * @brief Get the text a line should show (not necessarily sent yet). "" for a bad line number
+     */
     const char* line(std::size_t line) const;
 
-    /// Queues a rumble pattern (cut to kMaxRumbleChars), replacing any not yet
-    /// sent. It goes ahead of pending line changes, through the same interval.
-    /// A null or empty pattern is ignored.
+    /**
+     * @brief Queue a rumble pattern, replacing one not yet sent. Goes before pending line changes
+     *
+     * @param pattern '.' short, '-' long, ' ' pause. Cut to 8 characters. Empty is ignored
+     */
     void rumble(const char* pattern);
 
-    /// Forgets what the controller is showing, so every line is sent again,
-    /// empty ones included. Use when the screen may have been changed or lost
-    /// behind this object's back (input::Controller does this on resumed()).
+    /**
+     * @brief Forget what the controller shows, so every line is sent again
+     *
+     * For when the screen may have changed behind this object's back
+     */
     void invalidate();
 
-    /// The next thing to send, if the interval since the last send has passed:
-    /// a pending rumble first, then the lowest-numbered line that differs from
-    /// what the controller last accepted; `kind == none` if nothing is due.
-    /// Returning a write counts as sending for the interval, whether or not
-    /// the send succeeds, so a rejected write waits a full interval before
-    /// retrying instead of hammering a controller that's already refusing.
-    ///
-    /// Every line starts out "unknown", so the first writes after
-    /// construction repaint all three lines — clearing whatever an earlier
-    /// program left on the screen.
+    /**
+     * @brief Get the next thing to send, if the interval has passed
+     *
+     * A pending rumble first, then the lowest line that changed. Returning a write counts as
+     * sending, so a rejected write waits a full interval before retrying. Every line starts
+     * unknown, so the first writes clear whatever an earlier program left
+     *
+     * @param nowMs the current time, in milliseconds
+     * @return Write what to send. kind is none if nothing is due
+     */
     Write takeWrite(std::uint32_t nowMs);
 
-    /// Call after `write` was accepted: its text is now what's shown (or the
-    /// rumble is done). A failed write is simply not confirmed and comes up
-    /// again.
+    /**
+     * @brief Mark a write as accepted. A write that isn't confirmed comes up again
+     *
+     * @param write the write that was sent
+     */
     void confirm(const Write& write);
 
 private:

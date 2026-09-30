@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/mechanism/roller.hpp
- *
- * An intake, conveyor, or any other open-loop roller, with optional anti-jam
- * (see jam_detector.hpp). Which way it spins and when is your robot's
- * policy — usually an `if` chain over buttons — so this adds only the one
- * genuinely reusable roller behavior on top of a motor group.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
@@ -19,36 +8,59 @@
 
 namespace sapphirelib::mechanism {
 
-///   Roller intake({-18, 11}, {.enabled = true});
-///   ...every tick:
-///   intake.spin(controller.held(Button::r1) ? 12.0 : 0.0, controller.now());
-///
-/// Call spin() every tick, even when the answer is 0V: jam detection only
-/// works while it's being fed. The constructor only builds the PROS motor
-/// group (no device commands), so namespace scope is safe. Not thread-safe:
-/// drive it from one task.
+/**
+ * @brief An intake, conveyor, or other roller, with optional anti-jam
+ *
+ * Call spin() every tick, even with 0V, since jam detection only works while it's being fed.
+ * Safe to construct at namespace scope
+ *
+ * @note not thread-safe, so drive it from one task
+ *
+ * @b Example
+ * @code {.cpp}
+ * sapphirelib::mechanism::Roller intake({-18, 11}, {.enabled = true});
+ *
+ * // every tick
+ * intake.spin(master.held(Button::r1) ? 12.0 : 0.0, master.now());
+ * if (intake.jammed()) master.rumble(".");
+ * @endcode
+ */
 class Roller {
 public:
+    /**
+     * @brief Construct a new Roller
+     *
+     * @param ports motor ports. Negative reverses a motor
+     * @param jam anti-jam settings. Off by default
+     */
     explicit Roller(std::initializer_list<std::int8_t> ports, JamConfig jam = {});
 
-    /// Spins at `volts` (clamped to ±12; positive is the motors' forward), or
-    /// at the jam detector's reverse pulse while it's clearing a jam. `nowMs`
-    /// is the tick's one "now". A NaN command sends 0V.
+    /**
+     * @brief Spin the roller, or reverse it while clearing a jam
+     *
+     * @param volts voltage, clamped to +-12. Positive is the motors' forward. NaN sends 0V
+     * @param nowMs the current time, in milliseconds
+     */
     void spin(double volts, std::uint32_t nowMs);
 
-    /// 0V, and forgets any jam in progress.
+    /**
+     * @brief Stop the roller and forget any jam in progress
+     */
     void stop();
 
-    /// Reversing to clear a jam right now — e.g. to rumble the controller.
+    /**
+     * @brief Whether the roller is reversing to clear a jam right now
+     */
     bool jammed() const;
 
-    /// The motors: for brake mode, current, temperature, and so on.
+    /**
+     * @brief Get the motors, for brake mode, current, temperature, and so on
+     */
     pros::MotorGroup& motors();
 
 private:
-    /// Mean speed of the motors that are answering, in RPM (NaN if none
-    /// are). Read per motor rather than with get_actual_velocity_all(),
-    /// which would allocate a vector every tick.
+    // mean speed of the motors that answer, in RPM, or NaN if none do. Read per motor, since
+    // get_actual_velocity_all() would allocate every tick
     double speedRpm() const;
 
     pros::MotorGroup motors_;

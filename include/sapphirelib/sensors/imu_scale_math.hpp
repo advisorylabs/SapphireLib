@@ -1,53 +1,61 @@
-/**
- * \file sapphirelib/sensors/imu_scale_math.hpp
- *
- * The V5 IMU under- or over-reports heading change by a small, fairly
- * consistent percentage — negligible over one turn, but compounds badly
- * over a match's worth of turning. This is the pure math behind correcting
- * for it: track cumulative (unwrapped) rotation from the raw sensor, scale
- * that cumulative value by a calibrated factor, then re-wrap to a 0-360
- * heading. No PROS dependency — see
- * tests/sensors/imu_scale_math_test.cpp. sensors::Imu (imu.hpp) wraps this
- * with the actual sensor reads.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 namespace sapphirelib::sensors {
 
-/// The wrapped signed change from `lastRawHeadingDeg` to `rawHeadingDeg`
-/// (both 0-360, clockwise-positive, matching pros::Imu::get_heading()) —
-/// the piece of cumulative-rotation tracking that's pure math. Assumes
-/// consecutive calls are frequent enough that the true rotation between
-/// them is under 180 degrees, true for any reasonable control loop rate.
+/**
+ * @brief Get the signed change between two raw IMU headings
+ *
+ * Assumes the robot turned less than 180 degrees between the readings
+ *
+ * @param lastRawHeadingDeg the earlier heading, 0-360 degrees
+ * @param rawHeadingDeg the later heading, 0-360 degrees
+ * @return double the change, (-180, 180] degrees
+ */
 double rawHeadingDeltaDeg(double lastRawHeadingDeg, double rawHeadingDeg);
 
-/// Wraps a cumulative (unwrapped, any magnitude) degree value to [0, 360) —
-/// turns a scaled cumulative rotation back into an absolute heading
-/// reading.
+/**
+ * @brief Wrap an angle to [0, 360)
+ *
+ * @param degrees the angle, any size
+ * @return double the angle, [0, 360) degrees
+ */
 double wrapDegrees360(double degrees);
 
-/// The absolute field heading, 0-360, for a cumulative (unwrapped) rotation
-/// reading plus the offset that puts it in the field frame — how
-/// sensors::Imu::getHeadingDeg() turns rotation-since-construction into a
-/// heading after setHeadingDeg().
+/**
+ * @brief Get the field heading for an unwrapped rotation plus the field offset
+ *
+ * @param cumulativeDeg unwrapped rotation, in degrees
+ * @param headingOffsetDeg the offset from setHeadingDeg(), in degrees
+ * @return double heading, 0-360 degrees
+ */
 double fieldHeadingDeg(double cumulativeDeg, double headingOffsetDeg);
 
-/// The offset that makes fieldHeadingDeg(cumulativeDeg, offset) read
-/// `targetHeadingDeg` right now — what sensors::Imu::setHeadingDeg() stores.
-/// Any target works, negative or past 360; the offset comes back in
-/// (-180, 180], since only its value mod 360 matters.
+/**
+ * @brief Get the offset that makes the field heading read a target right now
+ *
+ * @param targetHeadingDeg the heading to read, in degrees. Any value
+ * @param cumulativeDeg the current unwrapped rotation, in degrees
+ * @return double the offset, (-180, 180] degrees
+ */
 double headingOffsetFor(double targetHeadingDeg, double cumulativeDeg);
 
-/// Calibration helper: with an Imu constructed at headingScale = 1.0 (no
-/// correction), physically rotate the chassis a known number of full turns
-/// — more turns average out the IMU's per-turn error better — then pass how
-/// many turns actually happened (`actualTurns`, e.g. 10.0) and how many the
-/// Imu measured over that same rotation (`measuredTurns`, e.g.
-/// imu.getCumulativeHeadingDeg() / 360.0). Returns the headingScale to
-/// construct future Imu instances for this robot with.
+/**
+ * @brief Work out the IMU's headingScale
+ *
+ * With an Imu built with a scale of 1, spin the robot a known number of full turns (more turns
+ * average out the error better), then compare with what the IMU measured
+ *
+ * @param actualTurns how many turns the robot really made, e.g. 10
+ * @param measuredTurns how many the IMU measured, e.g. imu.getCumulativeHeadingDeg() / 360
+ * @return double the headingScale to build this robot's Imu with
+ *
+ * @b Example
+ * @code {.cpp}
+ * // after spinning the robot exactly 10 turns
+ * double measured = imu.getCumulativeHeadingDeg() / 360;
+ * double scale = sapphirelib::sensors::calibrateHeadingScale(10, measured);
+ * @endcode
+ */
 double calibrateHeadingScale(double actualTurns, double measuredTurns);
 
 } // namespace sapphirelib::sensors

@@ -1,13 +1,3 @@
-/**
- * \file sapphirelib/chassis/tank_drivetrain.hpp
- *
- * Closed-loop differential (tank) drivetrain built on IMU heading + drive
- * motor encoders — no tracking wheels required. Also provides tank()/
- * arcade() for driver control.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -25,142 +15,258 @@
 
 namespace sapphirelib::chassis {
 
-/// Closed-loop differential (2-side) drivetrain: driveDistance()/
-/// turnToHeading() using only an IMU and drive motor encoders. Also
-/// provides tank()/arcade() for driver control. For mecanum/X-drive
-/// chassis, see HolonomicDrivetrain instead.
-///
-/// Every blocking motion returns a motion::MotionResult (settled, timed
-/// out, or aborted, plus its final error) and logs a `motion` start/end
-/// event to the running telemetry::Logger, if there is one — see
-/// docs/TELEMETRY_FORMAT.md.
+/**
+ * @brief Tank (differential) drivetrain
+ *
+ * Works with just the IMU and drive encoders. For mecanum or X-drive, see HolonomicDrivetrain
+ *
+ * Every blocking motion returns a motion::MotionResult and logs a motion start/end event to the
+ * running telemetry::Logger, if there is one
+ */
 class TankDrivetrain {
 public:
-    /// Constructs the drivetrain's motor groups and IMU directly from ports
-    /// (rather than accepting already-built MotorGroup/sensors::Imu
-    /// objects) — pros::MotorGroup holds a non-copyable, non-movable mutex,
-    /// so it can only be constructed in place, never passed by value.
-    /// `imuHeadingScale` corrects for the V5 IMU's multi-turn drift — see
-    /// sensors::Imu's class comment; leave at the default 1.0 until you've
-    /// run sensors::calibrateHeadingScale() for this robot.
+    /**
+     * @brief Construct a new TankDrivetrain
+     *
+     * @note blocks for about 2-3 seconds while the IMU calibrates, so build it from initialize(),
+     * not at namespace scope
+     *
+     * @param leftPorts left motor ports. Negative reverses a motor
+     * @param rightPorts right motor ports
+     * @param gearset the drive motors' cartridge
+     * @param imuPort IMU port
+     * @param config wheel size, gear ratio, and driveDistance() heading correction
+     * @param drivePIDConfig PID settings for distance motions
+     * @param turnPIDConfig PID settings for turns
+     * @param imuHeadingScale correction for the IMU's multi-turn drift. 1 by default; see
+     * sensors::calibrateHeadingScale()
+     *
+     * @b Example
+     * @code {.cpp}
+     * sapphirelib::chassis::TankDrivetrain& drivetrain() {
+     *     static sapphirelib::chassis::TankDrivetrain instance(
+     *         {1, -2, 3}, // left motors
+     *         {-4, 5, -6}, // right motors
+     *         sapphirelib::chassis::Gearset::blue,
+     *         10, // IMU port
+     *         {.wheelDiameterIn = 3.25, .externalGearRatio = 1.0, .headingCorrectionKP = 0.4},
+     *         {.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.001}, .outputLimit = 12.0},   // drive
+     *         {.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.0002}, .outputLimit = 12.0}); // turn
+     *     return instance;
+     * }
+     * @endcode
+     */
     TankDrivetrain(std::initializer_list<std::int8_t> leftPorts,
                    std::initializer_list<std::int8_t> rightPorts, Gearset gearset,
                    std::uint8_t imuPort, DrivetrainConfig config, PID::Config drivePIDConfig,
                    PID::Config turnPIDConfig, double imuHeadingScale = 1.0);
 
-    /// Driver control: `left`/`right` are normalized [-1, 1] joystick
-    /// positions, already curved by the caller if desired (see
-    /// sapphirelib::curveJoystick()).
+    /**
+     * @brief Drive with tank controls
+     *
+     * @param left left side, -1 to 1
+     * @param right right side, -1 to 1
+     *
+     * @b Example
+     * @code {.cpp}
+     * drivetrain().tank(master.get_analog(ANALOG_LEFT_Y) / 127.0,
+     *                   master.get_analog(ANALOG_RIGHT_Y) / 127.0);
+     * @endcode
+     */
     void tank(double left, double right);
 
-    /// Driver control: `throttle`/`turn` are normalized [-1, 1].
+    /**
+     * @brief Drive with arcade controls
+     *
+     * @param throttle forward/backward, -1 to 1
+     * @param turn rotation, -1 to 1
+     *
+     * @b Example
+     * @code {.cpp}
+     * drivetrain().arcade(master.get_analog(ANALOG_LEFT_Y) / 127.0,
+     *                     master.get_analog(ANALOG_RIGHT_X) / 127.0);
+     * @endcode
+     */
     void arcade(double throttle, double turn);
 
-    /// The forward and turn volts the two sides were last commanded:
-    /// forward = (left + right) / 2, turn = (left - right) / 2, and strafe
-    /// always 0. Covers every path to the motors — tank()/arcade() and every
-    /// autonomous motion. Before each motor's own ±12V clamp, so an
-    /// autonomous motion's raw PID output can read past 12. All zero after
-    /// stop(), which commands no voltage.
-    ///
-    /// For telemetry and model fitting: the input side of the chassis's
-    /// response. Safe to call from any task — the fields are separate
-    /// lock-free atomics, so a read racing a command can mix fields from
-    /// two consecutive ticks, but never tears a single value.
+    /**
+     * @brief Get the forward and turn voltage last commanded
+     *
+     * forward = (left + right) / 2, turn = (left - right) / 2, strafe is always 0. Covers driver
+     * control and every autonomous motion. Before each motor's own 12V clamp. All zero after stop()
+     *
+     * @note safe to call from any task. The values are separate atomics, so a read can mix two
+     * consecutive ticks
+     *
+     * @return AxisVolts forward, strafe, and turn volts
+     */
     AxisVolts appliedAxisVolts() const;
 
-    /// Drives straight for `inches` (signed: negative reverses) using
-    /// drive-encoder position PID with IMU-based heading correction.
-    /// Blocks until settled or timed out, then stops.
-    ///
-    /// Measures from wherever the drive encoders read when it starts,
-    /// without taring them — see MotorGroup::tarePosition() for why a tare
-    /// would disturb odometry.
+    /**
+     * @brief Drive straight forward or backward a distance
+     *
+     * Uses the drive encoders, with IMU heading correction. Measures from where the encoders read
+     * when it starts, without taring them
+     *
+     * @param inches distance to drive, in inches. Negative drives backward
+     * @param exit when the motion ends. errorThreshold is in inches
+     * @return motion::MotionResult how the motion ended
+     *
+     * @b Example
+     * @code {.cpp}
+     * // drive forward 24 inches
+     * drivetrain().driveDistance(24);
+     * // back up 12 inches, giving up after 1.5 seconds
+     * drivetrain().driveDistance(-12, {.timeoutMs = 1500});
+     * @endcode
+     */
     motion::MotionResult driveDistance(double inches, ExitConditions exit = ExitConditions{1.0});
 
-    /// Turns in place to `headingDeg` (absolute heading, matching
-    /// pros::Imu::get_heading()'s 0-360 range) using IMU heading PID.
-    /// `exit.errorThreshold` is in degrees here. Blocks until settled or
-    /// timed out, then stops.
+    /**
+     * @brief Turn in place to a heading
+     *
+     * @param headingDeg target field heading, 0-360 degrees
+     * @param exit when the motion ends. errorThreshold is in degrees, 2 by default
+     * @return motion::MotionResult how the motion ended
+     *
+     * @b Example
+     * @code {.cpp}
+     * // turn to face 90 degrees
+     * drivetrain().turnToHeading(90);
+     * @endcode
+     */
     motion::MotionResult turnToHeading(double headingDeg,
                                        ExitConditions exit = ExitConditions{2.0});
 
-    /// The pose source for the moveToPoint()/moveToPose()/followPath()
-    /// overloads that don't take one, so a routine can write
-    /// `moveToPoint(24, 24)` instead of passing the odometry to every call.
-    /// Set it once during setup (initialize()), before any motion runs —
-    /// it isn't synchronized. `odometry` must outlive the drivetrain;
-    /// nullptr unsets it. The overloads that take an Odometry ignore this.
+    /**
+     * @brief Set the odometry used by the motions that don't take one
+     *
+     * @note set it once in initialize(), before any motion runs. The odometry must outlive the
+     * drivetrain
+     *
+     * @param odometry the odometry. nullptr unsets it
+     */
     void setOdometry(const odom::Odometry* odometry);
 
-    /// Drives to field point (`xIn`, `yIn`), reading pose from `odometry`.
-    /// Doesn't control final heading — arrives facing whatever direction the
-    /// approach left it (for that, see moveToPose()). Since a differential
-    /// chassis can't strafe, it turns to face the point (or, if the point is
-    /// behind it by more than 90 degrees, reverses instead of spinning all
-    /// the way around) while driving, rather than turning first and then
-    /// driving. `exit.errorThreshold` is the distance to the point, in
-    /// inches. Blocks until settled or timed out, then stops.
+    /**
+     * @brief Drive to a point on the field
+     *
+     * Turns toward the point while driving, and reverses instead of spinning around when the
+     * point is more than 90 degrees behind. Doesn't control the final heading; see moveToPose()
+     *
+     * @param xIn target x, in inches
+     * @param yIn target y, in inches
+     * @param odometry where to read the pose from
+     * @param exit when the motion ends. errorThreshold is the distance to the point, in inches
+     * @return motion::MotionResult how the motion ended
+     */
     motion::MotionResult moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
                                      ExitConditions exit = ExitConditions{1.0});
 
-    /// moveToPoint() reading pose from the setOdometry() odometry. If none
-    /// was set, logs an error and returns ExitReason::aborted without
-    /// moving.
+    /**
+     * @brief Drive to a point on the field, using the odometry from setOdometry()
+     *
+     * @param xIn target x, in inches
+     * @param yIn target y, in inches
+     * @param exit when the motion ends. errorThreshold is the distance to the point, in inches
+     * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
+     *
+     * @b Example
+     * @code {.cpp}
+     * // drive to (24, 24), and stop the routine if it didn't get there
+     * if (!drivetrain().moveToPoint(24, 24).settled()) return;
+     * @endcode
+     */
     motion::MotionResult moveToPoint(double xIn, double yIn,
                                      ExitConditions exit = ExitConditions{1.0});
 
-    /// Drives to field pose (`xIn`, `yIn`, `headingDeg`), reading pose from
-    /// `odometry`. Uses a boomerang controller: aims at a "carrot" point
-    /// placed behind the target along its facing direction (see
-    /// motion::PoseExitConditions::boomerangLeadPct) so the chassis curves
-    /// smoothly into the final heading instead of driving straight at the
-    /// point and point-turning at the end. Blocks until settled or timed
-    /// out, then stops. The result's finalError is the distance to the
-    /// point.
+    /**
+     * @brief Drive to a pose on the field with the boomerang controller
+     *
+     * Aims at a carrot point behind the target along its heading (see
+     * motion::PoseExitConditions::boomerangLeadPct), so the chassis curves into the final heading
+     * instead of turning in place at the end
+     *
+     * @param xIn target x, in inches
+     * @param yIn target y, in inches
+     * @param headingDeg target heading, in degrees
+     * @param odometry where to read the pose from
+     * @param exit when the motion ends
+     * @return motion::MotionResult how the motion ended. finalError is the distance to the point
+     */
     motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg,
                                     const odom::Odometry& odometry,
                                     motion::PoseExitConditions exit = {});
 
-    /// moveToPose() reading pose from the setOdometry() odometry. If none
-    /// was set, logs an error and returns ExitReason::aborted without
-    /// moving.
+    /**
+     * @brief Drive to a pose on the field, using the odometry from setOdometry()
+     *
+     * @param xIn target x, in inches
+     * @param yIn target y, in inches
+     * @param headingDeg target heading, in degrees
+     * @param exit when the motion ends
+     * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
+     *
+     * @b Example
+     * @code {.cpp}
+     * // curve into (24, 48) facing 90 degrees, with a tighter curve than the default
+     * drivetrain().moveToPose(24, 48, 90, {.boomerangLeadPct = 0.4});
+     * @endcode
+     */
     motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg,
                                     motion::PoseExitConditions exit = {});
 
-    /// Follows `path` using pure pursuit: repeatedly steers toward a point
-    /// `config.lookaheadIn` ahead on the path, at constant cruise voltage,
-    /// until within `config.finalApproachIn` of the path's last waypoint —
-    /// then hands off to moveToPoint() for a controlled, settled stop
-    /// there. Blocks until that final moveToPoint() settles or times out.
-    ///
-    /// Returns the final approach's reason and error, with elapsedMs
-    /// covering the whole path. If the pursuit phase runs past
-    /// `config.timeoutMs` it stops there and returns ExitReason::timedOut
-    /// (finalError is the distance left to the last waypoint); an empty
-    /// path logs an error and returns ExitReason::aborted without moving.
+    /**
+     * @brief Follow a path with pure pursuit
+     *
+     * Steers toward a point lookaheadIn ahead on the path at a constant voltage, then switches to
+     * moveToPoint() for the last waypoint so it slows down and settles there
+     *
+     * @param path the waypoints to follow
+     * @param odometry where to read the pose from
+     * @param config lookahead, speed, and exit settings
+     * @return motion::MotionResult how the final approach ended. Timed out if the pursuit ran past
+     * config.timeoutMs; aborted for an empty path
+     */
     motion::MotionResult followPath(const motion::Path& path, const odom::Odometry& odometry,
                                     motion::PursuitConfig config);
 
-    /// followPath() reading pose from the setOdometry() odometry. If none
-    /// was set, logs an error and returns ExitReason::aborted without
-    /// moving.
+    /**
+     * @brief Follow a path with pure pursuit, using the odometry from setOdometry()
+     *
+     * @param path the waypoints to follow
+     * @param config lookahead, speed, and exit settings
+     * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
+     *
+     * @b Example
+     * @code {.cpp}
+     * const sapphirelib::motion::Path path({{0, 0}, {0, 24}, {24, 48}});
+     * drivetrain().followPath(path, {.lookaheadIn = 8.0, .cruiseVoltage = 8.0});
+     * @endcode
+     */
     motion::MotionResult followPath(const motion::Path& path, motion::PursuitConfig config);
 
+    /**
+     * @brief Stop the drivetrain
+     *
+     * @param mode brake mode to stop with. brake by default
+     */
     void stop(BrakeMode mode = BrakeMode::brake);
 
-    /// The drivetrain's own calibrated IMU — exposed so you can share it
-    /// with an externally-constructed odom::Odometry (via
-    /// Odometry::Sensors::imu) instead of opening a second sensor object on
-    /// the same physical port.
+    /**
+     * @brief Get the drivetrain's IMU, to share with an odom::Odometry instead of opening a second
+     * one on the same port
+     */
     sensors::Imu& imu();
 
-    /// Exposes the internal drive/turn PID controllers for live tuning
-    /// (see gui::PidTunerPage) — adjusting gains through these takes effect
-    /// immediately on the next driveDistance()/turnToHeading()/moveTo*()
-    /// call, since they read gains fresh each update() rather than caching
-    /// them at construction.
+    /**
+     * @brief Get the PID used by distance motions, for live tuning (see gui::PidTunerPage)
+     */
     PID& drivePID();
+
+    /**
+     * @brief Get the PID used by turns
+     */
     PID& turnPID();
 
 private:
@@ -171,35 +277,28 @@ private:
     PID drivePID_;
     PID turnPID_;
 
-    /// See setOdometry().
+    // see setOdometry()
     const odom::Odometry* odometry_ = nullptr;
 
-    /// See appliedAxisVolts(). Written by whichever task is commanding the
-    /// motors, read by telemetry's sampler — atomics rather than a mutex,
-    /// since PROS deletes competition tasks on every mode change and a
-    /// mutex held at that moment would stay locked forever.
+    // see appliedAxisVolts(). Atomics, not a mutex, since PROS deletes competition tasks on every
+    // mode change and a mutex held at that moment would stay locked
     std::atomic<double> appliedForwardVolts_{0.0};
     std::atomic<double> appliedTurnVolts_{0.0};
 
     double degreesToInches(double degrees) const;
 
-    /// The IMU's scaled rotation since construction, wrapped to 0-360 — a
-    /// heading Odometry::setPose()'s re-framing never shifts, for
-    /// driveDistance()'s heading correction, which only cares about drift
-    /// from where it started. See HolonomicDrivetrain::rotationHeadingDeg().
+    // the IMU's rotation since construction, wrapped to 0-360. setPose() never shifts it, so
+    // driveDistance()'s heading correction uses it
     double rotationHeadingDeg();
 
-    /// The one place the drive motors get a voltage — every call site goes
-    /// through here, so appliedAxisVolts() sees every command.
+    // the one place the drive motors get a voltage, so appliedAxisVolts() sees every command
     void setSideVoltages(double leftVolts, double rightVolts);
 
-    /// Mean of the two sides' encoders, in motor degrees —
-    /// driveDistance()'s position reading.
+    // mean of the two sides' encoders, in motor degrees
     double sideAverageDegrees() const;
 
-    /// moveToPoint()'s control loop. Logs no telemetry events of its own,
-    /// so followPath()'s final approach shows up as part of the path rather
-    /// than as a separate motion.
+    // moveToPoint()'s loop. Logs no events of its own, so followPath()'s final approach shows up
+    // as part of the path
     motion::MotionResult approachPoint(double xIn, double yIn, const odom::Odometry& odometry,
                                        ExitConditions exit);
 };

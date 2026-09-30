@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/gui/diagnostics_page.hpp
- *
- * SapphireLib's default sensor-diagnostics page: re-checks every registered
- * diag::SensorCheck on a live loop (not just at startup — a sensor working
- * fine when the robot powered on but knocked loose mid-match is exactly the
- * kind of thing this should catch too) and shows the failures.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
@@ -20,29 +9,41 @@
 
 namespace sapphirelib::gui {
 
+/**
+ * @brief Checks every sensor is plugged into the right port, all match long, and shows failures
+ *
+ * @b Example
+ * @code {.cpp}
+ * gui.addPage(std::make_unique<sapphirelib::gui::DiagnosticsPage>(
+ *     std::vector<sapphirelib::diag::SensorCheck>{
+ *         {"Front left drive", -1, sapphirelib::diag::DeviceKind::motor},
+ *         {"IMU", 10, sapphirelib::diag::DeviceKind::imu},
+ *     },
+ *     &gui));
+ * @endcode
+ */
 class DiagnosticsPage : public Page {
 public:
-    /// `gui`, if given, gets a red header banner via Gui::showWarning()
-    /// whenever any check is failing (cleared automatically once they all
-    /// pass again) — so a bad sensor is visible from any tab, not just this
-    /// one.
-    ///
-    /// Every change is also logged to the SD telemetry, when a Logger is
-    /// running, as a `device` event (docs/TELEMETRY_FORMAT.md): `missing` for
-    /// a check failing at the first poll, then `lost` and `back` as it flips —
-    /// so a cable knocked loose mid-match shows up in the log at the moment it
-    /// happened, next to whatever the robot did about it.
+    /**
+     * @brief Construct a new DiagnosticsPage
+     *
+     * Every change is also logged as a device event (missing, lost, or back) when a telemetry
+     * Logger is running, so a cable knocked loose mid-match shows up in the log
+     *
+     * @param checks the sensors to check
+     * @param gui shows a red header banner while any check fails. nullptr (the default) for none
+     */
     explicit DiagnosticsPage(std::vector<diag::SensorCheck> checks, Gui* gui = nullptr);
 
     const char* title() const override;
     void build(lv_obj_t* container) override;
     void update() override;
 
-    /// True: this page keeps polling even when another tab is showing, so
-    /// the screen-wide warning banner it raises through Gui::showWarning()
-    /// stays honest no matter which tab the driver is looking at. It
-    /// throttles itself to a fixed poll interval to pay for that — see
-    /// update().
+    /**
+     * @brief True, so the warning banner stays honest whatever tab is showing
+     *
+     * The page throttles its own polling to pay for it
+     */
     bool updatesWhenHidden() const override;
 
 private:
@@ -50,22 +51,17 @@ private:
         diag::SensorCheck check;
         lv_obj_t* label = nullptr;
 
-        /// The verdict whose color is currently applied to `label`, so
-        /// update() can skip restyling a row that hasn't changed. build()
-        /// establishes the invariant by painting every row failing-colored
-        /// before the first check runs.
+        // the verdict whose color is on the label, so an unchanged row isn't restyled
         bool ok = false;
 
-        /// Checked at least once — until then `ok` is only the paint's
-        /// starting point, not a verdict, so a first pass isn't a "change".
+        // checked at least once. Until then ok is only the starting color, not a verdict
         bool polled = false;
     };
 
     std::vector<Row> rows_;
     Gui* gui_;
 
-    /// pros::millis() at the last actual poll — see kPollIntervalMs. 0 means
-    /// "never polled", which always polls.
+    // pros::millis() at the last poll. 0 means never polled
     std::uint32_t lastPollMs_ = 0;
 };
 

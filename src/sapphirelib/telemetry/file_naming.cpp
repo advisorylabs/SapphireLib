@@ -4,7 +4,7 @@ namespace sapphirelib::telemetry {
 
 namespace {
 
-/// "SL" + six digits + ".CSV".
+// "SL" + six digits + ".CSV"
 constexpr std::size_t kNameLength = 12;
 
 char upper(char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; }

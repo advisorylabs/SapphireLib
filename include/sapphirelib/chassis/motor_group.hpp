@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/chassis/motor_group.hpp
- *
- * Thin wrapper around pros::MotorGroup: exposes voltage/velocity control,
- * position/velocity readouts, gearing, and brake mode through SapphireLib's
- * own types, so chassis and (later) odometry code depend on this instead of
- * PROS motor headers directly.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -19,78 +8,117 @@
 
 namespace sapphirelib::chassis {
 
-/// V5 smart motor gearing cartridges, named by their rated free-speed RPM.
+/**
+ * @brief V5 motor cartridges, named by their free speed
+ */
 enum class Gearset { red /* 100 RPM */, green /* 200 RPM */, blue /* 600 RPM */ };
 
+/**
+ * @brief What a motor does when stopped
+ */
 enum class BrakeMode { coast, brake, hold };
 
-/// Wraps a pros::MotorGroup representing one side of a drivetrain (or any
-/// other ganged set of motors).
+/**
+ * @brief A group of motors driven together, like one side of a drivetrain
+ *
+ * @b Example
+ * @code {.cpp}
+ * // left side on ports 1, 2 (reversed), and 3, with blue cartridges
+ * sapphirelib::chassis::MotorGroup left({1, -2, 3}, sapphirelib::chassis::Gearset::blue);
+ * left.moveVoltage(6.0);
+ * @endcode
+ */
 class MotorGroup {
 public:
+    /**
+     * @brief Construct a new MotorGroup
+     *
+     * @param ports motor ports. Negative reverses a motor
+     * @param gearset the motors' cartridge
+     */
     MotorGroup(std::initializer_list<std::int8_t> ports, Gearset gearset);
 
-    /// Commands an open-loop voltage, in volts, clamped to +-12.
+    /**
+     * @brief Move the motors at a voltage
+     *
+     * @param volts voltage, clamped to +-12
+     */
     void moveVoltage(double volts);
 
-    /// Commands a closed-loop velocity, in RPM, clamped to the gearset's max.
+    /**
+     * @brief Move the motors at a velocity, using the motors' own velocity control
+     *
+     * @param rpm velocity in RPM, clamped to the cartridge's top speed
+     */
     void moveVelocity(double rpm);
 
-    /// Stops using the currently configured brake mode.
+    /**
+     * @brief Stop the motors with the current brake mode
+     */
     void brake();
 
+    /**
+     * @brief Set the brake mode
+     *
+     * @param mode coast, brake, or hold
+     */
     void setBrakeMode(BrakeMode mode);
 
-    /// Zeroes the position returned by getPositionDegrees(). The tare
-    /// happens in the motors themselves, not in this object, so it also
-    /// zeroes every other reader of the same ports — a
-    /// MotorGroupTrackingWheel feeding odometry, say, whose pose would jump.
-    /// To measure a distance, record a starting reading and subtract it
-    /// instead (as the drivetrains' driveDistance() does).
+    /**
+     * @brief Zero the position
+     *
+     * @note this zeroes the motors themselves, so anything else reading the same ports (like a
+     * MotorGroupTrackingWheel feeding odometry) jumps too. To measure a distance, subtract a
+     * starting reading instead
+     */
     void tarePosition();
 
-    /// Average absolute position across the group, in degrees of motor
-    /// shaft rotation (0 as of the last tarePosition() call).
-    ///
-    /// Motors that aren't answering are skipped, same as
-    /// getTemperatureC(): PROS reports them as PROS_ERR_F (infinity), and
-    /// one infinite entry would make the whole average infinite — enough to
-    /// send driveDistance() off at full power until its timeout. If *none* of
-    /// the group's motors answered — the whole group when it's one motor,
-    /// like each HolonomicDrivetrain corner — it holds the last reading it
-    /// got, so an unplugged motor reads as "didn't move" rather than jumping
-    /// to 0 from however far it had turned (which, measured from a start
-    /// reading, looks like a sudden huge error and drives the chassis off at
-    /// full power just the same).
+    /**
+     * @brief Get the average position of the motors
+     *
+     * Motors that don't answer are skipped. If none answer, the last reading is kept, so an
+     * unplugged motor reads as "didn't move" instead of jumping to 0
+     *
+     * @return double position, in degrees of motor rotation
+     */
     double getPositionDegrees() const;
 
-    /// Average actual velocity across the group, in RPM. Skips motors that
-    /// aren't answering, the same way getPositionDegrees() does.
+    /**
+     * @brief Get the average velocity of the motors. Motors that don't answer are skipped
+     *
+     * @return double velocity, in RPM
+     */
     double getVelocityRPM() const;
 
-    /// Hottest motor in the group, in degrees Celsius — the max, not the
-    /// mean, because the V5 derates each motor on its own temperature, so
-    /// the worst one governs what the group can actually deliver.
-    ///
-    /// Motors that aren't answering are skipped (PROS reports those as
-    /// PROS_ERR_F, i.e. infinity). An empty group, or one where nothing
-    /// answered, reads 0 — cool, so nothing downstream mistakes a
-    /// disconnected cable for an overheating motor. Use diag::SensorCheck to
-    /// catch that case.
+    /**
+     * @brief Get the temperature of the hottest motor
+     *
+     * The hottest, not the average, since each motor derates on its own temperature. Motors that
+     * don't answer are skipped, and a group where none answer reads 0. Use diag::SensorCheck to
+     * catch an unplugged motor
+     *
+     * @return double temperature, in degrees Celsius
+     */
     double getTemperatureC() const;
 
+    /**
+     * @brief Get the cartridge
+     */
     Gearset gearset() const;
 
-    /// The gearset's rated free-speed, in RPM (100 / 200 / 600).
+    /**
+     * @brief Get the cartridge's free speed
+     *
+     * @return double 100, 200, or 600 RPM
+     */
     double maxRPM() const;
 
 private:
     pros::MotorGroup motors_;
     Gearset gearset_;
 
-    /// The last position any motor answered with — see getPositionDegrees().
-    /// Atomic because motion loops, odometry and the GUI read it from
-    /// different tasks.
+    // the last position any motor answered with. Atomic since motions, odometry, and the GUI read
+    // it from different tasks
     mutable std::atomic<double> lastPositionDeg_{0.0};
 };
 

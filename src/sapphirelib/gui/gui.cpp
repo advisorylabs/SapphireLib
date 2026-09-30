@@ -44,7 +44,7 @@ void Gui::addPage(std::unique_ptr<Page> page) {
 }
 
 void Gui::start(std::uint32_t periodMs) {
-    // A second timer would refresh every page twice as often.
+    // a second timer would refresh every page twice as often
     if (timer_) return;
     timer_ = lv_timer_create(&Gui::timerTrampoline, periodMs, this);
 }
@@ -77,14 +77,12 @@ void Gui::timerTrampoline(lv_timer_t* timer) {
 }
 
 void Gui::tick() {
-    // Tab indices match pages_ order: addPage() appends a tab and a page
-    // together, and neither is ever removed.
+    // tab indices match pages_: addPage() adds both together, and neither is ever removed
     const std::size_t active = lv_tabview_get_tab_active(tabview_);
 
     for (std::size_t i = 0; i < pages_.size(); ++i) {
-        // The page that just became visible is refreshed on that same tick
-        // (it's `active` now), so switching tabs never shows a frame of
-        // whatever it last drew before being hidden.
+        // a page that just became visible refreshes on the same tick, so switching tabs never shows
+        // a stale frame
         if (i == active || pages_[i]->updatesWhenHidden()) pages_[i]->update();
     }
 }

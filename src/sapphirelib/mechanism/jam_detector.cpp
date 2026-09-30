@@ -6,11 +6,8 @@ namespace sapphirelib::mechanism {
 
 namespace {
 
-/// Calls further apart than this start the stall timing over. A driver loop
-/// ticks every 10-20ms, so a longer gap means nobody was calling update() —
-/// autonomous ran, the robot was disabled — and "slow since 3 seconds ago"
-/// would fire a pulse the instant the roller is next commanded. The same
-/// 100ms the controller's own restart detection uses.
+// calls further apart than this start the stall timing over: nobody was calling update()
+// (autonomous, disabled), so old timing means nothing
 constexpr std::uint32_t kMaxGapMs = 100;
 
 } // namespace
@@ -22,13 +19,11 @@ double JamDetector::update(double commandVolts, double velocityRpm, std::uint32_
 
     if (gap_.update(nowMs)) reset();
 
-    // `>=` is false for a NaN command, which then counts as not watched.
+    // >= is false for a NaN command, which counts as not watched
     const int direction =
         std::fabs(commandVolts) >= config_.minCommandVolts ? (commandVolts > 0.0 ? 1 : -1) : 0;
     if (direction != direction_) {
-        // Let go, or turned around: a pulse against the old direction is no
-        // longer wanted, and the roller needs a fresh spin-up before being
-        // slow means anything.
+        // let go or turned around: drop any pulse, and wait for a fresh spin-up
         pulse_.stop();
         slow_ = TimedFlag(false, nowMs);
         direction_ = direction;
@@ -36,14 +31,12 @@ double JamDetector::update(double commandVolts, double velocityRpm, std::uint32_
 
     if (pulse_.running()) {
         if (!pulse_.hasElapsed(config_.reverseMs, nowMs)) return pulseVolts();
-        // Pulse over: back to the command, with a full stallMs before the
-        // next one — the roller has to turn around again first.
+        // pulse over: back to the command, with a full stallMs before the next one
         pulse_.stop();
         slow_ = TimedFlag(false, nowMs);
     }
 
-    // `<` is false for NaN and for the infinity PROS reports from an
-    // unplugged motor, so neither can look like a stall.
+    // < is false for NaN and infinity (an unplugged motor), so neither looks like a stall
     slow_.set(direction_ != 0 && std::fabs(velocityRpm) < config_.stallRpm, nowMs);
     if (slow_.trueFor(config_.stallMs, nowMs)) {
         pulse_.restart(nowMs);
@@ -63,8 +56,7 @@ void JamDetector::reset() {
 const JamConfig& JamDetector::config() const { return config_; }
 
 double JamDetector::pulseVolts() const {
-    // Opposite the direction that jammed. fabs() so a config written with a
-    // negative number still pulses the right way.
+    // opposite the direction that jammed. fabs() in case reverseVolts was written negative
     return -direction_ * std::fabs(config_.reverseVolts);
 }
 

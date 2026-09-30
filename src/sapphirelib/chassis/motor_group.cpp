@@ -26,9 +26,8 @@ pros::motor_brake_mode_e_t toProsBrakeMode(BrakeMode mode) {
     return pros::E_MOTOR_BRAKE_COAST;
 }
 
-/// Mean of the finite entries — an unplugged motor reads PROS_ERR_F
-/// (infinity), and averaging that in would poison the whole reading.
-/// `fallback` if there are none.
+// mean of the finite values, or fallback if there are none. An unplugged motor reads infinity,
+// which would poison the average
 double finiteMean(const std::vector<double>& values, double fallback, bool* anyFinite = nullptr) {
     double sum = 0.0;
     int count = 0;
@@ -78,8 +77,7 @@ double MotorGroup::getPositionDegrees() const {
 }
 
 double MotorGroup::getVelocityRPM() const {
-    // A group with nothing answering isn't moving as far as anyone can tell;
-    // unlike position, 0 is the honest reading here.
+    // nothing answering reads as not moving. Unlike position, 0 is the honest answer here
     return finiteMean(motors_.get_actual_velocity_all(), 0.0);
 }
 

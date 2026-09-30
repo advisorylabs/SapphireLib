@@ -15,12 +15,11 @@ std::size_t roundCapacity(std::size_t minCapacity) {
 
 } // namespace
 
-// --- ProducerGate ------------------------------------------------------------
+// ProducerGate
 
 bool ProducerGate::tryEnter(std::uint32_t& token) {
     std::uint32_t state = state_.load(std::memory_order_relaxed);
-    // Acquire on success pairs with the previous holder's release in leave(),
-    // so this holder sees that holder's ring writes.
+    // acquire pairs with the last holder's release in leave(), so this holder sees its writes
     if ((state & 1u) == 0 &&
         state_.compare_exchange_strong(state, state + 1, std::memory_order_acquire,
                                        std::memory_order_relaxed)) {
@@ -33,8 +32,7 @@ bool ProducerGate::tryEnter(std::uint32_t& token) {
 
 void ProducerGate::leave(std::uint32_t token) {
     std::uint32_t expected = token;
-    // Fails only if breakIfStuck() already ended this entry — in which case
-    // the gate may be someone else's by now and must be left alone.
+    // only fails if breakIfStuck() already ended this entry, and then the gate isn't ours
     state_.compare_exchange_strong(expected, token + 1, std::memory_order_release,
                                    std::memory_order_relaxed);
 }
@@ -46,22 +44,20 @@ bool ProducerGate::breakIfStuck(int passes) {
         return false;
     }
     if (watchedPasses_ == 0 || state != watchedState_) {
-        // Held, but by an entry we haven't watched before: start counting.
-        // A live holder releases long before the count runs out.
+        // held by an entry we haven't watched yet: start counting. A live holder leaves long before
         watchedState_ = state;
         watchedPasses_ = 1;
         return false;
     }
     if (++watchedPasses_ < passes) return false;
     watchedPasses_ = 0;
-    // Only ends the exact entry we watched; if its holder somehow left in the
-    // meantime, the CAS fails and nothing is disturbed.
+    // only ends the exact entry we watched. If it left meanwhile, the CAS fails harmlessly
     return state_.compare_exchange_strong(state, state + 1, std::memory_order_acq_rel);
 }
 
 std::uint32_t ProducerGate::contended() const { return contended_.load(std::memory_order_relaxed); }
 
-// --- RecordRing --------------------------------------------------------------
+// RecordRing
 
 RecordRing::RecordRing(std::size_t minCapacity, std::uint32_t startIndex)
     : slots_(new Record[roundCapacity(minCapacity)]),
@@ -75,10 +71,8 @@ bool RecordRing::push(const Record& record) { return push(&record, 1); }
 bool RecordRing::push(const Record* records, std::size_t count) {
     const std::uint32_t head = head_.load(std::memory_order_relaxed);
     const std::uint32_t tail = tail_.load(std::memory_order_acquire);
-    // Unsigned difference is exact across index wraparound. A difference past
-    // capacity is either full or inconsistent; refuse either way until the
-    // consumer drains or resyncs, so a producer can never write over rows the
-    // consumer hasn't read.
+    // unsigned difference is exact across wraparound. More than capacity is full or inconsistent;
+    // refuse either way, so a producer never writes over unread rows
     const std::uint32_t used = head - tail;
     if (count == 0 || used > mask_ + 1u || count > (mask_ + 1u) - used) {
         if (count != 0) dropped_.fetch_add(1, std::memory_order_relaxed);
@@ -87,8 +81,7 @@ bool RecordRing::push(const Record* records, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i) {
         slots_[(head + static_cast<std::uint32_t>(i)) & mask_] = records[i];
     }
-    // Published last, and once: until this store the consumer can't see any
-    // of these slots, so a producer deleted mid-copy loses only its own row.
+    // publish once, last, so a producer deleted mid-copy only loses its own row
     head_.store(head + static_cast<std::uint32_t>(count), std::memory_order_release);
     return true;
 }
@@ -98,8 +91,8 @@ std::uint32_t RecordRing::available() {
     const std::uint32_t head = head_.load(std::memory_order_acquire);
     const std::uint32_t used = head - tail;
     if (used > mask_ + 1u) {
-        // Head went backwards (or leapt ahead): only unserialized producers
-        // can do that. Throw away what's there rather than read torn slots.
+        // the head went backwards or leapt ahead, which only unserialized producers can do. Throw
+        // away what's there rather than read torn slots
         tail_.store(head, std::memory_order_release);
         ++resyncs_;
         return 0;

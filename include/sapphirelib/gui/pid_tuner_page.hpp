@@ -1,13 +1,3 @@
-/**
- * \file sapphirelib/gui/pid_tuner_page.hpp
- *
- * SapphireLib's default PID tuning page: adjust gains by hand and re-run a
- * test motion to see the effect, or tap Auto-Tune to measure the robot and
- * design every controller's gains from that measurement.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -24,98 +14,102 @@
 
 namespace sapphirelib::gui {
 
-/// Manual live tuning (+/- buttons, re-run a bound test motion) plus
-/// model-based automatic tuning.
-///
-/// Auto-Tune works on *axes*, not controllers. Each axis registered with
-/// addAxis() (forward, strafe, turn, ...) is driven through a short set of
-/// voltage ramps and steps (tuning::runCharacterization()), and the result
-/// is fitted to a model of that axis — friction, speed constant, inertia,
-/// and response delay (tuning::characterizeAxis()). Every controller
-/// registered with addController() names the axis it drives and a
-/// tuning::ResponseSpec describing how it should behave, and gets gains
-/// designed from that axis's model by pole placement
-/// (tuning::designPositionGains()).
-///
-/// So one tap measures the robot once and tunes everything from it, and
-/// two controllers on the same axis — an autonomous turn and driver heading
-/// hold, say — get different gains from the same measurement, each matching
-/// its own spec.
-///
-/// Mechanisms — a lift, an arm — are axes too (addMechanismAxis()), measured
-/// with gravity (tuning::runMechanismCharacterization()) and fitted with a kG
-/// term, so their controllers are designed with gravity cancelled by
-/// feedforward. Auto-Tune measures one *group* of axes per tap: the one the
-/// selected controller's axis belongs to. Every addAxis() axis is in one
-/// group (the drivetrain's, measured together as before); each mechanism
-/// axis is a group of its own. So selecting Lift and tapping Auto-Tune runs
-/// the lift alone, and selecting Drive runs forward, strafe and turn.
-///
-/// While Auto-Tune runs, its button reads "Stop": tapping it ends the run at
-/// once (so does the robot being disabled), and nothing is applied.
+/**
+ * @brief PID tuning page: adjust gains by hand and run a test motion, or Auto-Tune
+ *
+ * Auto-Tune works on axes, not controllers. Each axis (forward, strafe, turn, a lift) is driven
+ * through voltage ramps and steps and fitted to a model (friction, speed, inertia, delay). Every
+ * controller names the axis it drives and a tuning::ResponseSpec, and gets gains designed from that
+ * model. So one tap tunes everything on an axis, and two controllers on one axis (an autonomous
+ * turn and driver heading hold) can get different gains from the same measurement
+ *
+ * One tap measures the selected controller's group: all the addAxis() axes together, or one
+ * mechanism on its own. While it runs, the Auto-Tune button reads "Stop"; tapping it, or disabling
+ * the robot, ends the run and applies nothing
+ *
+ * @b Example
+ * @code {.cpp}
+ * auto tuner = std::make_unique<sapphirelib::gui::PidTunerPage>();
+ * tuner->addAxis("Turn", [] {
+ *     return sapphirelib::tuning::CharacterizationConfig{
+ *         .actuate = [](double v) { drivetrain().holonomicVolts(0, 0, v); },
+ *         .measure = [] { return drivetrain().imu().getCumulativeHeadingDeg(); },
+ *         .minSpeed = 5.0,
+ *     };
+ * });
+ * tuner->addController("Turn", drivetrain().turnPID(), [] { drivetrain().turnToHeading(90); },
+ *                      "Turn", {.settleTimeS = 0.5});
+ * gui.addPage(std::move(tuner));
+ * @endcode
+ */
 class PidTunerPage : public Page {
 public:
-    /// Registers an axis for Auto-Tune to measure. `buildExperiment` is
-    /// called fresh on each run (not once here), so it can capture "here" —
-    /// current pose, current heading — as the run's reference frame.
-    /// `onMeasured`, if given, receives each successful measurement (e.g. to
-    /// install it with HolonomicDrivetrain::setAxisModels()); it runs on the
-    /// tuning task, not the GUI's. Axes are measured in registration order.
+    /**
+     * @brief Add an axis for Auto-Tune to measure. Axes are measured in the order added
+     *
+     * @param name the axis name, which controllers refer to
+     * @param buildExperiment makes the run's config. Called fresh on every run, so it can capture
+     * the current pose or heading
+     * @param onMeasured receives each successful measurement on the tuning task, e.g. to install it
+     * with HolonomicDrivetrain::setAxisModels(). nullptr by default
+     */
     void addAxis(std::string name,
                  std::function<tuning::CharacterizationConfig()> buildExperiment,
                  std::function<void(const tuning::AxisCharacterization&)> onMeasured = nullptr);
 
-    /// Registers a lift, an arm, or another gravity-loaded mechanism for
-    /// Auto-Tune to measure, on its own (see the class comment on groups).
-    /// `buildExperiment` is called fresh on each run, like addAxis()'s; use its
-    /// axis.start/axis.finish hooks to take the mechanism's motors from its
-    /// own loop for the run (PositionMechanism::beginExternalControl()).
-    /// Auto-Tune holds every experiment's finish hook (addAxis()'s too) until
-    /// the new gains are set, so a loop given its motors back never runs a
-    /// step while its gains are being written; it runs however the tap ended.
-    /// `onMeasured`, if given, receives each successful measurement on the
-    /// tuning task — e.g. to install its gravity feedforward with
-    /// PositionMechanism::setGravity(result.fit.model.gravityFeedforward()).
+    /**
+     * @brief Add a lift, arm, or other gravity-loaded mechanism for Auto-Tune to measure on its own
+     *
+     * Use the config's axis.start and axis.finish to take the motors from the mechanism's own loop
+     * (PositionMechanism::beginExternalControl()). Every finish hook is held until the new gains
+     * are set, so the loop never runs while its gains are being written
+     *
+     * @param name the axis name, which controllers refer to
+     * @param buildExperiment makes the run's config. Called fresh on every run
+     * @param onMeasured receives each successful measurement on the tuning task, e.g. to install
+     * PositionMechanism::setGravity(result.fit.model.gravityFeedforward()). nullptr by default
+     */
     void addMechanismAxis(
         std::string name, std::function<tuning::MechanismCharacterizationConfig()> buildExperiment,
         std::function<void(const tuning::MechanismCharacterization&)> onMeasured = nullptr);
 
-    /// Registers a controller to tune.
-    ///
-    /// `runTest`, if given, runs on a background PROS task when "Run Test"
-    /// is tapped — e.g. bind it to a driveDistance() call, so you can watch
-    /// the response to the current gains live without freezing the screen.
-    ///
-    /// `axis` names an addAxis() or addMechanismAxis() axis; after Auto-Tune
-    /// measures it, this controller's gains are designed from its model to
-    /// meet `response`. Leave empty for a controller Auto-Tune shouldn't touch.
-    /// The design allows for the loop's own period (the PID's nominalDtS): a
-    /// loop slower than the characterization's sampling holds each command
-    /// longer, which is extra latency — half the difference, on average.
-    ///
-    /// Only one test or auto-tune run happens at a time across the whole
-    /// page; gain adjustments, entry selection, and new runs are all
-    /// ignored while one is in progress, since a run and the tuning UI
-    /// would otherwise read/write the same PID object concurrently. Safe
-    /// to call before or after build().
+    /**
+     * @brief Add a controller to tune
+     *
+     * Only one test or Auto-Tune runs at a time, and gain changes and selection are ignored during
+     * one, since both would touch the same PID. The design allows for the loop's own period (the
+     * PID's nominalDtS) as extra delay. Safe before or after build()
+     *
+     * @param name the name on its button
+     * @param pid the PID
+     * @param runTest runs on a background task when "Run Test" is tapped, e.g. a driveDistance().
+     * nullptr by default
+     * @param axis the axis it drives, to be designed from after Auto-Tune. "" (the default) for a
+     * controller Auto-Tune shouldn't touch
+     * @param response how the controller should behave
+     */
     void addController(std::string name, PID& pid, std::function<void()> runTest = nullptr,
                        std::string axis = "", tuning::ResponseSpec response = {});
 
-    /// Adds a single on/off style button under Run Test/Auto-Tune — e.g. the
-    /// driver stick mode. `label` is polled for the button's text; `onTap`
-    /// runs on the GUI task when tapped (ignored while a run is active).
+    /**
+     * @brief Add an on/off button under Run Test and Auto-Tune, e.g. the driver stick mode
+     *
+     * @param label polled for the button's text
+     * @param onTap runs on the GUI task when tapped. Ignored during a run
+     */
     void setToggle(std::function<std::string()> label, std::function<void()> onTap);
 
-    /// True from the moment "Run Test" or "Auto-Tune" is tapped until that
-    /// run finishes. Driver-control code (e.g. opcontrol()'s joystick loop)
-    /// should skip commanding the drivetrain while this is true — a
-    /// concurrent driver loop (which keeps running whenever there's no
-    /// competition switch, even with centered sticks) would fight the run
-    /// for the same motors; see gui::OdometryPage::isCalibrating()'s comment
-    /// for the failure mode in more detail.
+    /**
+     * @brief Whether a test or Auto-Tune is running
+     *
+     * Driver control must not command the drivetrain meanwhile, or it fights the run. See
+     * Gui::anyPageBusy()
+     */
     bool isRunning() const;
 
-    /// Busy for as long as isRunning() — see Page::isBusy().
+    /**
+     * @brief Busy while running. See Page::isBusy()
+     */
     bool isBusy() const override { return isRunning(); }
 
     const char* title() const override;
@@ -125,8 +119,8 @@ public:
 private:
     struct Axis {
         std::string name;
-        /// Which Auto-Tune tap measures it: "" for every addAxis() axis, the
-        /// axis's own name for a mechanism.
+        // which Auto-Tune tap measures it: "" for every addAxis() axis, its own name for a
+        // mechanism
         std::string group;
         bool mechanism = false;
         std::function<tuning::CharacterizationConfig()> buildExperiment;
@@ -134,14 +128,12 @@ private:
         std::function<tuning::MechanismCharacterizationConfig()> buildMechanismExperiment;
         std::function<void(const tuning::MechanismCharacterization&)> onMechanismMeasured;
 
-        // Written only by the auto-tune task while testRunning_ is true, read
-        // only by update() once it's false again — see runAutoTune(). A drive
-        // axis's result is kept as a mechanism result with no gravity, so
-        // design and readout have one shape to read.
+        // written only by the Auto-Tune task while testRunning_ is true, read only by update()
+        // once it's false. A drive axis's result is kept as a mechanism result with no gravity,
+        // so the design and readout have one shape to read
         bool measured = false;
         tuning::MechanismCharacterization result;
-        /// The characterization's sample period, to judge how much latency a
-        /// slower control loop adds on top of the measured delay.
+        // the run's sample period, to judge how much delay a slower loop adds
         double samplePeriodS = 0.01;
     };
 
@@ -153,7 +145,7 @@ private:
         tuning::ResponseSpec response;
         lv_obj_t* selectorButton = nullptr;
 
-        // Same threading rule as Axis::result.
+        // same threading rule as Axis::result
         bool designed = false;
         tuning::GainDesign design;
     };
@@ -165,13 +157,11 @@ private:
     void refreshReadout();
     void runSelectedTest();
     void runAutoTune();
-    /// Measures one axis on the tuning task; false if it didn't produce a
-    /// usable model (or the run was stopped). The experiment's finish hook
-    /// isn't run: it's appended to `finishes`, for runAutoTune() to call once
-    /// the new gains are in place.
+    // measure one axis on the tuning task. false if it gave no usable model or was stopped. The
+    // finish hook isn't run here; it's added to finishes for runAutoTune() to run once the gains
+    // are set
     bool measureAxis(Axis& axis, std::vector<std::function<void()>>& finishes);
-    /// The group the selected controller's axis is in ("" — the drive axes —
-    /// for a controller with no axis).
+    // the group the selected controller's axis is in ("" for the drive axes, or no axis)
     std::string selectedGroup() const;
     void setDisplayedGains(PIDGains gains);
     const Axis* findAxis(const std::string& name) const;
@@ -194,9 +184,8 @@ private:
     std::function<std::string()> toggleLabel_;
     std::function<void()> toggleTap_;
 
-    // The only source of truth refreshGainLabels() reads from — the
-    // auto-tune task writes gains while update() reads them, so neither
-    // touches PID::gains() for display.
+    // what refreshGainLabels() shows. The Auto-Tune task writes gains while update() reads them,
+    // so neither reads PID::gains() for display
     std::atomic<double> displayedP_{0.0};
     std::atomic<double> displayedI_{0.0};
     std::atomic<double> displayedD_{0.0};

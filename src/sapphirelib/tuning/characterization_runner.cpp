@@ -10,26 +10,24 @@ namespace sapphirelib::tuning {
 
 namespace {
 
-/// The axis counts as stopped once it moves less than this fraction of the
-/// segment's travel limit (or of one unit, for an unlimited axis) across
-/// one check interval.
+// the axis counts as stopped once it moves less than this fraction of the travel limit (or of
+// one unit, with no limit) in one check interval
 constexpr double kStoppedFraction = 0.002;
 constexpr std::uint32_t kStoppedCheckMs = 100;
 
-/// One run's shared state: the config, and whether it has been told to stop.
+// one run's state: the config, and whether it's been told to stop
 struct Run {
     const CharacterizationConfig& config;
     bool aborted = false;
 
-    /// Checks (and latches) the config's abort condition.
+    // check (and latch) the abort condition
     bool abortRequested() {
         if (!aborted && config.shouldAbort && config.shouldAbort()) aborted = true;
         return aborted;
     }
 };
 
-/// Applies `rest` (0V, or a mechanism's hold) and waits for the axis to
-/// stop moving, for at most settleTimeoutMs. Returns early on abort.
+// apply rest (0V, or a mechanism's hold) and wait up to settleTimeoutMs for the axis to stop
 template <typename Rest> void waitUntilStopped(Run& run, double threshold, Rest rest) {
     const CharacterizationConfig& config = run.config;
     rest();
@@ -44,10 +42,9 @@ template <typename Rest> void waitUntilStopped(Run& run, double threshold, Rest 
     }
 }
 
-/// Runs one segment: `preRollMs` of `preRoll()` (which applies whatever
-/// holds the axis and returns the volts to record for it), then
-/// `voltsAt(seconds since the voltage started)` until `outOfRange(position)`,
-/// a non-finite reading, the duration cap, or an abort. Ends with `rest()`.
+// run one segment: preRollMs of preRoll() (which holds the axis and returns the volts to
+// record), then voltsAt(seconds) until outOfRange(position), a bad reading, the time cap, or
+// an abort. Ends with rest()
 template <typename OutOfRange, typename PreRoll, typename VoltsAt, typename Rest>
 CharacterizationRun runSegment(Run& runState, OutOfRange outOfRange, PreRoll preRoll,
                                VoltsAt voltsAt, Rest rest) {
@@ -96,7 +93,7 @@ CharacterizationData runCharacterization(const CharacterizationConfig& config) {
 
     if (config.start) config.start();
 
-    // Each segment measures its travel from where it starts.
+    // each segment measures its travel from where it starts
     const auto segment = [&](auto voltsAt) {
         const double origin = config.measure();
         return runSegment(
@@ -152,9 +149,8 @@ runMechanismCharacterization(const MechanismCharacterizationConfig& mechanism) {
             config.actuate(0.0);
         }
     };
-    // A held sample's volts are unknown — whatever the brake applied — so
-    // NaN, which the fit skips. Only a mechanism with no hold really sits at
-    // 0V.
+    // a held sample's volts are whatever the brake applied, so NaN, which the fit skips. Only a
+    // mechanism with no hold really sits at 0V
     const auto preRoll = [&] {
         hold();
         return mechanism.hold ? std::numeric_limits<double>::quiet_NaN() : 0.0;

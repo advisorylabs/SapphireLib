@@ -43,7 +43,7 @@ Record sampleRecord(const PidStep& step) {
     record.kind = RecordKind::sample;
     record.count = static_cast<std::uint8_t>(kPidValues);
     record.flags = step.flags;
-    // Same order as kPidColumns.
+    // same order as kPidColumns
     const double values[kPidValues] = {step.target,    step.measurement, step.error,
                                        step.pTerm,     step.iTerm,       step.dTerm,
                                        step.rawOutput, step.output,      step.dtS};
@@ -53,14 +53,13 @@ Record sampleRecord(const PidStep& step) {
 
 } // namespace
 
-// --- Channel -----------------------------------------------------------------
+// Channel
 
 Channel::Channel(ChannelSchema schema, std::size_t capacity,
                  const std::atomic<std::uint32_t>* fileEpoch)
     : schema_(std::move(schema)), valueCount_(valueCountFor(schema_)), ring_(capacity),
       fileEpoch_(fileEpoch) {
-    // A samples channel can't carry more columns than a Record has values;
-    // trimming the schema too keeps its #chan line honest about what S rows hold.
+    // a samples channel can't carry more columns than a Record has values, so trim the schema too
     if (schema_.kind == ChannelKind::samples && schema_.columns.size() > kMaxColumns) {
         schema_.columns.resize(kMaxColumns);
     }
@@ -86,9 +85,8 @@ bool Channel::record(const double* values, std::size_t count) {
 }
 
 bool Channel::recordEvent(const char* tag, const char* message) {
-    // Laid out as one byte string across the Records' payloads —
-    // "tag\0message\0" — then cut into Record-sized pieces. Sanitizing waits
-    // for the writer: this runs on the caller's task and should stay a copy.
+    // laid out as one string, "tag\0message\0", then cut into Record-sized pieces. Cleaning it
+    // up waits for the writer, so this stays a copy
     char text[kMaxEventRecords * kRecordTextBytes] = {};
     std::size_t length = 0;
     for (const char* c = tag != nullptr ? tag : ""; *c != '\0' && length < kMaxEventTagChars; ++c) {
@@ -117,8 +115,7 @@ bool Channel::commit(Record record) { return commitAll(&record, 1); }
 bool Channel::commitAll(Record* records, std::size_t count) {
     std::uint32_t token;
     if (!gate_.tryEnter(token)) return false; // counted by the gate
-    // Stamped inside the gate, so successive producers on one channel commit
-    // in time order — the file promises t_us never decreases within a channel.
+    // stamped inside the gate, so rows on one channel are always in time order
     const std::uint64_t now = sapphirelib::micros();
     for (std::size_t i = 0; i < count; ++i) records[i].tUs = now;
     const bool pushed = ring_.push(records, count);
@@ -144,29 +141,26 @@ std::uint32_t Channel::droppedContended() const { return gate_.contended(); }
 
 std::uint32_t Channel::resyncs() const { return ring_.resyncs(); }
 
-// --- PidProbe ----------------------------------------------------------------
+// PidProbe
 
 PidProbe::PidProbe(Channel& channel, const PID& pid) : channel_(channel), pid_(&pid) {}
 
 void PidProbe::onPidUpdate(const PID& pid, const PidStep& step) {
     if (&pid != pid_) {
-        // A copy of our PID (copying a PID copies its observer pointer): its
-        // steps would be indistinguishable from ours in the log, so drop them.
+        // a copy of our PID shares its observer pointer, and its steps would look like ours
         foreignSteps_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
     const std::uint32_t epoch = channel_.fileEpoch();
     if (epoch != announcedEpoch_) {
-        // A new file opened since our last step: say C and G again, so this
-        // file can be read without the previous one.
+        // a new file opened since the last step: log C and G again, so the file stands on its own
         announcedEpoch_ = epoch;
         configLogged_ = false;
         gainsLogged_ = false;
     }
 
-    // Each is only marked logged once its commit actually went in — a dropped
-    // C or G is retried on the next step rather than silently missing.
+    // only marked logged once the commit went in, so a dropped C or G is retried next step
     if (!configLogged_) configLogged_ = channel_.commit(configRecord(pid.config()));
     const PIDGains& gains = pid.gains();
     if (!gainsLogged_ || gains.kP != loggedGains_.kP || gains.kI != loggedGains_.kI ||

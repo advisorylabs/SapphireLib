@@ -7,7 +7,7 @@
 
 namespace sapphirelib::input {
 
-// A rumble pattern travels in Write::text, so it has to fit there.
+// a rumble pattern travels in Write::text, so it has to fit
 static_assert(ControllerScreen::kMaxRumbleChars <= ControllerScreen::kColumns);
 
 ControllerScreen::ControllerScreen(std::uint32_t minWriteIntervalMs)
@@ -22,11 +22,8 @@ void ControllerScreen::setLine(std::size_t line, const char* format, ...) {
 
 void ControllerScreen::setLineV(std::size_t line, const char* format, std::va_list args) {
     if (line >= kLines || format == nullptr) return;
-    // Formatted into a scratch buffer first, so an argument that is this very
-    // line (setLine(0, "%s!", screen.line(0))) isn't overwritten while it's
-    // still being read. vsnprintf cuts the text to kColumns characters exactly
-    // as snprintf into a char[kColumns + 1] would; an encoding error leaves
-    // the line empty rather than holding whatever vsnprintf got partway to.
+    // format into a scratch buffer first, so an argument that is this very line isn't
+    // overwritten while it's read. An encoding error leaves the line empty
     std::array<char, kColumns + 1> text{};
     if (std::vsnprintf(text.data(), text.size(), format, args) < 0) text[0] = '\0';
     wanted_[line] = text;
@@ -38,8 +35,7 @@ const char* ControllerScreen::line(std::size_t line) const {
 
 void ControllerScreen::rumble(const char* pattern) {
     if (pattern == nullptr || pattern[0] == '\0') return;
-    // Cleared first so the copy is always terminated, and so confirm() can
-    // compare whole patterns.
+    // cleared first so the copy is always terminated, and confirm() can compare whole patterns
     rumble_.fill('\0');
     for (std::size_t i = 0; i < kMaxRumbleChars && pattern[i] != '\0'; ++i) {
         rumble_[i] = pattern[i];
@@ -51,8 +47,7 @@ void ControllerScreen::invalidate() { shownKnown_.fill(false); }
 
 ControllerScreen::Write ControllerScreen::takeWrite(std::uint32_t nowMs) {
     Write write;
-    // lastWriteMs_ starts at 0 (as the hand-written throttle this replaced
-    // did), so the very first send waits until nowMs is one interval in.
+    // lastWriteMs_ starts at 0, so the first send waits one interval
     if (elapsedMs(lastWriteMs_, nowMs) < minWriteIntervalMs_) return write;
     if (rumblePending_) {
         lastWriteMs_ = nowMs;
@@ -62,7 +57,7 @@ ControllerScreen::Write ControllerScreen::takeWrite(std::uint32_t nowMs) {
     }
     for (std::size_t i = 0; i < kLines; ++i) {
         if (shownKnown_[i] && std::strcmp(shown_[i].data(), wanted_[i].data()) == 0) continue;
-        lastWriteMs_ = nowMs; // stamped whether or not the send then succeeds
+        lastWriteMs_ = nowMs; // stamped whether or not the send succeeds
         write.kind = WriteKind::line;
         write.line = static_cast<std::uint8_t>(i);
         write.text = wanted_[i];
@@ -73,15 +68,13 @@ ControllerScreen::Write ControllerScreen::takeWrite(std::uint32_t nowMs) {
 
 void ControllerScreen::confirm(const Write& write) {
     if (write.kind == WriteKind::rumble) {
-        // Unless a different pattern was queued between takeWrite() and now:
-        // that one hasn't been sent yet, so it stays pending.
+        // unless a different pattern was queued since, which is still pending
         if (std::strncmp(rumble_.data(), write.text.data(), rumble_.size()) == 0) {
             rumblePending_ = false;
         }
     } else if (write.kind == WriteKind::line && write.line < kLines) {
         shown_[write.line] = write.text;
-        // A Write built by hand might not be terminated; takeWrite()'s
-        // strcmp relies on it.
+        // a hand-built Write might not be terminated, and takeWrite()'s strcmp relies on it
         shown_[write.line][kColumns] = '\0';
         shownKnown_[write.line] = true;
     }

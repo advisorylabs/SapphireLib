@@ -1,11 +1,3 @@
-/**
- * \file sapphirelib/gui/auton_selector_page.hpp
- *
- * SapphireLib's default autonomous-routine picker.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -19,26 +11,42 @@
 
 namespace sapphirelib::gui {
 
-/// Register named routines with addRoutine(); the driver taps one on the
-/// brain screen to select it before a match, and autonomous() calls run()
-/// to execute whichever was selected.
+/**
+ * @brief Autonomous routine picker
+ *
+ * The driver taps a routine on the brain screen before the match, and autonomous() runs it
+ *
+ * @b Example
+ * @code {.cpp}
+ * auto selector = std::make_unique<sapphirelib::gui::AutonSelectorPage>();
+ * sapphirelib::gui::AutonSelectorPage* autons = selector.get();
+ * autons->addRoutine("Left side", leftSide);
+ * autons->addRoutine("Skills", skills);
+ * gui.addPage(std::move(selector));
+ *
+ * void autonomous() { autons->run(); }
+ * @endcode
+ */
 class AutonSelectorPage : public Page {
 public:
     AutonSelectorPage() = default;
 
-    /// Registers a selectable routine. Safe to call before or after
-    /// build() — if called after, the button is added immediately. The
-    /// first registered routine is selected by default, so run() always
-    /// has something to execute even if the driver forgets to pick.
+    /**
+     * @brief Add a routine. The first one added is selected by default
+     *
+     * @param name the name shown on its button
+     * @param routine the routine
+     */
     void addRoutine(std::string name, std::function<void()> routine);
 
-    /// Runs whichever routine is currently selected. No-op if none are
-    /// registered.
+    /**
+     * @brief Run the selected routine. Does nothing if there are none
+     */
     void run() const;
 
-    /// Name of the routine run() would execute right now, or "" if none are
-    /// registered — for a log line or telemetry event naming the routine,
-    /// or the controller screen. Safe to call from the autonomous task.
+    /**
+     * @brief Get the selected routine's name, or "" if there are none. Safe from any task
+     */
     const std::string& selectedName() const;
 
     const char* title() const override;
@@ -55,9 +63,7 @@ private:
     lv_obj_t* list_ = nullptr;
     std::vector<std::unique_ptr<Routine>> routines_;
 
-    /// Written by the GUI task when a button is tapped, read by the
-    /// autonomous task in run()/selectedName() — atomic so those two never
-    /// race on it.
+    // written by the GUI when a button is tapped, read by the autonomous task
     std::atomic<std::size_t> selectedIndex_{0};
 
     void select(std::size_t index);

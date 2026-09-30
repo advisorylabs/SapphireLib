@@ -13,19 +13,16 @@ namespace {
 constexpr double kLn2 = 0.69314718055994530942;
 constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 
-/// Fewer rows than this can't meaningfully constrain three parameters
-/// against real sensor noise.
+// fewer rows than this can't pin down three parameters against real sensor noise
 constexpr int kMinFitRows = 20;
 
-/// Delays longer than this aren't latency, they're a run that didn't
-/// measure what it meant to (a stalled chassis that eventually broke free).
+// a delay longer than this isn't latency; the run didn't measure what it meant to
 constexpr double kMaxPlausibleDelayS = 0.5;
 
 double signOf(double value) { return value > 0.0 ? 1.0 : (value < 0.0 ? -1.0 : 0.0); }
 
-/// Central-difference velocity at every index with a full window either
-/// side; std::nullopt elsewhere. Central differences add no lag — a lagging
-/// estimate would read as extra delay and bias the fit.
+// central difference velocity at every index with a full window either side, nullopt
+// elsewhere. Central differences add no lag, which would read as extra delay
 std::vector<std::optional<double>> velocities(const CharacterizationRun& run, int halfWindow) {
     const int count = static_cast<int>(run.size());
     std::vector<std::optional<double>> result(run.size());
@@ -38,15 +35,13 @@ std::vector<std::optional<double>> velocities(const CharacterizationRun& run, in
     return result;
 }
 
-/// A velocity that exists and is a number — a NaN position (a sensor that
-/// didn't answer) makes one that exists but isn't.
+// a velocity that exists and is a number. A NaN position (no answer) makes one that isn't
 bool usable(const std::optional<double>& velocity) {
     return velocity.has_value() && std::isfinite(*velocity);
 }
 
-/// Solves the N×N system `a`·x = `b` by Gaussian elimination with partial
-/// pivoting. False if a pivot is too small relative to the matrix's scale to
-/// trust — i.e. the data didn't constrain every parameter.
+// solve a * x = b by Gaussian elimination with partial pivoting. false if a pivot is too small
+// to trust, i.e. the data didn't pin down every parameter
 template <std::size_t N>
 bool solve(std::array<std::array<double, N>, N> a, std::array<double, N> b,
            std::array<double, N>& x) {
@@ -83,13 +78,13 @@ bool solve(std::array<std::array<double, N>, N> a, std::array<double, N> b,
 struct FitRow {
     double velocity;     // v[k]
     double nextVelocity; // v[k+m]
-    double volts;        // mean command over the interval, delay-shifted
-    double gravity;      // mean gravity factor over the interval (0 without gravity)
+    double volts;        // mean command over the interval, delay shifted
+    double gravity;      // mean gravity factor over the interval, 0 without gravity
     double intervalS;    // T
 };
 
-/// The regression behind fitFeedforward() and fitMechanism(): N = 3
-/// parameters (α, β, γ) without gravity, 4 (plus δ) with it.
+// the regression behind fitFeedforward() and fitMechanism(): 3 parameters (alpha, beta,
+// gamma) without gravity, 4 (plus delta) with it
 template <std::size_t N>
 MechanismFit fitDiscrete(const std::vector<CharacterizationRun>& runs, const GravityShape& gravity,
                          double minSpeed, int halfWindow, int delayTicks, double minRSquared) {
@@ -100,8 +95,7 @@ MechanismFit fitDiscrete(const std::vector<CharacterizationRun>& runs, const Gra
     fit.model.gravity = gravity;
     const int w = std::max(1, halfWindow);
     const int shift = std::max(0, delayTicks);
-    // One past the combined width of two windows, so v[k] and v[k+m] are
-    // built from disjoint samples.
+    // one past the width of two windows, so v[k] and v[k+m] come from separate samples
     const int m = 2 * w + 1;
 
     std::vector<FitRow> rows;
@@ -116,14 +110,12 @@ MechanismFit fitDiscrete(const std::vector<CharacterizationRun>& runs, const Gra
 
             double voltsSum = 0.0;
             for (int j = k; j < k + m; ++j) voltsSum += run[j - shift].volts;
-            // A held (NaN-volts) sample anywhere in the interval: nobody knows
-            // what the brake applied, so the row can't say anything.
+            // a held (NaN volts) sample in the interval: nobody knows what the brake applied
             if (!std::isfinite(voltsSum)) continue;
 
             double gravitySum = 0.0;
             if constexpr (kWithGravity) {
-                // Gravity acts on where the axis is, so it isn't delay-shifted
-                // the way the command is.
+                // gravity acts on where the axis is, so it isn't delay shifted like the command
                 for (int j = k; j < k + m; ++j) gravitySum += gravity.factor(run[j].position);
                 if (!std::isfinite(gravitySum)) continue;
             }
@@ -133,7 +125,7 @@ MechanismFit fitDiscrete(const std::vector<CharacterizationRun>& runs, const Gra
     fit.samplesUsed = static_cast<int>(rows.size());
     if (fit.samplesUsed < kMinFitRows) return fit;
 
-    // Normal equations for v[k+m] = α·v[k] + β·u + γ·sign(v[k]) [+ δ·g].
+    // normal equations for v[k+m] = alpha * v[k] + beta * u + gamma * sign(v[k]) [+ delta * g]
     std::array<std::array<double, N>, N> normal{};
     std::array<double, N> rhs{};
     double intervalSum = 0.0;
@@ -156,26 +148,23 @@ MechanismFit fitDiscrete(const std::vector<CharacterizationRun>& runs, const Gra
     const double beta = x[1];
     const double gamma = x[2];
 
-    // α = e^(−kV·T/kA) must be a decay, and β must push the right way, for
-    // the model to describe a physical axis at all.
+    // alpha = e^(-kV * T / kA) must be a decay, and beta must push the right way, for the model to
+    // be physical
     if (!(alpha > 0.0 && alpha < 1.0 && beta > 0.0)) return fit;
 
     const double intervalS = intervalSum / fit.samplesUsed;
     const double kV = (1.0 - alpha) / beta;
     fit.model.motion = MotorFeedforward{
-        // Negative friction is only ever noise around a near-zero kS.
+        // negative friction is only noise around a kS near zero
         .kS = std::fmax(0.0, -gamma / beta),
         .kV = kV,
         .kA = -kV * intervalS / std::log(alpha),
     };
-    // Not clamped: rubber bands or a counterweight that more than carry the
-    // mechanism make a genuinely negative kG.
+    // not clamped: rubber bands or a counterweight can make a real negative kG
     if constexpr (kWithGravity) fit.model.kG = -x[3] / beta;
 
-    // R² in voltage terms — how well the fitted model explains what was
-    // commanded — which is the question that matters for feedforward, and
-    // far more discriminating than R² on next-velocity, where "same as last
-    // time" already scores near 1.
+    // R^2 in volts, how well the model explains what was commanded. R^2 on next velocity would
+    // score near 1 just for "same as last time"
     double meanVolts = 0.0;
     for (const FitRow& row : rows) meanVolts += row.volts;
     meanVolts /= fit.samplesUsed;
@@ -202,8 +191,7 @@ double GravityShape::factor(double position) const {
         case GravityKind::none: return 0.0;
         case GravityKind::constant: return 1.0;
         case GravityKind::cosine:
-            // The same expression as mechanism::GravityFeedforward::volts(), so
-            // a fitted kG drops into its cosineVolts unchanged.
+            // same expression as GravityFeedforward::volts(), so kG drops into its cosineVolts
             return std::cos((position - horizontalPosition) * armDegreesPerUnit * kDegToRad);
     }
     return 0.0;
@@ -251,8 +239,7 @@ double estimateMechanismDelayS(const CharacterizationRun& stepRun, const Mechani
     if (!model.valid()) return -1.0;
     const MotorFeedforward& motion = model.motion;
 
-    // The step is the first tick that commands anything. A held (NaN) tick
-    // commands nothing the model knows about; it's the rest before the step.
+    // the step is the first tick that commands anything. Held (NaN) ticks are the rest before it
     const auto stepIt =
         std::find_if(stepRun.begin(), stepRun.end(), [](const CharacterizationSample& s) {
             return std::isfinite(s.volts) && s.volts != 0.0;
@@ -260,8 +247,7 @@ double estimateMechanismDelayS(const CharacterizationRun& stepRun, const Mechani
     if (stepIt == stepRun.end()) return -1.0;
     const double stepTimeS = stepIt->timeMs / 1000.0;
 
-    // What the step has to work with once gravity has taken its share —
-    // for a drive axis (no gravity) exactly the step's volts.
+    // what the step has once gravity takes its share. Exactly the step's volts for a drive axis
     const double netVolts = stepIt->volts - model.gravityVolts(stepIt->position);
     const double halfSpeed = 0.5 * std::fmax(0.0, (std::fabs(netVolts) - motion.kS) / motion.kV);
     if (!(halfSpeed > 0.0)) return -1.0;
@@ -276,8 +262,7 @@ double estimateMechanismDelayS(const CharacterizationRun& stepRun, const Mechani
         const double speed = *v[i] * direction;
 
         if (timeS >= stepTimeS && speed >= halfSpeed) {
-            // Interpolate the crossing between ticks — at a 10ms period, a
-            // whole tick is a sizeable fraction of the delay being measured.
+            // interpolate between ticks, since one 10ms tick is a big part of the delay
             double crossingS = timeS;
             if (prev) {
                 const double prevTimeS = stepRun[*prev].timeMs / 1000.0;
@@ -303,7 +288,7 @@ MechanismCharacterization characterizeMechanism(const CharacterizationData& data
     std::vector<CharacterizationRun> all = data.ramps;
     all.insert(all.end(), data.steps.begin(), data.steps.end());
 
-    // Mean tick period across everything, to turn a delay into a shift.
+    // mean tick period, to turn a delay into a shift
     double periodSumS = 0.0;
     int periodCount = 0;
     for (const CharacterizationRun& run : all) {

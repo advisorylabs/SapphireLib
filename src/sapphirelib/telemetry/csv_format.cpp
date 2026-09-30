@@ -13,10 +13,10 @@ namespace {
 constexpr std::size_t kMaxNameChars = 31;
 constexpr std::size_t kMaxMetaChars = 63;
 
-/// Widest formatNumber() output: "-999999999999.999999" is 20 characters.
+// widest formatNumber() output: "-999999999999.999999" is 20 characters
 constexpr std::size_t kNumberBufferBytes = 32;
 
-/// What a column with no value in its Record is written as.
+// what a column with no value is written as
 constexpr float kMissing = std::numeric_limits<float>::quiet_NaN();
 
 bool isNameChar(char c) {
@@ -35,11 +35,8 @@ std::size_t writeUnsigned(char* out, std::uint64_t value) {
     return count;
 }
 
-/// Trims a printf exponent to C99's form — sign plus at least two digits, no
-/// extra leading zeros — since an old Windows C library prints "e+012" where
-/// newlib and glibc print "e+12". The exponent is the only part C libraries
-/// disagree on (all of them round the digits correctly), so this is what
-/// makes the rare snprintf paths below deterministic too.
+// trim a printf exponent to C99's form (sign plus at least two digits), since some C
+// libraries print "e+012". The exponent is the only part they disagree on
 std::size_t normalizeExponent(char* text, std::size_t length) {
     char* e = static_cast<char*>(std::memchr(text, 'e', length));
     if (e == nullptr) return length;
@@ -52,7 +49,7 @@ std::size_t normalizeExponent(char* text, std::size_t length) {
     return static_cast<std::size_t>(digits - text) + kept;
 }
 
-/// formatNumber()'s body, into a buffer known to be big enough.
+// formatNumber()'s body, into a buffer known to be big enough
 std::size_t writeNumber(char* out, double value, int decimals) {
     if (std::isnan(value)) {
         std::memcpy(out, "nan", 3);
@@ -69,8 +66,7 @@ std::size_t writeNumber(char* out, double value, int decimals) {
 
     const double magnitude = std::fabs(value);
     if (magnitude >= 1e12) {
-        // Only garbage gets this big in a robot log; not worth a hand-rolled
-        // exponent formatter.
+        // only garbage gets this big in a robot log, so snprintf is fine
         char buffer[kNumberBufferBytes];
         const int written = std::snprintf(buffer, sizeof(buffer), "%.6e", value);
         std::size_t length = written > 0 ? static_cast<std::size_t>(written) : 0;
@@ -79,12 +75,9 @@ std::size_t writeNumber(char* out, double value, int decimals) {
         return length;
     }
 
-    // Exact powers of ten, so the one multiply below is the only rounding
-    // step before llround() — and IEEE multiplication rounds the same on the
-    // brain's VFP as on a desktop's SSE, which is what makes the output
-    // byte-identical on both. llround() is exact and rounds halves away from
-    // zero. Below 1e12 with at most 6 decimals the product stays under 1e18,
-    // well inside a long long.
+    // exact powers of ten, so the one multiply is the only rounding before llround(). IEEE
+    // multiplication rounds the same on the brain and a desktop, so the output is byte-identical
+    // on both. Below 1e12 with 6 decimals, the product fits in a long long
     static constexpr double kScale[] = {1.0, 10.0, 100.0, 1e3, 1e4, 1e5, 1e6};
     static constexpr std::uint64_t kScaleInt[] = {1, 10, 100, 1000, 10000, 100000, 1000000};
     decimals = std::clamp(decimals, 0, 6);
@@ -93,8 +86,8 @@ std::size_t writeNumber(char* out, double value, int decimals) {
     std::uint64_t fraction = scaled % kScaleInt[decimals];
 
     std::size_t length = 0;
-    // Only a value that's still nonzero after rounding gets a sign, which is
-    // how -0.0 and -0.00001 at 4 decimals both come out as "0".
+    // only a value still nonzero after rounding gets a sign, so -0.0 and -0.00001 at 4 decimals
+    // both come out as "0"
     if (scaled != 0 && value < 0.0) out[length++] = '-';
     length += writeUnsigned(out + length, whole);
     if (fraction != 0) {
@@ -111,9 +104,8 @@ std::size_t writeNumber(char* out, double value, int decimals) {
     return length;
 }
 
-/// `%.9g` for G/C rows: full double precision for gains, exponent form
-/// allowed. -0 is written as 0 and non-finite values spelled out, so no C
-/// library's quirks ("-nan", "1.#INF") leak into the file.
+// %.9g for G and C rows: full precision for gains. -0 is written as 0 and non-finite values
+// are spelled out, so no C library quirks ("-nan", "1.#INF") end up in the file
 std::size_t writeWide(char* out, double value) {
     if (std::isnan(value) || std::isinf(value) || value == 0.0) {
         return writeNumber(out, value == 0.0 ? 0.0 : value, 0);
@@ -126,8 +118,8 @@ std::size_t writeWide(char* out, double value) {
     return length;
 }
 
-/// Appends into a fixed buffer without ever writing past it; finish() is 0 if
-/// anything didn't fit. Every formatter below builds its line through one.
+// appends into a fixed buffer without ever writing past it. finish() is 0 if anything didn't
+// fit
 class LineWriter {
 public:
     LineWriter(char* out, std::size_t size) : out_(out), size_(size) {}
@@ -163,7 +155,7 @@ public:
         putChars(buffer, writeWide(buffer, value));
     }
 
-    /// sanitizeName() without allocating.
+    // sanitizeName() without allocating
     void putName(const char* name, std::size_t maxLength) {
         std::size_t count = 0;
         for (const char* c = name != nullptr ? name : ""; *c != '\0' && count < maxLength;
@@ -173,9 +165,8 @@ public:
         if (count == 0) put('_');
     }
 
-    /// Free text (an E message, a #meta value): printable ASCII passes,
-    /// anything else — CR and LF above all, which would split the line —
-    /// becomes a space.
+    // free text: printable ASCII passes, anything else (CR and LF especially, which would split
+    // the line) becomes a space
     void putText(const char* text, std::size_t maxLength) {
         std::size_t count = 0;
         for (const char* c = text != nullptr ? text : ""; *c != '\0' && count < maxLength;
@@ -242,8 +233,7 @@ std::size_t formatHeader(char* out, std::size_t size, const FileHeader& header) 
     line.putUnsigned(kFormatVersion);
     line.put('\n');
 
-    // "sapphirelib 0.1.0": which encoder wrote the file, for a reader that
-    // ever needs to work around one version's quirk.
+    // which encoder wrote the file, in case a reader ever needs to work around a version's quirk
     line.put("#meta,writer,sapphirelib ");
     line.putText(header.library, kMaxMetaChars);
     line.put('\n');
@@ -271,8 +261,7 @@ std::size_t formatSchema(char* out, std::size_t size, const ChannelSchema& schem
     line.put(',');
     line.putUnsigned(static_cast<std::uint64_t>(std::clamp(schema.decimals, 0, 6)));
 
-    // The spec fixes pid and events columns, so they come from here rather
-    // than from whatever the schema happens to hold.
+    // the spec fixes pid and events columns, so they come from here, not the schema
     if (schema.kind == ChannelKind::pid) {
         for (const char* column : kPidColumns) {
             line.put(',');
@@ -305,8 +294,7 @@ std::size_t formatRecord(char* out, std::size_t size, const ChannelSchema& schem
                 line.put(',');
                 line.putUnsigned(record.flags);
             } else {
-                // Exactly one value per declared column, so every S row of a
-                // channel has the width its #chan line promised.
+                // exactly one value per declared column, so every row is as wide as #chan promised
                 const std::size_t columns = schema.kind == ChannelKind::samples
                                                 ? std::min(schema.columns.size(), kMaxColumns)
                                                 : 0;
@@ -342,7 +330,7 @@ std::size_t formatRecord(char* out, std::size_t size, const ChannelSchema& schem
             const Record* parts[] = {&record};
             return formatEventRecords(out, size, parts, 1);
         }
-        default: return 0; // eventContinued: part of the event before it, never a row
+        default: return 0; // eventContinued is part of the event before it, never a row
     }
     line.put('\n');
     return line.finish();
@@ -350,9 +338,8 @@ std::size_t formatRecord(char* out, std::size_t size, const ChannelSchema& schem
 
 std::size_t formatEventRecords(char* out, std::size_t size, const Record* const* parts,
                                std::size_t count) {
-    // Rejoin the payloads into the one "tag\0message\0" string
-    // Channel::recordEvent() split up. The extra byte guarantees a final NUL
-    // even if a payload somehow arrived without one.
+    // rejoin the payloads into the "tag\0message\0" string recordEvent() split up. The extra
+    // byte guarantees a final NUL
     if (count == 0 || parts[0] == nullptr) return 0;
     char text[kMaxEventRecords * kRecordTextBytes + 1] = {};
     count = std::min(count, kMaxEventRecords);

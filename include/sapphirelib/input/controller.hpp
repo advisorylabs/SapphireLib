@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/input/controller.hpp
- *
- * A V5 controller sampled once per tick: button edges and hold times
- * (ButtonTracker), normalized sticks, the tick's timestamp, detection of the
- * loop having stopped and restarted, and a throttled text screen plus rumble
- * (ControllerScreen). The PROS-facing shell around those pure parts.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <array>
@@ -21,76 +10,93 @@
 
 namespace sapphirelib::input {
 
+/**
+ * @brief The controller's sticks
+ */
 enum class Axis : std::uint8_t { leftX, leftY, rightX, rightY };
 
-/// At namespace scope, not nested in Controller, so it can be a `= {}`
-/// default argument (GCC rejects that for a nested struct with default
-/// member initializers).
+/**
+ * @brief Settings for a Controller
+ */
 struct ControllerConfig {
-    /// update() calls further apart than this count as a restart: resumed()
-    /// reports it and the screen resends everything. Must be comfortably longer
-    /// than your loop period (the default is 5 x a 20ms opcontrol tick).
+    /**
+     * time between update() calls that counts as the loop restarting, in milliseconds. 100 by
+     * default. Keep it well above your loop period
+     */
     std::uint32_t resumeGapMs = 100;
 
-    /// Minimum spacing between controller writes. Text lines and rumble share
-    /// it, because the controller drops text sent faster than about every 50ms
-    /// across all lines.
+    /**
+     * minimum time between controller screen writes and rumbles, in milliseconds. 60 by default.
+     * The controller drops text sent faster than about every 50ms
+     */
     std::uint32_t screenIntervalMs = 60;
 };
 
-/// One update() at the top of each tick, one flushScreen() at the end:
-///
-///   sapphirelib::input::Controller master(pros::E_CONTROLLER_MASTER); // namespace scope
-///
-///   void opcontrol() {
-///       while (true) {
-///           master.update();
-///           if (master.pressed(Button::a)) ...;
-///           master.screen().setLine(0, "LIFT %4.0f", lift.position());
-///           master.flushScreen();
-///           pros::delay(20);
-///       }
-///   }
-///
-/// **Declare it at namespace scope (or `static`), never as a local in
-/// opcontrol().** Its button history has to survive opcontrol() restarting,
-/// the way PROS's own new-press flags do (they're kernel globals, not part of
-/// a pros::Controller object). PROS deletes and recreates the opcontrol task
-/// on every disable/enable, so a local Controller starts over with "nothing
-/// was held", and a button held through a disable/enable reads as a fresh
-/// press on the first tick back — holding L1 through a re-enable would raise
-/// the lift. Constructing one is safe during static initialization: it makes
-/// no PROS calls until update().
-///
-/// Buttons are read with get_digital() only, never get_digital_new_press(),
-/// so code still calling raw().get_digital_new_press() keeps working
-/// unchanged; this class never consumes those flags.
-///
-/// Not thread-safe: update, query, and flush it from one task.
+/**
+ * @brief A V5 controller, sampled once per tick
+ *
+ * Tracks button presses and hold times, normalizes the sticks, and sends the screen and rumble
+ * without flooding the controller
+ *
+ * @note declare it at namespace scope, never as a local in opcontrol(). Its button history has to
+ * survive opcontrol() restarting, or a button held through a disable reads as a new press
+ *
+ * @note not thread-safe, so update, query, and flush it from one task
+ *
+ * @b Example
+ * @code {.cpp}
+ * sapphirelib::input::Controller master(pros::E_CONTROLLER_MASTER);
+ *
+ * void opcontrol() {
+ *     while (true) {
+ *         master.update();
+ *         if (master.pressed(Button::a)) claw.toggle(master.now());
+ *         master.screen().setLine(0, "LIFT %4.0f", lift.position());
+ *         master.flushScreen();
+ *         pros::delay(20);
+ *     }
+ * }
+ * @endcode
+ */
 class Controller {
 public:
+    /**
+     * @brief Construct a new Controller. Makes no PROS calls until update()
+     *
+     * @param id E_CONTROLLER_MASTER or E_CONTROLLER_PARTNER
+     * @param config screen and resume settings
+     */
     explicit Controller(pros::controller_id_e_t id, ControllerConfig config = {});
 
-    /// Samples all twelve buttons, the four sticks and the connection state,
-    /// and takes this tick's timestamp. Call once per tick, before any query.
+    /**
+     * @brief Sample the buttons, sticks, and connection, and take this tick's time
+     *
+     * Call once at the start of each tick, before any query
+     */
     void update();
 
-    /// sapphirelib::millis() as of the latest update(). Use it as the tick's
-    /// one "now" for everything else that takes a time.
+    /**
+     * @brief Get the time of the latest update(). Use it as the tick's one "now"
+     *
+     * @return std::uint32_t time, in milliseconds
+     */
     std::uint32_t now() const;
 
-    /// True on the first update() ever, and after any gap longer than
-    /// ControllerConfig::resumeGapMs: the loop was stopped (autonomous,
-    /// disabled, a blocking routine) and has restarted. The screen has already
-    /// been told to resend everything; drop your own stale state (sequences,
-    /// PID memory).
+    /**
+     * @brief Whether the loop just started or restarted after a gap (autonomous, a disable, a
+     * blocking routine)
+     *
+     * The screen already resends everything; drop your own stale state, like sequences and PID
+     * memory
+     */
     bool resumed() const;
 
-    /// Whether the controller was connected (over VEXnet or tethered) at the
-    /// latest update().
+    /**
+     * @brief Whether the controller was connected at the latest update()
+     */
     bool connected() const;
 
-    // Buttons (see ButtonTracker for the exact semantics).
+    // buttons, see ButtonTracker
     bool held(Button button) const { return buttons_.held(button); }
     bool pressed(Button button) const { return buttons_.pressed(button); }
     bool released(Button button) const { return buttons_.released(button); }
@@ -105,21 +111,39 @@ public:
     bool combo(Button first, Button second) const { return buttons_.combo(first, second); }
     const ButtonTracker& buttons() const { return buttons_; }
 
-    /// A stick, normalized to [-1, 1] (raw / 127). 0 while disconnected. Shape
-    /// it with applyDeadband() and curveJoystick() (control/joystick_curve.hpp).
+    /**
+     * @brief Get a stick
+     *
+     * @param axis the stick
+     * @return double -1 to 1. 0 while disconnected
+     *
+     * @b Example
+     * @code {.cpp}
+     * double throttle = sapphirelib::applyDeadband(master.axis(Axis::leftY), 0.05);
+     * @endcode
+     */
     double axis(Axis axis) const;
 
+    /**
+     * @brief Get the controller screen
+     */
     ControllerScreen& screen() { return screen_; }
 
-    /// Queues a rumble pattern; see ControllerScreen::rumble().
+    /**
+     * @brief Queue a rumble pattern. See ControllerScreen::rumble()
+     *
+     * @param pattern '.' short, '-' long, ' ' pause
+     */
     void rumble(const char* pattern) { screen_.rumble(pattern); }
 
-    /// Sends at most one pending screen write (see ControllerScreen::takeWrite()),
-    /// timed by now(). Call once at the end of each tick, after setting that
-    /// tick's lines.
+    /**
+     * @brief Send at most one pending screen write. Call once at the end of each tick
+     */
     void flushScreen();
 
-    /// The underlying pros::Controller, for anything not wrapped here.
+    /**
+     * @brief Get the underlying pros::Controller
+     */
     pros::Controller& raw() { return raw_; }
 
 private:

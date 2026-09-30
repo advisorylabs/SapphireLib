@@ -51,27 +51,19 @@ LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, dou
         const double discriminant = b * b - 4.0 * a * c;
         if (discriminant < 0.0) continue;
 
-        // Only the further ("exit") root, t2, can ever be a valid forward
-        // pursuit target — t1 ("entry") is always the same or an earlier
-        // point along the segment, so on a segment where the chassis is
-        // already past the entry point (or the segment ends before exiting
-        // the circle, so t2 falls outside [0,1]), t1 would send the target
-        // backward along the path instead of ahead of the chassis. If t2
-        // isn't on this segment, keep scanning later segments for the
-        // actual exit point instead of settling for t1.
+        // only the exit root, t2, can be a forward target; t1 would point back along the path. If
+        // t2 isn't on this segment, keep looking at later ones
         const double t2 = (-b + std::sqrt(discriminant)) / (2.0 * a);
         if (t2 < 0.0 || t2 > 1.0) continue;
 
-        // Keep scanning later segments even after finding a hit — a later
-        // segment's intersection is further along the path and should win.
+        // keep scanning even after a hit, since a later segment's intersection is further along
         found = true;
         bestPoint = Waypoint{p1.x + d.x * t2, p1.y + d.y * t2};
         bestIndex = i;
     }
 
     if (!found) {
-        // The whole remaining path is within the lookahead radius (or
-        // there's only one point left) — converge on the final waypoint.
+        // the whole rest of the path is within the lookahead, so head for the last waypoint
         return LookaheadResult{points.back(), points.size() - 1};
     }
     return LookaheadResult{bestPoint, bestIndex};

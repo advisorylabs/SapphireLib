@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/sensors/imu.hpp
- *
- * Calibrated drop-in replacement for pros::Imu, used everywhere SapphireLib
- * needs a heading source (TankDrivetrain, HolonomicDrivetrain,
- * odom::Odometry) instead of a raw pros::Imu — see the class comment for
- * why.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -18,88 +7,96 @@
 
 namespace sapphirelib::sensors {
 
-/// The V5 IMU under- or over-reports heading change by a small, fairly
-/// consistent percentage — negligible over one turn, but compounds badly
-/// over a match's worth of turning (a few degrees of error per rotation
-/// becomes tens of degrees after enough turns). Imu corrects for this: it
-/// tracks cumulative (unwrapped) rotation internally and multiplies it by a
-/// calibrated `headingScale` before re-wrapping to a 0-360 heading, instead
-/// of scaling the raw 0-360 reading directly (which would be meaningless —
-/// there's no sane way to "scale" a value that wraps at 360). Calibrate
-/// once per robot with calibrateHeadingScale() (imu_scale_math.hpp), then
-/// pass the resulting scale to every Imu you construct for that robot.
-/// `headingScale = 1.0` (the default) disables correction entirely, so this
-/// is a safe drop-in for a raw pros::Imu even before you've calibrated one.
-///
-/// Safe to read from several tasks at once — odometry, the drive loop, the
-/// GUI's HomePage and a tuning run all do. The cumulative tracking is
-/// lock-free (no mutex for a deleted competition task to leave locked), and
-/// a read the sensor can't answer — PROS_ERR_F while it's unplugged or
-/// recalibrating after a brownout — is skipped rather than folded in, so it
-/// can't turn the heading into NaN for the rest of the program. The first
-/// good read after one becomes a fresh baseline, so a sensor that restarted
-/// near 0 doesn't count that as a turn; only rotation during the gap is lost.
-/// Non-copyable, like the drivetrains that own one.
+/**
+ * @brief V5 IMU with multi-turn drift correction
+ *
+ * The V5 IMU over or under reports rotation by a small, fairly consistent percentage, which adds
+ * up to tens of degrees over a match. This tracks the unwrapped rotation, multiplies it by a
+ * calibrated headingScale, and wraps it back to 0-360. Calibrate once per robot with
+ * calibrateHeadingScale(). A scale of 1 (the default) does no correction
+ *
+ * Safe to read from several tasks at once. A read the sensor can't answer (unplugged, or
+ * recalibrating after a brownout) is skipped instead of turning the heading into NaN
+ *
+ * @b Example
+ * @code {.cpp}
+ * // IMU on port 10 that reads 0.4% low
+ * sapphirelib::sensors::Imu imu(10, 1.004);
+ * double heading = imu.getHeadingDeg();
+ * @endcode
+ */
 class Imu {
 public:
-    /// `port` follows pros::Imu's convention. Blocks until IMU calibration
-    /// finishes, so getHeadingDeg() is valid as soon as the constructor
-    /// returns instead of reading 0 until calibration happens to finish on
-    /// its own. Logs an error if calibration fails — see calibrated().
+    /**
+     * @brief Construct a new Imu
+     *
+     * Blocks until calibration finishes, so headings are valid right away. Logs an error if
+     * calibration fails; see calibrated()
+     *
+     * @param port IMU port
+     * @param headingScale drift correction. 1 by default, which does nothing
+     */
     explicit Imu(std::uint8_t port, double headingScale = 1.0);
 
-    /// False if calibration failed at construction, typically because
-    /// there's no IMU on the port (or the wrong device is). Headings from an
-    /// uncalibrated Imu stay at 0 until it starts answering, so check this
-    /// once at startup rather than trusting a motion to notice.
+    /**
+     * @brief Whether calibration succeeded
+     *
+     * False usually means there's no IMU on the port. Headings stay at 0 until it answers, so check
+     * this once at startup
+     */
     bool calibrated() const;
 
-    /// Absolute *field* heading, 0-360, clockwise-positive — same contract as
-    /// pros::Imu::get_heading(), but with headingScale applied to cumulative
-    /// rotation since construction before re-wrapping, and shifted by
-    /// whatever setHeadingDeg() last set (nothing, until something calls it —
-    /// then this reads 0 wherever the chassis faced at calibration, as
-    /// before). Not const — every call advances the internal
-    /// cumulative-rotation tracker, so call this (or
-    /// getCumulativeHeadingDeg()) at your control loop's rate, not just
-    /// occasionally, or an in-between multi-turn spin could wrap past 180
-    /// degrees between reads and get misdetected as a much smaller turn the
-    /// other way.
+    /**
+     * @brief Get the field heading
+     *
+     * Like pros::Imu::get_heading(), with headingScale applied and shifted by setHeadingDeg()
+     *
+     * @note not const: every call advances the rotation tracking, so call this (or
+     * getCumulativeHeadingDeg()) at your loop's rate. With too long between calls, a fast spin
+     * could look like a smaller turn the other way
+     *
+     * @return double heading, 0-360 degrees, clockwise positive
+     */
     double getHeadingDeg();
 
-    /// Cumulative signed rotation since construction, in degrees, with
-    /// headingScale applied and *not* wrapped to 0-360 — e.g. 3.5 full
-    /// clockwise turns reads back as 1260, not 180. Useful for calibration
-    /// (see calibrateHeadingScale()) and for detecting how many times the
-    /// chassis has spun. Same call-frequency caveat as getHeadingDeg().
-    ///
-    /// Deliberately *not* shifted by setHeadingDeg(): it's rotation, not a
-    /// heading, so re-framing the field heading never makes it jump.
-    /// Everything that only takes differences of it — Auto-Tune's turn
-    /// experiment, OdometryPage's offset calibration, the Asterisk drift
-    /// correction — is unaffected by a setPose() landing mid-measurement.
+    /**
+     * @brief Get the total rotation since construction, not wrapped
+     *
+     * 3.5 clockwise turns reads 1260, not 180. Not shifted by setHeadingDeg(), so re-framing the
+     * field heading never makes it jump. Same call rate note as getHeadingDeg()
+     *
+     * @return double rotation, in degrees, with headingScale applied
+     */
     double getCumulativeHeadingDeg();
 
-    /// Redefines the field heading so getHeadingDeg() reads `headingDeg`
-    /// (any value; wrapped to 0-360) with the chassis where it is right now.
-    /// It turns nothing and changes no rotation reading — it only picks
-    /// which physical direction "heading 0" means from here on. Safe from any
-    /// task.
-    ///
-    /// odom::Odometry::setPose() calls this on the Imu it was given, which is
-    /// why odometry should share the drivetrain's imu() rather than open a
-    /// second Imu on the same port: then turnToHeading(), moveToPose(), the
-    /// odometry pose, and the HomePage readout are all in one frame.
+    /**
+     * @brief Set the field heading the robot has right now
+     *
+     * Turns nothing and changes no rotation reading; it only picks which direction is heading 0.
+     * odom::Odometry::setPose() calls this, which is why odometry should share the drivetrain's
+     * imu(). Safe from any task
+     *
+     * @param headingDeg the heading the robot has now, in degrees. Wrapped to 0-360
+     */
     void setHeadingDeg(double headingDeg);
 
-    /// What getHeadingDeg() adds to the scaled cumulative rotation, in
-    /// degrees, (-180, 180]; 0 until setHeadingDeg() is called. For code that
-    /// needs to convert between the field heading and the rotation frame
-    /// getCumulativeHeadingDeg() reports in (odometry does, so a re-frame
-    /// between two of its updates isn't mistaken for a turn).
+    /**
+     * @brief Get what getHeadingDeg() adds to the rotation, to convert between the two
+     *
+     * @return double offset, (-180, 180] degrees. 0 until setHeadingDeg() is called
+     */
     double headingOffsetDeg() const;
 
+    /**
+     * @brief Set the drift correction
+     *
+     * @param headingScale the new scale
+     */
     void setHeadingScale(double headingScale);
+
+    /**
+     * @brief Get the drift correction
+     */
     double headingScale() const;
 
 private:
@@ -109,14 +106,12 @@ private:
     pros::Imu imu_;
     std::atomic<double> headingScale_;
 
-    /// The raw reading the next update's delta is measured from. NaN until
-    /// the sensor has answered once, so a first good reading after a failed
-    /// construction-time read becomes the baseline instead of a jump.
+    // the raw reading the next delta is measured from. NaN until the sensor has answered once, so
+    // the first good reading becomes the baseline instead of a jump
     std::atomic<double> lastRawHeadingDeg_;
     std::atomic<double> rawCumulativeDeg_{0.0};
 
-    /// See setHeadingDeg(). A separate atomic from the rotation tracking, so
-    /// re-framing never touches the deltas several tasks are adding up.
+    // see setHeadingDeg(). Separate from the rotation tracking, so re-framing never touches it
     std::atomic<double> headingOffsetDeg_{0.0};
     bool calibrated_ = false;
 

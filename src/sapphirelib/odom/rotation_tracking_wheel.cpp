@@ -15,14 +15,11 @@ RotationTrackingWheel::RotationTrackingWheel(std::int8_t port, double wheelDiame
 }
 
 double RotationTrackingWheel::getDistanceIn() const {
-    // get_position() is cumulative (non-wrapping) centidegrees of sensor
-    // rotation, unlike get_angle() which wraps every revolution — cumulative
-    // is what odometry needs to compute a delta since the last update.
+    // get_position() is cumulative centidegrees, unlike get_angle() which wraps every turn
     std::int32_t centidegrees = rotation_.get_position();
 
-    // PROS_ERR (INT32_MAX) while unplugged. Reading that as a position
-    // teleports the pose ~515,000in (2.75in wheel); holding the last good
-    // value reads as "didn't move" until the sensor answers again.
+    // PROS_ERR while unplugged, which would teleport the pose ~515,000in. Hold the last good
+    // reading instead, which reads as "didn't move"
     if (centidegrees == PROS_ERR) {
         centidegrees = lastGoodCentidegrees_.load();
     } else {
@@ -36,8 +33,7 @@ double RotationTrackingWheel::getDistanceIn() const {
 
 void RotationTrackingWheel::reset() {
     rotation_.reset_position();
-    // Keeps a reset that lands while the sensor is unplugged reading 0, as
-    // reset() promises, rather than the pre-reset position.
+    // so a reset while unplugged still reads 0
     lastGoodCentidegrees_.store(0);
 }
 

@@ -18,11 +18,8 @@ constexpr std::uint32_t kLoopDelayMs = 10;
 
 constexpr const char* kNoOdometry = "no odometry - call setOdometry() first, or pass one";
 
-/// Heading error to steer toward `targetBearingDeg`, and which direction to
-/// drive: reverses instead of turning more than 90 degrees to face the
-/// target, same as driveDistance() accepting negative inches. Shared by
-/// moveToPoint() and moveToPose(), which only differ in how they compute
-/// targetBearingDeg (straight at the point vs. at a boomerang carrot point).
+// heading error to steer toward a bearing, and which way to drive. Reverses instead of turning
+// more than 90 degrees, like driveDistance() with negative inches
 struct SteeringError {
     double headingErrorDeg;
     double direction; // +1 forward, -1 reverse
@@ -38,8 +35,7 @@ SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg) {
     return SteeringError{headingError, direction};
 }
 
-/// Logs a motion's `end` event (see docs/TELEMETRY_FORMAT.md) and hands its
-/// result back, so every way out of a motion reads `return finishMotion(...)`.
+// log a motion's end event and return its result
 motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& result) {
     telemetry::event("motion", "end,%s,reason=%s,error=%.3f,ms=%u", kind,
                      motion::exitReasonName(result.reason), result.finalError,
@@ -47,10 +43,8 @@ motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& 
     return result;
 }
 
-/// For a motion that can't start at all (no odometry to read, an empty
-/// path): says why on the terminal, and still logs a start/end pair — the
-/// start with no parameters — so a telemetry log shows the motion was asked
-/// for and why nothing happened.
+// for a motion that can't start (no odometry, an empty path): print why, and still log a
+// start/end pair so the log shows it was asked for
 motion::MotionResult abortMotion(const char* kind, const char* why) {
     SAPPHIRELIB_LOG_ERROR("motion", "%s: %s", kind, why);
     telemetry::event("motion", "start,%s", kind);
@@ -89,9 +83,8 @@ void TankDrivetrain::setSideVoltages(double leftVolts, double rightVolts) {
     left_.moveVoltage(leftVolts);
     right_.moveVoltage(rightVolts);
 
-    // Every call site mixes as left = forward + turn, right = forward -
-    // turn (arcade(), the turn loops, the steering in moveToPoint()), so
-    // this recovers exactly what it asked for.
+    // every caller mixes left = forward + turn, right = forward - turn, so this gets back exactly
+    // what was asked for
     appliedForwardVolts_.store((leftVolts + rightVolts) / 2.0);
     appliedTurnVolts_.store((leftVolts - rightVolts) / 2.0);
 }
@@ -121,14 +114,11 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
                      inches, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
 
-    // Rotation frame: only the drift from here matters, and a setPose() from
-    // another task mustn't read as a sudden heading error.
+    // rotation frame, so a setPose() from another task doesn't look like a heading error
     const double startHeading = rotationHeadingDeg();
 
-    // Measured from wherever the encoders already read instead of taring
-    // them. A tare is device-level, so it would also zero any
-    // MotorGroupTrackingWheel on these motors and jump the odometry pose
-    // back by everything driven so far.
+    // measure from where the encoders read now instead of taring them. A tare would also zero
+    // any MotorGroupTrackingWheel on these motors and make odometry jump
     const double startDegrees = sideAverageDegrees();
     drivePID_.reset();
 
@@ -179,10 +169,8 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
     while (true) {
         const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
 
-        // Feed the pre-wrapped error in as `target` against a fixed
-        // `measurement` of 0, since PID doesn't know heading wraps at 360.
-        // turnPID's derivativeOnMeasurement should stay false for this to
-        // behave as a normal derivative-on-error term.
+        // the PID doesn't know heading wraps at 360, so pass the wrapped error as the target and 0
+        // as the measurement. derivativeOnMeasurement must stay false for this
         const double output = turnPID_.update(error, 0.0);
 
         setSideVoltages(output, -output);
@@ -203,8 +191,7 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
 motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn,
                                                  const odom::Odometry& odometry,
                                                  ExitConditions exit) {
-    // No hold_deg key, unlike HolonomicDrivetrain's: a tank chassis steers
-    // to face the point instead of holding a heading.
+    // no hold_deg, unlike the holonomic drivetrain: a tank drive steers to face the point
     telemetry::event("motion",
                      "start,moveToPoint,x=%.3f,y=%.3f,threshold=%.3f,settle_ms=%u,timeout_ms=%u",
                      xIn, yIn, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
@@ -275,10 +262,8 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
         const odom::Pose pose = odometry.getPose();
         const double distanceToTargetIn = std::hypot(xIn - pose.xIn, yIn - pose.yIn);
 
-        // Boomerang carrot point: placed behind the target along its facing
-        // direction, receding toward the target itself as the chassis
-        // closes in — so it naturally curves into the target heading
-        // instead of driving straight in and point-turning at the end.
+        // boomerang carrot point: behind the target along its heading, moving toward the target as
+        // the chassis closes in, so it curves into the final heading
         const double carrotOffsetIn = distanceToTargetIn * exit.boomerangLeadPct;
         const double carrotXIn = xIn - carrotOffsetIn * std::sin(targetHeadingRad);
         const double carrotYIn = yIn - carrotOffsetIn * std::cos(targetHeadingRad);
@@ -318,8 +303,7 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
 motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
                                                 const odom::Odometry& odometry,
                                                 motion::PursuitConfig config) {
-    // Path's constructor doesn't reject an empty list, and .back() below
-    // would be undefined behavior on one.
+    // Path doesn't reject an empty list, and back() below would be undefined on one
     if (path.waypoints().empty()) return abortMotion("followPath", "empty path");
 
     telemetry::event("motion",
@@ -338,8 +322,8 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
         const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
         if (distToFinalIn <= config.finalApproachIn) break;
 
-        // Checked after the distance, so reaching the final approach on the
-        // same tick the timer runs out still gets the settled stop there.
+        // check the timeout after the distance, so reaching the final approach on the same tick
+        // still gets the settled stop
         const std::uint32_t pursuitMs = pros::millis() - startMs;
         if (config.timeoutMs > 0 && pursuitMs >= config.timeoutMs) {
             stop();
@@ -366,8 +350,7 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
 
     motion::MotionResult result =
         approachPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit);
-    // The final approach decides how the path ended, but the time is the
-    // whole path's.
+    // the final approach decides how the path ended, but the time covers the whole path
     result.elapsedMs = pros::millis() - startMs;
     return finishMotion("followPath", result);
 }
@@ -384,8 +367,7 @@ void TankDrivetrain::stop(BrakeMode mode) {
     left_.brake();
     right_.brake();
 
-    // Braking commands no voltage, so appliedAxisVolts() shouldn't keep
-    // reporting the last tick of whatever motion just ended.
+    // braking commands no voltage, so stop reporting the last motion's volts
     appliedForwardVolts_.store(0.0);
     appliedTurnVolts_.store(0.0);
 }

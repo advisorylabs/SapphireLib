@@ -1,57 +1,45 @@
-/**
- * \file sapphirelib/odom/odometry_math.hpp
- *
- * The tracking-wheel-and-IMU ("arc") odometry algorithm, factored out as
- * pure math with no PROS dependency, so it can be unit-tested on a desktop
- * compiler (see tests/odom/odometry_math_test.cpp). Odometry (odometry.hpp)
- * wraps this with the actual sensor reads and background task.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 namespace sapphirelib::odom {
 
-/// Field-frame displacement for one odometry update.
+/**
+ * @brief How far the robot moved on the field in one odometry update
+ */
 struct PoseDelta {
+    /** change in x, in inches */
     double dxIn = 0.0;
+    /** change in y, in inches */
     double dyIn = 0.0;
 };
 
-/// Computes one odometry update's field-frame displacement from raw sensor
-/// deltas.
-///
-/// `lastHeadingDeg`/`headingDeg` are absolute IMU headings (0-360,
-/// clockwise-positive) before/after this update. `verticalDeltaIn`/
-/// `horizontalDeltaIn` are the vertical/horizontal tracking wheels' (or, for
-/// vertical, a drive-encoder fallback's) signed distance traveled since the
-/// last update, in inches — pass 0 for whichever axis has no sensor.
-/// `verticalOffsetIn`/`horizontalOffsetIn` are each wheel's perpendicular
-/// distance from the robot's tracking center, in inches (0 for an absent
-/// wheel, or for a drive-encoder fallback, which approximates the tracking
-/// center directly rather than an offset wheel).
-///
-/// This is the standard two-wheel-and-IMU ("arc") tracking algorithm: each
-/// wheel's raw delta includes an arc-length contribution purely from
-/// rotation (offset * radians turned), which is subtracted out to leave the
-/// wheel's true translational contribution; that local (forward, lateral)
-/// displacement is then rotated into the field frame using the *average*
-/// heading across the update — more accurate than using either endpoint
-/// alone for anything but an infinitesimal update.
+/**
+ * @brief Work out one odometry update's movement on the field
+ *
+ * Removes each wheel's arc from the chassis turning (offset * radians turned), then rotates the
+ * remaining local movement onto the field using the average heading across the update
+ *
+ * @param lastHeadingDeg heading before the update, 0-360 degrees, clockwise positive
+ * @param headingDeg heading after the update
+ * @param verticalDeltaIn vertical wheel travel since the last update, in inches. 0 if none
+ * @param horizontalDeltaIn horizontal wheel travel since the last update, in inches. 0 if none
+ * @param verticalOffsetIn vertical wheel offset from the tracking center, in inches
+ * @param horizontalOffsetIn horizontal wheel offset from the tracking center, in inches
+ * @return PoseDelta movement on the field
+ */
 PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double verticalDeltaIn,
                                 double horizontalDeltaIn, double verticalOffsetIn,
                                 double horizontalOffsetIn);
 
-/// Calibration helper for a tracking wheel's offset (OdometryConfig::
-/// verticalOffsetIn / horizontalOffsetIn): spin the chassis in place through
-/// a known total rotation — e.g. 10 full turns, tracked by summing
-/// *unwrapped* IMU heading deltas (not wrapDegrees180'd, since the rotation
-/// is cumulative and normally exceeds +-180) — and record how far the
-/// tracking wheel moved over that same rotation. `wheelDistanceIn` is the
-/// wheel's total signed distance traveled; `rotatedRadians` is the total
-/// angle turned, in radians (e.g. 10 turns = 10 * 2 * pi). Returns the
-/// wheel's perpendicular offset from the tracking center, in inches.
+/**
+ * @brief Work out a tracking wheel's offset from a turn in place
+ *
+ * Spin the chassis in place through a known rotation (say 10 turns, from unwrapped IMU readings)
+ * and record how far the wheel traveled over it
+ *
+ * @param wheelDistanceIn the wheel's total travel, in inches
+ * @param rotatedRadians the total rotation, in radians (10 turns is 10 * 2 * pi)
+ * @return double the wheel's offset from the tracking center, in inches
+ */
 double calibrateTrackingWheelOffsetIn(double wheelDistanceIn, double rotatedRadians);
 
 } // namespace sapphirelib::odom

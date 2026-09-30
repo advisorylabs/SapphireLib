@@ -1,28 +1,20 @@
-/**
- * \file sapphirelib/odom/pose.hpp
- *
- * The robot's estimated position and heading on the field.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 namespace sapphirelib::odom {
 
-/// Field-coordinate pose: position in inches, heading in degrees.
-///
-/// Coordinate convention: the origin and axis orientation are whatever
-/// Odometry's startPose (or a later setPose()) defines them to be — heading
-/// included: setPose({x, y, 270}) means "the chassis faces 270 right now",
-/// and from then on the pose, the drivetrain's turnToHeading(), and its
-/// moveToPose() all use that frame (see Odometry::setPose()). Once fixed,
-/// x increases to the right, y increases "downfield" from that origin, and
-/// heading is 0-360 degrees, clockwise-positive, matching
-/// pros::Imu::get_heading() (0 = facing +y, 90 = facing +x).
+/**
+ * @brief The robot's position and heading on the field
+ *
+ * The origin and axes are whatever the odometry's start pose or a later setPose() makes them.
+ * x increases to the right, y increases downfield, and heading is 0-360 degrees clockwise, matching
+ * the IMU (0 faces +y, 90 faces +x)
+ */
 struct Pose {
+    /** x position, in inches */
     double xIn = 0.0;
+    /** y position, in inches */
     double yIn = 0.0;
+    /** heading, 0-360 degrees */
     double headingDeg = 0.0;
 };
 

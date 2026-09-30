@@ -10,8 +10,7 @@ Piston::Piston(pros::adi::ext_adi_port_pair_t expanderPort, bool extendedAtStart
     : pneumatics_(expanderPort, extendedAtStart, extendedIsLow), state_(extendedAtStart) {}
 
 bool Piston::set(bool extended, std::uint32_t nowMs) {
-    // Only an actual change reaches the valve (and restamps the time), so a
-    // caller can pass the wanted state every tick.
+    // only a real change reaches the valve, so callers can pass the wanted state every tick
     if (!state_.set(extended, nowMs)) return false;
     if (extended) {
         pneumatics_.extend();

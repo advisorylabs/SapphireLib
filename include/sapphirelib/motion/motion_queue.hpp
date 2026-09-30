@@ -1,11 +1,3 @@
-/**
- * \file sapphirelib/motion/motion_queue.hpp
- *
- * Sequential, non-blocking runner for a series of blocking motions.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <deque>
@@ -16,41 +8,59 @@
 
 namespace sapphirelib::motion {
 
-/// Runs a sequence of blocking motions (driveDistance(), turnToHeading(),
-/// moveToPoint(), moveToPose(), followPath(), or any other callable) one
-/// after another on a background PROS task, so autonomous() can enqueue a
-/// whole routine and keep running (e.g. to also manage a mechanism)
-/// instead of blocking on each motion in turn.
-///
-/// Holds a pros::Mutex internally, which is non-copyable/non-movable, so —
-/// like MotorGroup-based classes elsewhere in SapphireLib — MotionQueue can
-/// only be constructed in place, never passed by value.
+/**
+ * @brief Runs blocking motions one after another on a background task
+ *
+ * Lets autonomous() queue a routine and keep going, e.g. to also run a mechanism
+ *
+ * @b Example
+ * @code {.cpp}
+ * // static, never a local in autonomous(): the task outlives the call
+ * static sapphirelib::motion::MotionQueue queue;
+ *
+ * void autonomous() {
+ *     queue.enqueue([] { drivetrain().driveDistance(24); });
+ *     queue.enqueue([] { drivetrain().turnToHeading(90); });
+ *     queue.run();
+ *     // do other things while the chassis moves
+ *     queue.waitUntilDone();
+ * }
+ * @endcode
+ */
 class MotionQueue {
 public:
     MotionQueue() = default;
 
-    /// Appends a motion to run after everything already queued finishes.
-    /// Safe to call while the queue is running (including from within a
-    /// queued motion, to enqueue more work).
+    /**
+     * @brief Add a motion to run after everything already queued
+     *
+     * Safe while the queue is running, including from inside a queued motion
+     *
+     * @param motion the motion to run
+     */
     void enqueue(std::function<void()> motion);
 
-    /// Starts processing the queue on a background task. Returns
-    /// immediately — call waitUntilDone() to block until every enqueued
-    /// motion (including ones enqueued after run() was called) has run.
-    /// Only the first call starts the task; later calls do nothing (a second
-    /// worker would run motions in parallel). The task runs for the rest of
-    /// the program, so the MotionQueue must too — make it static, never a
-    /// local in autonomous(), which PROS can end at any moment.
+    /**
+     * @brief Start running the queue on a background task. Returns right away
+     *
+     * Only the first call starts the task. The task runs for the rest of the program, so the
+     * MotionQueue must be static
+     */
     void run();
 
-    /// True while a motion is executing or more are queued behind it.
+    /**
+     * @brief Whether a motion is running or queued
+     */
     bool isBusy() const;
 
-    /// Blocks until the queue is empty and idle.
+    /**
+     * @brief Block until the queue is empty and idle
+     */
     void waitUntilDone() const;
 
-    /// Drops every motion that hasn't started running yet. Does not
-    /// interrupt a motion already in progress.
+    /**
+     * @brief Drop every motion that hasn't started yet. The running motion keeps going
+     */
     void clear();
 
 private:
