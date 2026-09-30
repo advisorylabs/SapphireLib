@@ -225,7 +225,8 @@ names to match on.
 | `drive` | pid | pid columns | The drivetrain's `drivePID()`: distance loops. |
 | `turn` | pid | pid columns | The drivetrain's `turnPID()`: turns, heading hold/steering in point and path motions. |
 | `hold` | pid | pid columns | The drivetrain's `headingHoldPID()`: driver-control heading hold. |
-| `odom` | samples | `x,y,heading` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. |
+| `odom` | samples | `x,y,heading` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. The corrected pose, the one every motion drives by: raw odometry plus whatever correction the localizer has eased in (see `mcl`). |
+| `mcl` | samples | `x,y,spread,neff,used,agree,correcting,corr_x,corr_y` | The Monte Carlo localizer every 50 ms while enabled ([`docs/LOCALIZATION.md`](LOCALIZATION.md)): its estimate (inches), the particles' RMS spread around it (inches), the effective particle count, how many of the four distance sensors gave a usable reading and how many of those agree with the walls, 1/0 for whether that update set odometry's correction, and the correction odometry is easing toward (inches). The correction is how far raw odometry had drifted: `odom` minus `corr_x,corr_y` is raw odometry, once the correction has finished easing in. |
 | `chassis` | samples | `fwd_v,strafe_v,turn_v` | The volts the drivetrain last commanded on each axis, before each motor's ±12 V clamp, every 10 ms while enabled. A snapshot, possibly one tick torn across the three fields; `strafe_v` is always 0 on a tank. |
 | `batt` | samples | `volts,pct,amps,temp` | Battery voltage, charge (%), current drawn (A) and pack temperature (°C), every 200 ms. A failed read is `nan`. |
 | `motor.<name>` | samples | `volts,amps,temp,rpm,eff,faults` | One per motor, every 100 ms: see [Motor channels](#motor-channels). 96671H logs `motor.fl`, `fr`, `bl`, `br`, `ml`, `mr` (drivetrain), `motor.liftA`, `liftB`, `intake` and `claw`. |

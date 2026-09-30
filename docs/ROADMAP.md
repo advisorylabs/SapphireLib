@@ -14,6 +14,8 @@ Standalone PROS library for VEX V5, custom API, rewritten from StratagemV2.0 (pr
   - IMU + single horizontal tracking wheel
   - IMU + vertical + horizontal tracking wheels
   - Configuration is declarative: you tell SapphireLib what sensors exist, it picks the odometry math automatically.
+  - On top of any of them, Monte Carlo localization on distance sensors that see the field walls,
+    correcting odometry's drift (see "Advanced Localization" below).
 - **Custom API**, not a LemLib/EZ-Template clone.
 - **Season-durable**: needs to survive 2 seasons, so testability, documentation, and tuning tools matter as much as raw features.
 
@@ -580,6 +582,22 @@ user expects, without dropping features or changing how any motion drives.
       re-framing property are unit-tested in `tests/sensors/imu_scale_math_test.cpp` and
       `tests/odom/odometry_math_test.cpp`. Robots that start at heading 0 (this one does) see no
       change beyond the IMU's few milliseconds of drift between chassis and odometry construction.
+- [x] The vertical tracking wheel's offset sign, documented backward: `OdometryConfig` and
+      `strafeDriftIn()` said positive is right of center, but the arc correction
+      (`wheel - offset * dTheta`, clockwise positive) makes positive LEFT, since a right-side wheel
+      rolls backward on a right turn. The math was right and stays; `calibrateTrackingWheelOffsetIn()`
+      always produced the right sign, so only a hand-measured right-side wheel was affected, and there
+      it put about 11 in of phantom travel into the pose per 90° turned in place. Docs fixed, and
+      `tests/odom/odometry_math_test.cpp` now pins both wheels' signs against rigid-body geometry.
+      **Still to check on the robot:** `kVerticalWheelOffsetIn` is +3.59, which says left of center;
+      nothing records whether it was calibrated or measured by hand (see the note in `config.hpp`).
+- [x] `followPath()` on a closed path: a lap that ends where it starts finished on its first tick,
+      because the loop handed over to the final approach as soon as the robot was within
+      `finalApproachIn` of the last waypoint, where it already sat. `motion::reachedFinalApproach()`
+      now also waits for pursuit to reach the last segment, on both drivetrains.
+      `tests/motion/pure_pursuit_math_test.cpp` drives a point robot along 500 random open paths
+      under a copy of the old rule and the new one (identical, tick for tick) and around closed laps
+      (the old rule never moved; the new one drives the lap).
 
 ### Deferred cleanup
 Worth doing, but each one changes behavior, touches every call site, or wants on-robot validation
@@ -632,6 +650,80 @@ first:
       of old and new kP/kI/kD (and on the Cortex-A9 a double itself isn't guaranteed to be written in
       one piece). Harmless in practice (it lasts one tick), but the fix is cheap: stage new gains in
       an atomic slot that `update()` adopts at the top of its next step.
+
+---
+
+## Advanced Localization: Monte Carlo Localization ⬅ *in progress*
+**Goal:** A pose that stays right for the whole match, not just its first motion.
+
+Odometry only ever adds: tracking wheels read a percent or two long or short and slip when the robot
+is hit, the IMU drifts, and every error stays in the pose. MCL runs beside odometry, checks it against
+distance sensors that see the field walls, and eases odometry's pose back. Everything that reads
+`getPose()` (every pose motion, with its Auto-Tuned gains) drives by the corrected pose with no other
+changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
+
+- [x] Pure localization core in `sapphirelib::localization`, unit-tested on the host:
+  - `FieldMap`: the perimeter (`centered()`, 140.5 in wall to wall per the game manual) plus
+    `addBox()`/`addSegment()` for fixed structures, and raycasting against them.
+  - The sensor model: `DistanceSensorMount` (forward/right from the tracking center, facing),
+    `BeamModel` (the V5 Distance Sensor's ±15 mm / ±5% noise and 2000 mm range, and an outlier
+    probability, so a reading nothing explains, like another robot in the way, stops telling
+    hypotheses apart instead of dragging the estimate), `distanceReadingFromMm()` (9999/`PROS_ERR`/
+    low confidence become invalid), and `compensateLatency()`, since a reading is a few tens of
+    milliseconds old at ~30 Hz sampling.
+  - `ParticleFilter`: x/y particles (heading stays the IMU's), predict from odometry's travel plus
+    noise, weigh in log space so four small densities can't underflow, systematic resampling once
+    the effective particle count falls below half, and augmented-MCL recovery (Thrun 8.3.5) that
+    scatters fresh particles near the estimate when the fit suddenly drops. Two refinements over the
+    textbook version, both found in the simulator: the fit is measured against a perfect fit per
+    reading (a far reading's likelihood is lower however right it is, which made the textbook
+    statistic swing as the robot neared and left walls and fire recovery constantly), and recovery
+    has a trigger threshold (ordinary driving stays above 0.9 of the long-run fit, a 7 in shove drops
+    it under 0.6).
+  - `Rng` (`util/random.hpp`): seeded xoshiro128**, so runs are reproducible and the simulator's port
+    can be held to the exact same particles.
+  - Tests: raycasts, the sensor model, and closed-loop filter runs on a simulated field: 80 s of laps
+    on odometry with a 4% scale error, 1.5° heading bias and a 0.3 in/s creep (odometry ends 28.8 in
+    off, MCL 0.13 in), a sensor blocked for 5 s, and an 8 in bump (found again in 4 updates with
+    recovery, never without it while standing still).
+- [x] Odometry's correction hook: `Odometry::snapshot()` (the corrected pose, the raw pose and the
+      `setPose()` count, read together) and `setPositionCorrection()`, an offset that eases in at a
+      capped rate instead of jumping, since a jump in the pose is a spike in every motion's derivative
+      term (an Auto-Tuned drive kD is ~0.7 V per in/s). A correction worked out before a `setPose()`
+      is refused rather than applied to the new frame; `setPose()` bumps its count with the pose locked
+      so a snapshot can't pair a new count with the old pose. The ease-in step (`correctionStep()`)
+      is pure and tested.
+- [x] `MonteCarloLocalizer`: the PROS-facing class on its own task (50 ms, matched to the sensors'
+      ~30 Hz). Predicts from the raw pose (which a correction easing in never moves), reads the
+      sensors, compensates latency with odometry's velocity, skips readings mid-spin, and corrects
+      odometry only when the cloud is tight (3 in), at least two sensors agree with the walls, and
+      `setPose()` has put odometry in the field frame (`waitForSetPose`: in the simulator, a localizer
+      allowed to correct before one briefly latched onto a spot over 30 in away). `status()` is
+      atomics, safe from any task; `setCorrectionEnabled()` turns correcting off for A/B runs;
+      `relocalizeGlobally()` starts over from the whole field.
+- [x] 96671H's robot: four distance sensors (placeholder ports and mounts in `config.hpp`, still to
+      be set to the real ones), `robot::localizer()` in `devices.cpp`, an `mcl` telemetry channel,
+      the Diagnostics entries (commented out until the ports are real), and Auto-Tune's translation
+      experiments measuring from the raw pose so a correction mid-run isn't read as speed.
+      `examples/localization.cpp` is a small complete program.
+- [x] Simulator: [`tools/sim/`](../tools/sim/), a browser app (no install) running JavaScript ports
+      of the localizer, odometry, motions and Auto-Tune's gain design, held to the C++ tests' golden
+      values (a seeded filter run lands on the same particles to 1e-9). The chassis is Auto-Tune's
+      axis model; the world adds tracking wheel error and slip, IMU drift, distance sensor noise,
+      latency and dropouts, bumps, a defender, and field elements in the world, the map, both or
+      neither. Visualizer toggles for particles (colored by fit, sized by weight), the uncertainty
+      ellipse, sensor beams, expected-vs-measured per sensor, raw and corrected poses; a step-through
+      of one update (predict, weigh, resample) with captions; a particle inspector; and a settings tab
+      that writes the `LocalizerConfig{...}` to paste. Its Node tests (in CI) check the claims it
+      makes: every routine finishes within an inch and closer on average than on odometry alone,
+      worn wheels and bumps are corrected, and unmapped elements are ignored.
+
+**Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
+in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts
+are placeholders, and real sensor latency, how the real sensors see the perimeter (metal field walls
+vs. portable fields), and wheel slip on real tiles haven't been measured. `docs/LOCALIZATION.md`
+has the checklist. Still to come: showing the particle cloud on the brain screen's Odometry page, and
+fixed field structures in the map once the season's field is known.
 
 ---
 

@@ -11,12 +11,13 @@ any mix in between.
 
 🚧 Pre-1.0. Phases 1-3 (chassis control, odometry, pose-aware motion) are implemented, along with most
 of Phase 4's developer tools (brain-screen GUI, PID tuning and model-based Auto-Tune, sensor
-diagnostics, SD-card telemetry) and Phase 5's driver-macro and mechanism building blocks. Only Phase 1
-has been released as a template (`v0.1.0`); everything since lives in this repo but isn't in a release
-yet.
+diagnostics, SD-card telemetry), Phase 5's driver-macro and mechanism building blocks, and Monte Carlo
+localization on distance sensors, with a simulator to try it in. Only Phase 1 has been released as a
+template (`v0.1.0`); everything since lives in this repo but isn't in a release yet.
 
 The pure math under all of it is unit-tested on a desktop compiler, but most of the library hasn't had
-on-robot validation yet: odometry, the pose motions, Auto-Tune, and SD logging in particular. On-bot
+on-robot validation yet: odometry, the pose motions, Auto-Tune, SD logging, and the localizer in
+particular. On-bot
 PID tuning is still per-robot work you'll do after pulling it in. See
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phase-by-phase plan and what each phase still needs.
 
@@ -26,6 +27,10 @@ PID tuning is still per-robot work you'll do after pulling it in. See
   center wheels): `driveDistance()`/`turnToHeading()`, arcade/tank/holonomic driver control,
   field-centric and heading-hold modes, and `curveJoystick()`/`applyDeadband()` stick shaping.
 - **Odometry**: `odom::Odometry` on a background task, for any of the four sensor configurations below.
+- **Localization**: `localization::MonteCarloLocalizer`, Monte Carlo localization on distance sensors
+  that see the field walls. It runs beside odometry and eases odometry's pose back whenever it
+  drifts, so every pose motion drives by the corrected pose with no other changes. See
+  [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
 - **Motion**: `moveToPoint()`, `moveToPose()` (boomerang on tank), and pure-pursuit `followPath()` on
   both drivetrains, plus `MotionQueue`. Every blocking motion returns a `MotionResult`, so a routine
   can tell a motion that settled from one that timed out against something.
@@ -48,6 +53,12 @@ PID tuning is still per-robot work you'll do after pulling it in. See
   small field-and-lift view next to synced charts, and tunes controllers from the log: it refits
   Auto-Tune runs or ordinary driving, designs gains, shows how they'd have done against the match's
   real targets, and writes the C++ to paste.
+- **Simulator** ([`tools/sim/`](tools/sim/)): open `index.html` in a browser (no install) to drive a
+  simulated 96671H around a field running the library's own odometry, localizer, motions and
+  Auto-Tune gain design. Bump the robot, add a defender, wear out its tracking wheels, and watch MCL
+  keep the pose honest. Visualizer toggles show the particles and their weights, what each sensor
+  sees against what the map expects, and a step-through of one update, for showing teammates how it
+  works.
 
 ## Supported Odometry Configurations
 
@@ -55,6 +66,9 @@ PID tuning is still per-robot work you'll do after pulling it in. See
 - IMU + single vertical tracking wheel
 - IMU + single horizontal tracking wheel
 - IMU + vertical + horizontal tracking wheels
+
+Any of them can add Monte Carlo localization on distance sensors on top
+([`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)).
 
 ## Getting Started
 
@@ -142,12 +156,14 @@ SapphireLib/
 ├── examples/              # Usage examples, compile-checked with `make check-examples`
 ├── tools/telemetry/       # slt_read.py, the reference reader for SD telemetry logs
 ├── tools/analyzer/        # Browser telemetry analyzer: diagnostics, match replay, offline tuning
-├── docs/                  # Roadmap, setup guide, macros guide, telemetry format
+├── tools/sim/             # Browser simulator: odometry + MCL + motions, with visualizer toggles
+├── docs/                  # Roadmap, setup guide, macros and localization guides, telemetry format
 └── .github/               # CI workflow, issue templates
 ```
 
 Library headers and sources mirror each other by module: `chassis/`, `control/`, `odom/`, `motion/`,
-`sensors/`, `input/`, `mechanism/`, `telemetry/`, `tuning/`, `gui/`, `diag/`, `util/`.
+`localization/`, `sensors/`, `input/`, `mechanism/`, `telemetry/`, `tuning/`, `gui/`, `diag/`,
+`util/`.
 
 ## License
 
