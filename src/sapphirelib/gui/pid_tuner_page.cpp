@@ -32,23 +32,14 @@ constexpr std::int32_t kSelectorButtonW = 88;
 constexpr std::int32_t kSelectorButtonH = 32;
 constexpr std::int32_t kSelectorRowHeight = 36;
 
-// Run Test/Auto-Tune row, and the optional toggle under it. The toggle ends
-// at y=162, inside the page's 179px (see kReadoutX's comment).
+// the Run Test/Auto-Tune row, and the optional toggle under it, which ends at y=162
 constexpr std::int32_t kActionRowY = kRowY0 + 3 * kRowHeight + 6;
 constexpr std::int32_t kToggleY = kActionRowY + 36;
 constexpr std::int32_t kToggleW = 216;
 
-// Status/results column, to the right of the controller selector buttons
-// (which end at kSelectorColumnX + kSelectorButtonW = 328).
-//
-// This page has 480x179 to work with: LVGL's surface on the V5 is 480x240
-// (LV_HOR_RES_MAX/LV_VER_RES_MAX in lv_conf.h — not the panel's full 272),
-// less Gui's 18px header and its 43px tab bar. That's tight enough that a
-// results readout stacked *under* the controls doesn't fit on screen at
-// all, and the brain's touchscreen makes scrolling to reach it painful
-// enough not to rely on — hence a column beside them, and a narrow
-// one-value-per-line format instead of a single wide line that would run
-// off the right edge.
+// status and results column, right of the selector buttons (which end at x=328). The page
+// only gets 480x179 (a 480x240 surface minus the header and tab bar), so results go in a
+// narrow column, one value per line, instead of under the controls or off the right edge
 constexpr std::int32_t kReadoutX = 336;
 constexpr std::int32_t kReadoutW = 140;
 constexpr std::int32_t kStatusY = 4;
@@ -93,15 +84,10 @@ const char* PidTunerPage::title() const { return "PID"; }
 
 void PidTunerPage::build(lv_obj_t* container) {
     container_ = container;
-    // The tab content area doesn't need to scroll for anything this page
-    // draws — everything fits in fixed positions — and a stray scroll
-    // gesture is easy to trigger by accident on a touchscreen this small,
-    // so disable it outright rather than let it fight with taps.
+    // nothing here needs scrolling, and a stray scroll gesture on a small touchscreen fights with
+    // taps
     lv_obj_remove_flag(container_, LV_OBJ_FLAG_SCROLLABLE);
-    // Zero padding so the positions below are exactly the 480x179 the page
-    // actually gets (see kReadoutX's comment). The readout column runs to
-    // x=476, which the theme's default content padding would otherwise push
-    // off the right edge.
+    // zero padding so positions are exactly the 480x179 the page gets. The readout runs to x=476
     lv_obj_set_style_pad_all(container_, 0, 0);
 
     for (std::size_t i = 0; i < entries_.size(); ++i) addSelectorButton(*entries_[i], i);
@@ -134,9 +120,7 @@ void PidTunerPage::build(lv_obj_t* container) {
 
     resultLabel_ = lv_label_create(container_);
     lv_obj_set_pos(resultLabel_, kReadoutX, kResultY);
-    // Fixed width + wrap rather than the default grow-to-fit: the failure
-    // message is a full sentence, and letting it size itself would run it
-    // off the screen the same way the old single-line results text did.
+    // fixed width with wrapping, since the failure message is a full sentence
     lv_obj_set_width(resultLabel_, kReadoutW);
     lv_label_set_long_mode(resultLabel_, LV_LABEL_LONG_WRAP);
     lv_label_set_text(resultLabel_, "");
@@ -218,11 +202,8 @@ void PidTunerPage::select(std::size_t index) {
 }
 
 void PidTunerPage::setDisplayedGains(PIDGains gains) {
-    // Atomics only — never touch an LVGL widget here. This is called from
-    // the auto-tune background task as well as from the LVGL-owned click
-    // handlers, and LVGL isn't thread-safe; update() (running on LVGL's own
-    // timer) is the only place that's allowed to turn these into label
-    // text.
+    // atomics only, never a widget: this is called from the Auto-Tune task too, and LVGL isn't
+    // thread-safe. update() turns these into label text
     displayedP_.store(gains.kP);
     displayedI_.store(gains.kI);
     displayedD_.store(gains.kD);
@@ -270,10 +251,8 @@ void PidTunerPage::refreshReadout() {
 
     const int failed = failedAxis_.load();
     if (failed >= 0 && failed < static_cast<int>(axes_.size())) {
-        // Every failure mode the fit has — sensor sign backwards, travel
-        // limit too short to reach speed, voltage too low to break friction
-        // — shows up as some mix of a poor R² and too few moving samples, so
-        // show both and name the usual suspects.
+        // every way the fit fails (sensor backwards, not enough travel, voltage below friction)
+        // shows up as a poor R^2 and few moving samples, so show both and name the usual suspects
         const Axis& axis = *axes_[failed];
         std::snprintf(buf, sizeof(buf), "%s: no fit\nR2 %.2f, %d pts\nCheck sensor sign, %s, volts",
                       axis.name.c_str(), axis.result.fit.rSquared, axis.result.fit.samplesUsed,
@@ -299,11 +278,8 @@ void PidTunerPage::refreshReadout() {
         return;
     }
 
-    // One value per line — see kReadoutX's comment for the width this has
-    // to live within. The model is worth showing next to the gains it
-    // produced: it's what to copy into source so a reboot doesn't need a
-    // re-measure, and an implausible kS or lag is the quickest way to spot
-    // a bad run.
+    // one value per line to fit the column. The model is worth showing: it's what to copy into
+    // source, and an odd kS or lag is the quickest sign of a bad run
     const MotorFeedforward& model = axis->result.fit.model.motion;
     char kA[24];
     if (axis->mechanism) {
@@ -311,8 +287,7 @@ void PidTunerPage::refreshReadout() {
     } else {
         std::snprintf(kA, sizeof(kA), "kA %.4f", model.kA);
     }
-    // "fric" is GainDesign::staticErrorBound: how far short static friction
-    // can leave this loop. Worth checking against the exit threshold.
+    // "fric" is GainDesign::staticErrorBound, how far short friction can leave the loop
     std::snprintf(buf, sizeof(buf),
                   "%s model:\nkS %.2f kV %.4f\n%s\nR2 %.2f lag %.0fms\nsettle %.2fs\nPM %.0f%s\n"
                   "fric +-%.2g\n(not saved)",
@@ -331,11 +306,8 @@ void PidTunerPage::runSelectedTest() {
 
     testRunning_.store(true);
     autoTuneActive_.store(false);
-    // Runs on a background task, not this LVGL-owned callback, so the
-    // (possibly multi-second) test motion doesn't freeze the whole screen.
-    // The task only ever touches testRunning_ (an atomic flag) — never an
-    // LVGL widget directly, since LVGL isn't thread-safe; update() reads
-    // the flag and reflects it in statusLabel_ from the correct context.
+    // runs on a background task so the test doesn't freeze the screen. It only touches
+    // testRunning_, never a widget
     pros::Task([this, entry] {
         entry->runTest();
         testRunning_.store(false);
@@ -349,8 +321,7 @@ std::string PidTunerPage::selectedGroup() const {
 }
 
 bool PidTunerPage::measureAxis(Axis& axis, std::vector<std::function<void()>>& finishes) {
-    // Stop button, or the robot disabled under it (VEXos ignores the motors
-    // then, so whatever the run records is no measurement at all).
+    // Stop, or the robot disabled (VEXos ignores the motors then, so the run measures nothing)
     const auto stopRequested = [this] {
         return stopRequested_.load() || pros::competition::is_disabled();
     };
@@ -358,13 +329,10 @@ bool PidTunerPage::measureAxis(Axis& axis, std::vector<std::function<void()>>& f
         return [own = std::move(own), stopRequested] { return stopRequested() || (own && own()); };
     };
 
-    // Built fresh on this task, not at registration time — lets the factory
-    // capture "here" as this run's reference frame.
+    // built fresh on this task, so the factory can capture "here"
     tuning::CharacterizationData data;
-    // The finish hook hands a mechanism's motors back to its own loop. That
-    // loop must not resume until the new gains are set: setGains() from this
-    // task racing an update() on the loop's task could tear a gain. So it's
-    // deferred to runAutoTune(), after the design.
+    // the finish hook gives a mechanism's motors back to its loop, which mustn't run while
+    // setGains() writes from this task. So it waits for runAutoTune(), after the design
     const auto deferFinish = [&finishes](tuning::CharacterizationConfig& config) {
         if (config.finish) finishes.push_back(std::move(config.finish));
         config.finish = nullptr;
@@ -423,11 +391,8 @@ void PidTunerPage::runAutoTune() {
     stopped_.store(false);
     failedAxis_.store(-1);
 
-    // Axis/Entry results are plain fields, not atomics: this task is their
-    // only writer and only while testRunning_ is true, and update() only
-    // reads them once it's false again. Entries can't be added or selected
-    // mid-run either (both check testRunning_), so selectedIndex_ and the
-    // vectors themselves are stable for the task's lifetime.
+    // results are plain fields: this task is their only writer, only while testRunning_ is true,
+    // and update() only reads them after. Nothing can be added or selected mid-run
     pros::Task([this, group] {
         bool allMeasured = true;
         std::vector<std::function<void()>> finishes;
@@ -436,11 +401,9 @@ void PidTunerPage::runAutoTune() {
             if (axis.group != group) continue;
             measuringAxis_.store(static_cast<int>(i));
             if (!measureAxis(axis, finishes)) {
-                // Stop here rather than carry on: the robot is probably set
-                // up wrong (a reversed sensor, not enough room), and whatever
-                // is wrong likely affects the next axis too — or someone
-                // tapped Stop. Nothing has been applied yet, so every
-                // controller keeps its old gains.
+                // stop here: the robot is probably set up wrong, which likely affects the next axis
+                // too (or someone tapped Stop). Nothing is applied, so every controller keeps its
+                // old gains
                 if (!stopped_.load()) failedAxis_.store(static_cast<int>(i));
                 allMeasured = false;
                 break;
@@ -449,17 +412,15 @@ void PidTunerPage::runAutoTune() {
         measuringAxis_.store(-1);
 
         if (allMeasured) {
-            // Only this group's controllers: the others keep whatever an
-            // earlier run designed for them.
+            // only this group's controllers; the others keep what an earlier run designed
             for (auto& entry : entries_) {
                 const Axis* axis = findAxis(entry->axis);
                 if (axis == nullptr || axis->group != group) continue;
                 entry->designed = false;
                 if (!axis->measured) continue;
 
-                // A loop ticking slower than the characterization sampled
-                // holds each command longer: on average half the extra
-                // period of latency the measurement didn't see.
+                // a loop slower than the characterization sampled holds each command longer: on
+                // average half the extra period of delay
                 const double slowerLoopS =
                     std::fmax(0.0, entry->pid->config().nominalDtS - axis->samplePeriodS);
                 entry->design =
@@ -471,8 +432,7 @@ void PidTunerPage::runAutoTune() {
             }
             if (!entries_.empty()) setDisplayedGains(entries_[selectedIndex_]->pid->gains());
         }
-        // Stopped, failed or finished: every run that started gets its
-        // finish, now that any new gains are in place.
+        // stopped, failed, or finished: now the gains are set, every run that started finishes
         for (const auto& finish : finishes) finish();
 
         readoutDirty_.store(true);
@@ -483,10 +443,7 @@ void PidTunerPage::runAutoTune() {
 }
 
 void PidTunerPage::update() {
-    // "Ready" is what this reads for all but a few seconds of a session, so
-    // going through setLabelText() rather than lv_label_set_text() is the
-    // difference between invalidating this label once per state change and
-    // once per tick.
+    // setLabelText() so these only redraw when they change, not every tick
     const bool autoTuning = testRunning_.load() && autoTuneActive_.load();
     setLabelText(autoTuneLabel_, autoTuning ? "Stop" : "Auto-Tune");
 
@@ -510,10 +467,7 @@ void PidTunerPage::update() {
 
     if (toggleLabel_) setLabelText(toggleButtonLabel_, toggleLabel_().c_str());
 
-    // The only place gain labels actually get redrawn — see
-    // setDisplayedGains()'s comment for why select()/adjustGain()/the
-    // auto-tune task only ever update the underlying atomics, never a
-    // label directly.
+    // the only place gain labels get redrawn, see setDisplayedGains()
     refreshGainLabels();
 }
 
@@ -551,8 +505,7 @@ void PidTunerPage::runTestClicked(lv_event_t* e) {
 }
 void PidTunerPage::autoTuneClicked(lv_event_t* e) {
     auto* page = static_cast<PidTunerPage*>(lv_event_get_user_data(e));
-    // The same button is Stop while Auto-Tune runs. The run notices within a
-    // sample period (see measureAxis()); a Run Test can't be stopped this way.
+    // the same button is Stop during Auto-Tune. The run notices within a sample period
     if (page->testRunning_.load()) {
         if (page->autoTuneActive_.load()) page->stopRequested_.store(true);
         return;

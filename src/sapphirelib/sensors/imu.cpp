@@ -12,9 +12,8 @@ namespace sapphirelib::sensors {
 Imu::Imu(std::uint8_t port, double headingScale)
     : imu_(port), headingScale_(headingScale),
       lastRawHeadingDeg_(std::numeric_limits<double>::quiet_NaN()) {
-    // reset(true) returns PROS_ERR straight away when nothing is on the
-    // port, and after a timeout when calibration never finishes. Say so,
-    // rather than letting initialize() go on to log "IMU calibrated".
+    // reset(true) returns PROS_ERR right away with nothing on the port, and after a timeout when
+    // calibration never finishes
     calibrated_ = imu_.reset(true) != PROS_ERR;
     if (!calibrated_) {
         SAPPHIRELIB_LOG_ERROR("imu", "port %u: calibration failed", static_cast<unsigned>(port));
@@ -26,32 +25,19 @@ bool Imu::calibrated() const { return calibrated_; }
 
 void Imu::updateCumulative() {
     const double rawHeadingDeg = imu_.get_heading();
-    // PROS_ERR_F (infinity) while the IMU is unplugged or recalibrating
-    // after a brownout. Folding one of those into the sum would make it NaN
-    // for the rest of the program, so a bad read just skips this update.
-    //
-    // It also forgets the baseline. A sensor that dropped out has usually
-    // lost power, and it comes back reading near 0 wherever the chassis now
-    // points — measuring from the pre-dropout reading would count that
-    // restart as a real turn and leave heading wrong by the old reading for
-    // the rest of the match. Re-baselining on the next good read (below)
-    // loses only whatever the chassis actually turned during the gap.
+    // infinity while unplugged or recalibrating after a brownout, which would make the sum NaN
+    // forever, so skip it. Also forget the baseline: a sensor that dropped out usually lost power
+    // and comes back near 0, which isn't a real turn
     if (!std::isfinite(rawHeadingDeg)) {
         lastRawHeadingDeg_.store(std::numeric_limits<double>::quiet_NaN());
         return;
     }
 
-    // Called concurrently from odometry, the drive loop, HomePage and
-    // tuning runs. exchange() pairs every reading with exactly the one
-    // stored before it, so the deltas still add up to (latest - first)
-    // however the calls interleave — the unsynchronized read-add-write this
-    // replaced could count one delta twice and leave a permanent offset.
-    // And there's no lock for a deleted competition task to orphan.
+    // called from several tasks at once. exchange() pairs every reading with the one before it, so
+    // the deltas always add up to latest - first however the calls interleave, with no lock
     const double previousDeg = lastRawHeadingDeg_.exchange(rawHeadingDeg);
 
-    // No baseline (the sensor didn't answer at construction, or just came
-    // back from a dropout): this reading becomes it, rather than a jump of up
-    // to 180 degrees.
+    // no baseline yet (no answer at construction, or back from a dropout): this reading becomes it
     if (!std::isfinite(previousDeg)) return;
 
     rawCumulativeDeg_.fetch_add(rawHeadingDeltaDeg(previousDeg, rawHeadingDeg));
@@ -67,10 +53,7 @@ double Imu::getHeadingDeg() {
 }
 
 void Imu::setHeadingDeg(double headingDeg) {
-    // Measured against a fresh reading, so it's "here, now". A turn landing
-    // between this read and the store is lost from the new frame, but that's
-    // one control tick's rotation at most, and only at the moment of a
-    // re-frame.
+    // against a fresh reading, so it means "here, now"
     headingOffsetDeg_.store(headingOffsetFor(headingDeg, getCumulativeHeadingDeg()));
 }
 

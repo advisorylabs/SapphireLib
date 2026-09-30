@@ -1,39 +1,39 @@
-/**
- * \file sapphirelib/util/clock.hpp
- *
- * The library's one seam onto the system clock. Declared with no PROS
- * include, so pure modules that need to wait or timestamp (util/wait.hpp,
- * Sequence::runBlocking(), telemetry channels) still build on a desktop
- * compiler. On the robot these are defined in src/sapphirelib/util/clock.cpp
- * on top of pros::millis(), pros::micros(), and pros::delay(); a host test
- * defines them itself, as a fake clock it can step deterministically (its
- * delayMs() just advances the fake time).
- *
- * Per-tick code should not call millis() over and over: take the tick's one
- * "now" from input::Controller::now() (or read it once at the top of your own
- * loop) and hand that same value to everything that tick — see
- * util/timing.hpp for why.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
 
+// the library's only access to the system clock. There's no PROS include here, so pure modules
+// can still be built and tested on a computer: the robot defines these in util/clock.cpp, and
+// host tests define them as a fake clock
+
 namespace sapphirelib {
 
-/// Milliseconds since the program started. Wraps after ~49.7 days, so compare
-/// two readings with elapsedMs() (util/timing.hpp), never with `<`.
+/**
+ * @brief Get the time since the program started
+ *
+ * @note wraps after ~49.7 days, so compare two readings with elapsedMs(), never with <
+ *
+ * @return std::uint32_t time, in milliseconds
+ */
 std::uint32_t millis();
 
-/// Microseconds since the program started. 64-bit, so it never wraps in
-/// practice — which is why telemetry timestamps use it.
+/**
+ * @brief Get the time since the program started, in microseconds
+ *
+ * 64 bits, so it never wraps in practice. Telemetry timestamps use this
+ *
+ * @return std::uint64_t time, in microseconds
+ */
 std::uint64_t micros();
 
-/// Blocks the calling task for `ms` milliseconds. For autonomous and tasks of
-/// your own — never from a per-tick driver-control function, which it would
-/// stall.
+/**
+ * @brief Block the calling task
+ *
+ * @note for autonomous and your own tasks. Never call it from a per-tick driver control
+ * function, which it would stall
+ *
+ * @param ms how long to wait, in milliseconds
+ */
 void delayMs(std::uint32_t ms);
 
 } // namespace sapphirelib

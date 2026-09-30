@@ -1,116 +1,108 @@
-/**
- * \file sapphirelib/tuning/gain_design.hpp
- *
- * Pole placement: turns a measured axis model (MotorFeedforward) and a
- * description of how a motion should behave (ResponseSpec) into PID gains.
- * Pure math, no PROS dependency — see tests/tuning/gain_design_test.cpp.
- *
- * The idea: with feedforward cancelling friction, one axis under PD control
- * obeys
- *
- *     kA·x'' + (kV + kD)·x' + kP·x = kP·target
- *
- * which is a spring and damper. Picking how fast it should respond (natural
- * frequency ω) and how much it may overshoot (damping ratio ζ) fixes both
- * gains outright:
- *
- *     kP = kA·ω²          kD = 2·ζ·ω·kA − kV
- *
- * The one thing that formula doesn't know about is delay. Every V5 control
- * loop acts on sensor readings a few tens of milliseconds old, and a design
- * that ignores that and asks for a very fast response oscillates on the
- * robot however clean it looks on paper. designPositionGains() checks the
- * phase margin that delay leaves and backs ω off until it's safe.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include "sapphirelib/control/feedforward.hpp"
 #include "sapphirelib/control/pid.hpp"
 
+// pole placement: with feedforward cancelling friction, one axis under PD control is a spring and
+// damper, kA * x'' + (kV + kD) * x' + kP * x = kP * target. Picking how fast it responds (natural
+// frequency w) and how much it may overshoot (damping ratio z) sets both gains:
+// kP = kA * w^2, kD = 2 * z * w * kA - kV. The formula doesn't know about delay, so
+// designPositionGains() checks the phase margin the delay leaves and slows the design down until
+// it's safe
+
 namespace sapphirelib::tuning {
 
-/// How one closed-loop motion should behave. Different uses of the same axis
-/// want different specs — an autonomous turn wants to snap onto its heading,
-/// driver heading hold wants to feel soft — and they can all be designed from
-/// one measured model.
+/**
+ * @brief How one closed loop motion should behave
+ *
+ * Different uses of one axis can want different specs (a snappy autonomous turn, soft driver
+ * heading hold), all designed from the same model
+ */
 struct ResponseSpec {
-    /// Time to settle within 2% of a step's size, in seconds.
+    /** time to settle within 2% of the step, in seconds. 0.6 by default */
     double settleTimeS = 0.6;
 
-    /// 1.0 is the fastest response that never overshoots. Below 1 trades
-    /// some overshoot for speed; above 1 approaches even more gently.
-    /// Clamped to [0.1, 5].
+    /**
+     * damping ratio. 1 (the default) is the fastest response with no overshoot; below 1 trades
+     * overshoot for speed. Clamped to [0.1, 5]
+     */
     double dampingRatio = 1.0;
 
-    /// Least acceptable phase margin once measured delay is accounted for.
-    /// 45-60° is the usual range; lower responds faster but rings more and
-    /// tolerates less change in the robot (a heavier game piece, a low
-    /// battery) before it oscillates.
+    /**
+     * lowest acceptable phase margin with the measured delay, in degrees. 45-60 is usual; lower
+     * is faster but rings more and handles less change in the robot. 50 by default
+     */
     double minPhaseMarginDeg = 50.0;
 };
 
-/// Result of designPositionGains().
+/**
+ * @brief Result of designPositionGains()
+ */
 struct GainDesign {
-    /// False only for an invalid model or a nonsensical spec; a design that
-    /// had to be slowed for delay is still ok (see limitedByDelay).
+    /** false only for an invalid model or spec. A design slowed for delay is still ok */
     bool ok = false;
 
-    /// kP and kD; kI is always 0 — feedforward's kS term already removes the
-    /// friction that usually leaves the steady-state error an integrator
-    /// exists to clean up.
+    /** kP and kD. kI is always 0, since feedforward already handles friction */
     PIDGains gains;
 
-    /// The natural frequency actually used, in rad/s.
+    /** the natural frequency used, in rad/s */
     double naturalFrequency = 0.0;
 
-    /// What settleTimeS works out to with that frequency — longer than
-    /// requested if limitedByDelay.
+    /** the settle time the design achieves, in seconds. Longer than asked if limitedByDelay */
     double settleTimeS = 0.0;
 
-    /// Phase margin of the final design with the given delay, in degrees.
+    /** phase margin with the given delay, in degrees */
     double phaseMarginDeg = 0.0;
 
-    /// True if the requested settle time wasn't achievable within
-    /// minPhaseMarginDeg, so the response was slowed until it was.
+    /** whether the design had to be slowed down to meet minPhaseMarginDeg */
     bool limitedByDelay = false;
 
-    /// kS / kP: the largest error static friction can hold this loop at. Inside
-    /// it, kP·error is less than the kS it takes to move at all, so a PD loop
-    /// can come to rest anywhere within this band of its target. Nothing
-    /// applies kS as feedforward in SapphireLib's motions or PositionMechanism
-    /// today, so compare this against the exit threshold (or mechanism
-    /// tolerance) the controller is used with: a band wider than the threshold
-    /// is a motion that may never settle. Infinity when kP is 0.
+    /**
+     * kS / kP: the largest error static friction can hold the loop at. A band wider than the exit
+     * threshold (or mechanism tolerance) is a motion that may never settle. Infinity when kP is 0
+     */
     double staticErrorBound = 0.0;
 };
 
-/// 2% settling time of a unit-natural-frequency spring-damper with damping
-/// ratio `dampingRatio` (clamped to [0.1, 5]). Divide by a settle time to get
-/// the natural frequency that achieves it. For example, critical damping
-/// (ζ = 1) settles in about 5.83/ω.
+/**
+ * @brief Get the 2% settle time of a spring and damper with a natural frequency of 1
+ *
+ * Divide by a settle time to get the natural frequency that achieves it. Critical damping settles
+ * in about 5.83 / w
+ *
+ * @param dampingRatio the damping ratio, clamped to [0.1, 5]
+ * @return double settle time, in seconds, at w = 1
+ */
 double normalizedSettleTime(double dampingRatio);
 
-/// Phase margin, in degrees, of `gains` (kP, kD; kI ignored) controlling an
-/// axis with `model` through `delayS` seconds of pure delay. Returns 180 if
-/// the loop gain never crosses 1 (kP = 0), and can go negative — an
-/// unstable design.
+/**
+ * @brief Get the phase margin of PD gains on an axis with delay
+ *
+ * @param model the axis model
+ * @param gains kP and kD. kI is ignored
+ * @param delayS delay, in seconds
+ * @return double phase margin, in degrees. 180 when kP is 0; negative is unstable
+ */
 double phaseMarginDeg(const MotorFeedforward& model, PIDGains gains, double delayS);
 
-/// Pole-placement PD gains for position control of one axis — see the file
-/// comment for the math. `delayS` is the axis's measured response delay
-/// (tuning::estimateResponseDelayS()); 0 designs as if there were none.
-///
-/// If kV alone already provides more damping than the spec asks for, kD
-/// comes out negative; it is clamped to 0 instead, which leaves the response
-/// somewhat more damped than requested rather than feeding speed back as
-/// positive feedback.
-///
-/// A mechanism is designed the same way from its MechanismModel's `motion`:
-/// with gravity cancelled by feedforward (MechanismModel::gravityFeedforward())
-/// what's left is the same spring and damper.
+/**
+ * @brief Design PD gains for position control of one axis
+ *
+ * If kV alone already damps more than asked, kD would be negative; it's clamped to 0 instead. A
+ * mechanism is designed from its MechanismModel's motion, with gravity cancelled by feedforward
+ *
+ * @param model the axis model
+ * @param spec how the motion should behave
+ * @param delayS the axis's response delay, in seconds. 0 by default
+ * @return GainDesign the gains and how the design turned out
+ *
+ * @b Example
+ * @code {.cpp}
+ * auto design = sapphirelib::tuning::designPositionGains(
+ *     result.fit.model, {.settleTimeS = 0.5, .dampingRatio = 1.0}, result.delayS);
+ * if (design.ok) drivetrain().turnPID().setGains(design.gains);
+ * @endcode
+ */
 GainDesign designPositionGains(const MotorFeedforward& model, ResponseSpec spec,
                                double delayS = 0.0);
 

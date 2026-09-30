@@ -35,9 +35,12 @@ going.
   (`PID::Config{.gains = {.kP = 1.2}, .outputLimit = 12.0}`).
 - Prefer explicit, documented public APIs over clever templates — this library needs to be readable by
   teammates joining mid-season
-- Doc-comment (Doxygen-style `/** ... */` or `///`) all public classes and functions, and say *why*,
-  not just what: units, what happens at the edges (an unplugged sensor, a timeout of 0), and which task
-  may call it. Every file starts with a `\file` comment block ending `Team 96671H — Hitmen`.
+- Comments follow LemLib's style. Every public class and function gets a `/** */` block: a `@brief`
+  line (capitalized, no period), `@param name description` and `@return` lines in lowercase, `@note`
+  for what bites (which task may call it, blocking, lifetimes), and a `@b Example` with
+  `@code {.cpp}` on the main API. Struct fields get a one-line `/** ... */`. Say the units and what
+  happens at the edges (an unplugged sensor, a timeout of 0). Inline comments are short and lowercase
+  (`// reset the PID after a gap`). No file banners, no em dashes, plain ASCII.
 - **Pure vs PROS.** Math and decision logic goes in pure modules that include no `pros/` header, even
   indirectly, so they build and test on a desktop compiler. Pure code gets time as an argument
   (`nowMs`) or through `sapphirelib/util/clock.hpp`, which tests replace with a fake clock. PROS-facing

@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/telemetry/channel.hpp
- *
- * A telemetry channel — one named stream of rows: one PID, one pose source,
- * one mechanism — and PidProbe, which feeds a PID's every step into one. Pure:
- * no PROS (timestamps come from sapphirelib::micros()), so it's unit-tested on
- * a desktop compiler with a fake clock (tests/telemetry/channel_test.cpp).
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -22,140 +11,171 @@
 
 namespace sapphirelib::telemetry {
 
-/// Per-channel settings, for designated initializers (`{.decimals = 3}`). The
-/// defaults suit a 100Hz source.
+/**
+ * @brief Settings for one telemetry channel. The defaults suit a 100Hz source
+ */
 struct ChannelOptions {
-    /// Ring size in rows, rounded up to a power of two; 64 bytes each. It only
-    /// has to cover the longest stretch the writer might go without draining:
-    /// the default 256 is 2.5s of a 100Hz source, against a writer that drains
-    /// every 20ms and an SD write that can stall for a couple of hundred.
+    /**
+     * ring size in rows, rounded up to a power of two. 64 bytes each. 256 by default, 2.5 seconds
+     * of a 100Hz source, which covers a slow SD write
+     */
     std::size_t capacity = 256;
 
-    /// Digits after the decimal point in this channel's rows, 0-6, trailing
-    /// zeros trimmed. Fixed-point rather than significant digits, so every
-    /// value in a column resolves the same. Raise it for a channel whose
-    /// values routinely sit below 0.001.
+    /** digits after the decimal point, 0-6, trailing zeros trimmed. 4 by default */
     int decimals = 4;
 };
 
-/// One named stream of telemetry rows. Made and owned by telemetry::Logger for
-/// the life of the program; user code holds the reference Logger returns and
-/// calls record() on it.
-///
-/// Any task may record into any channel, and recording never waits: a row that
-/// can't be taken right now — the ring is full, or another task is mid-record
-/// on this same channel — is dropped and counted, and the counts land in the
-/// file's `D` rows. A control loop must never stall on logging, and a counted
-/// gap is something a tuning app can see and step around.
-///
-/// One rule keeps that safe: record from tasks above the Logger's writer task
-/// (priority 2) — every normal task is. The writer reclaims a channel whose
-/// recorder seems to have died mid-record (see ProducerGate); a recorder at
-/// priority 1-2 starved for 60ms+ could be mistaken for a dead one, which
-/// costs at worst one torn row, never a crash.
+/**
+ * @brief One named stream of telemetry rows, like one PID, one pose, or one mechanism
+ *
+ * Made and owned by telemetry::Logger; keep the reference it returns and call record() on it.
+ * Recording never waits: a row that can't be taken right now (the ring is full, or another task is
+ * recording on the same channel) is dropped and counted in the file
+ *
+ * @note record from tasks above the logger's writer (priority 2), which every normal task is
+ *
+ * @b Example
+ * @code {.cpp}
+ * sapphirelib::telemetry::Channel& intakeLog = logger.channel("intake", {"volts", "rpm"});
+ * // anywhere, any task
+ * intakeLog.record({intakeVolts, intake.get_actual_velocity()});
+ * @endcode
+ */
 class Channel {
 public:
-    /// `fileEpoch`, if given, is the owning Logger's count of files opened —
-    /// see fileEpoch().
+    /**
+     * @brief Construct a new Channel. Logger does this
+     *
+     * @param schema the channel's name, kind, and columns
+     * @param capacity ring size in rows
+     * @param fileEpoch the owning Logger's count of files opened, see fileEpoch()
+     */
     Channel(ChannelSchema schema, std::size_t capacity,
             const std::atomic<std::uint32_t>* fileEpoch = nullptr);
 
     Channel(const Channel&) = delete;
     Channel& operator=(const Channel&) = delete;
 
+    /**
+     * @brief Get the channel's name, kind, and columns
+     */
     const ChannelSchema& schema() const;
 
-    /// Logs one `S` row, values in column order, timestamped now. Doubles in,
-    /// because that's what the rest of SapphireLib computes with (a braced list
-    /// of doubles would be a narrowing error against float); stored as float.
-    /// Missing values are logged as NaN, extras ignored. False if dropped — or
-    /// if this is an events channel, which has no columns to fill.
+    /**
+     * @brief Log one row of values, timestamped now
+     *
+     * Values are in column order and stored as floats. Missing values are logged as NaN, extras
+     * are ignored
+     *
+     * @param values the values
+     * @return true the row was logged
+     * @return false it was dropped, or this is an events channel
+     */
     bool record(std::initializer_list<double> values);
     bool record(const double* values, std::size_t count);
 
-    /// Logs an `E` row. `tag` is cut to kMaxEventTagChars (15) characters and
-    /// `message` to kMaxEventMessageChars (191); a message longer than one
-    /// Record's payload travels as several Records, committed together. The
-    /// writer replaces anything unprintable, newlines included, with spaces.
-    /// For printf-style messages see Logger::event().
+    /**
+     * @brief Log an event. For printf style messages, see Logger::event()
+     *
+     * @param tag the event tag, cut to 15 characters
+     * @param message the message, cut to 191 characters. Unprintable characters become spaces
+     * @return true the event was logged
+     */
     bool recordEvent(const char* tag, const char* message);
 
-    /// Library use (PidProbe, Logger's own tasks): commits a filled-in Record,
-    /// overwriting its tUs — a timestamp is only ever taken here, in one place,
-    /// from one clock.
+    /**
+     * @brief Commit a filled-in Record, stamping its time. For library use
+     */
     bool commit(Record record);
 
-    /// How many files the owning Logger has opened so far (0 before the first,
-    /// and always 0 for a channel made without a Logger). PidProbe watches it
-    /// to repeat a PID's config and gains at the top of every new file.
+    /**
+     * @brief Get how many files the owning Logger has opened. 0 without a Logger
+     *
+     * PidProbe watches it to repeat a PID's config and gains at the top of every file
+     */
     std::uint32_t fileEpoch() const;
 
-    // --- Writer task only --------------------------------------------------
+    // writer task only
 
-    /// The oldest unwritten Record, or nullptr. Valid until pop().
+    /**
+     * @brief Get the oldest unwritten Record, or nullptr. Valid until pop()
+     */
     const Record* front();
 
-    /// The Record `offset` places after front(), or nullptr — for gathering an
-    /// event's continuations. Valid until pop().
+    /**
+     * @brief Get the Record `offset` places after front(), or nullptr. Valid until pop()
+     */
     const Record* peek(std::size_t offset);
 
-    /// Discards the oldest `count` Records.
+    /**
+     * @brief Discard the oldest `count` Records
+     */
     void pop(std::size_t count = 1);
 
-    /// This channel's gate, for the writer's breakIfStuck() pass.
+    /**
+     * @brief Get this channel's gate, for the writer's breakIfStuck() pass
+     */
     ProducerGate& gate();
 
-    /// Rows lost to a full ring / to another task recording on this channel at
-    /// the same instant. Cumulative; safe from any task.
+    /**
+     * @brief Get the rows lost to a full ring. Safe from any task
+     */
     std::uint32_t droppedFull() const;
+
+    /**
+     * @brief Get the rows lost to another task recording at the same moment. Safe from any task
+     */
     std::uint32_t droppedContended() const;
 
-    /// See RecordRing::resyncs().
+    /**
+     * @brief See RecordRing::resyncs()
+     */
     std::uint32_t resyncs() const;
 
 private:
-    /// Commits `count` Records as one row (all or none), all stamped with the
-    /// same time.
+    // commit count Records as one row (all or none), all with the same time
     bool commitAll(Record* records, std::size_t count);
 
     ChannelSchema schema_;
-    /// Values an `S` row carries: the column count, or kPidValues for a pid
-    /// channel (whose last column, flags, rides in Record::flags).
+    // values an S row carries: the column count, or kPidValues for a pid channel (flags rides in
+    // Record::flags)
     std::size_t valueCount_;
     RecordRing ring_;
     ProducerGate gate_;
     const std::atomic<std::uint32_t>* fileEpoch_;
 };
 
-/// Feeds every step of one PID into a pid-kind Channel. Attach it with
-/// PID::setObserver(), or let Logger::pid() do both.
-///
-/// Rows, all committed from the task running the PID:
-///   - `C` and `G` ahead of the PID's first `S` in each file, so every file
-///     stands on its own;
-///   - `G` again on the first step after the gains change. PidTunerPage's +/-
-///     buttons and Auto-Tune call setGains() from their own tasks; noticing the
-///     change here, on the loop's own task, means neither ever touches the
-///     channel — and neither needed to change;
-///   - `S` for every update(), `R` for every reset() that cleared state.
+/**
+ * @brief Feeds every step of one PID into a pid channel
+ *
+ * Attach it with PID::setObserver(), or let Logger::pid() do both. It logs the PID's config and
+ * gains at the top of each file, the gains again whenever they change, a row for every update(),
+ * and one for every reset() that cleared state. All from the task running the PID
+ */
 class PidProbe final : public PidObserver {
 public:
+    /**
+     * @brief Construct a new PidProbe
+     *
+     * @param channel the pid channel to log into
+     * @param pid the PID it's for
+     */
     PidProbe(Channel& channel, const PID& pid);
 
     void onPidUpdate(const PID& pid, const PidStep& step) override;
     void onPidReset(const PID& pid) override;
 
-    /// Steps ignored because they came from a PID other than the one this probe
-    /// was made for — a copy of it, which shares its observer pointer.
+    /**
+     * @brief Get the steps ignored because they came from a copy of the PID, which shares its
+     * observer
+     */
     std::uint32_t foreignSteps() const;
 
 private:
     Channel& channel_;
     const PID* pid_;
 
-    // Loop-task state. Only one task runs a given PID at a time (autonomous,
-    // then opcontrol, then a tuner test — never two at once), so these need
-    // no synchronization.
+    // loop task state. Only one task runs a PID at a time, so no synchronization is needed
     std::uint32_t announcedEpoch_ = 0;
     bool configLogged_ = false;
     bool gainsLogged_ = false;

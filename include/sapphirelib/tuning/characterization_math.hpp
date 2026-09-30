@@ -1,23 +1,3 @@
-/**
- * \file sapphirelib/tuning/characterization_math.hpp
- *
- * System identification for one axis — pure math, no PROS dependency, so it
- * can be unit-tested on a desktop compiler (see
- * tests/tuning/characterization_math_test.cpp). tuning::runCharacterization()
- * and tuning::runMechanismCharacterization() collect the samples on the
- * robot; characterizeAxis() turns a drive axis's samples into a
- * MotorFeedforward model (kS/kV/kA) plus the axis's response delay, and
- * characterizeMechanism() does the same for a lift or an arm, with a gravity
- * term (kG) on top. That's everything tuning::designPositionGains() needs.
- *
- * tools/analyzer/js/model.js is a line-for-line JavaScript port, so the
- * telemetry analyzer refits logged runs with exactly this math; the two are
- * held to the same numbers by a shared golden case (see
- * testGoldenCaseMatchesTheAnalyzer() in the test).
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
@@ -26,193 +6,253 @@
 #include "sapphirelib/control/feedforward.hpp"
 #include "sapphirelib/mechanism/position_control.hpp"
 
+// system identification: turn the samples a characterization run collects into a feedforward model
+// and response delay, which is everything designPositionGains() needs. tools/analyzer/js/model.js
+// is a line for line port, held to the same numbers by a shared golden test case
+
 namespace sapphirelib::tuning {
 
-/// One tick of a characterization run: the voltage commanded on that tick
-/// and the axis position read just before commanding it, at a millisecond
-/// timestamp relative to the run's own start.
-///
-/// `volts` is NaN for a tick the axis wasn't under voltage control — a
-/// mechanism held on its motors' brake (see
-/// MechanismCharacterizationConfig::hold). The fit skips every interval that
-/// touches one, since nobody knows what the brake applied.
+/**
+ * @brief One tick of a characterization run
+ */
 struct CharacterizationSample {
+    /** time since the run started, in milliseconds */
     std::uint32_t timeMs = 0;
+    /** voltage commanded this tick. NaN while held on the brake, which the fit skips */
     double volts = 0.0;
+    /** position read just before commanding it */
     double position = 0.0;
 };
 
-/// One continuous segment of driving. Velocity is differentiated within a
-/// run, never across the gap between two of them.
+/**
+ * @brief One continuous segment of driving. Velocity is never taken across two runs
+ */
 using CharacterizationRun = std::vector<CharacterizationSample>;
 
-/// Everything one axis's characterization collected. Ramps (voltage rising
-/// slowly) mostly pin down kS and kV; steps (voltage jumping from 0 and
-/// held) pin down kA and the response delay. Both are needed.
+/**
+ * @brief Everything one axis's characterization collected
+ */
 struct CharacterizationData {
+    /** runs where the voltage rose slowly. Mostly pin down kS and kV */
     std::vector<CharacterizationRun> ramps;
+    /** runs where the voltage jumped from 0. Pin down kA and the delay */
     std::vector<CharacterizationRun> steps;
 
-    /// True if the run was stopped before it finished (the tuner's Stop
-    /// button, the robot being disabled). What was collected is kept, but a
-    /// tuner shouldn't act on it.
+    /** whether the run was stopped early (Stop button, robot disabled). Don't act on it */
     bool aborted = false;
 };
 
-/// How gravity loads an axis. A drive axis has none; an elevator lift carries
-/// the same weight at every height (constant); an arm's load falls off as it
-/// swings toward vertical (cosine). This is only the load's shape — its size,
-/// kG, is what characterizeMechanism() fits.
+/**
+ * @brief How gravity loads an axis: none (a drive axis), constant (an elevator lift), or cosine
+ * (an arm)
+ */
 enum class GravityKind : std::uint8_t { none, constant, cosine };
 
+/**
+ * @brief The shape of gravity's load on an axis. Its size, kG, is what gets fitted
+ */
 struct GravityShape {
+    /** none, constant, or cosine */
     GravityKind kind = GravityKind::none;
 
-    /// Cosine only: the position reading at which the arm is horizontal, and
-    /// arm degrees per unit of position reading — the same meaning as
-    /// mechanism::GravityFeedforward's fields of the same names.
+    /** cosine only: the position reading where the arm is horizontal */
     double horizontalPosition = 0.0;
+    /** cosine only: arm degrees per unit of position reading */
     double armDegreesPerUnit = 1.0;
 
-    /// The load at `position` as a fraction of kG: 0 for none, 1 for
-    /// constant, cos(arm angle) for cosine.
+    /**
+     * @brief Get the load at a position, as a fraction of kG
+     *
+     * @return double 0 for none, 1 for constant, cos(arm angle) for cosine
+     */
     double factor(double position) const;
 };
 
-/// A lift's or an arm's model: a drive axis's kS/kV/kA plus gravity,
-///
-///     V = kS·sign(v) + kG·g(x) + kV·v + kA·a
-///
-/// where g(x) is gravity.factor(x). kG is the volts it takes to hold the
-/// mechanism still against gravity where g = 1 (anywhere, for a lift; level,
-/// for an arm), friction aside.
+/**
+ * @brief A lift's or arm's model: V = kS * sign(v) + kG * g(x) + kV * v + kA * a
+ *
+ * kG is the volts it takes to hold the mechanism still where g = 1 (anywhere for a lift, level for
+ * an arm)
+ */
 struct MechanismModel {
+    /** kS, kV, and kA */
     MotorFeedforward motion{};
+    /** volts to hold against gravity */
     double kG = 0.0;
+    /** how gravity loads it */
     GravityShape gravity{};
 
-    /// The model's kV and kA are what a controller design needs; gravity and
-    /// friction don't enter it (feedforward cancels one, the other only sets
-    /// how close the loop can get — see GainDesign::staticErrorBound).
+    /**
+     * @brief Whether the model can be used to design a controller (kV and kA are positive)
+     */
     bool valid() const { return motion.valid(); }
 
-    /// kG·g(position): the volts gravity costs at `position`.
+    /**
+     * @brief Get the volts gravity costs at a position: kG * g(position)
+     */
     double gravityVolts(double position) const;
 
-    /// The feedforward that cancels this model's gravity, for a
-    /// mechanism::PositionMechanism (PositionConfig::gravity, or
-    /// PositionMechanism::setGravity() on a running one).
+    /**
+     * @brief Get the feedforward that cancels this model's gravity, for a PositionMechanism
+     *
+     * @b Example
+     * @code {.cpp}
+     * lift.setGravity(result.fit.model.gravityFeedforward());
+     * @endcode
+     */
     mechanism::GravityFeedforward gravityFeedforward() const;
 };
 
-/// Result of fitFeedforward(). `ok` is false if the data couldn't support a
-/// trustworthy model — too few moving samples, an ill-conditioned fit (no
-/// acceleration content, say), a non-physical result, or an R² below the
-/// requested floor. `rSquared` and `samplesUsed` are filled in either way,
-/// to help diagnose a failure.
+/**
+ * @brief Result of fitFeedforward()
+ */
 struct FeedforwardFit {
+    /**
+     * whether the model can be trusted. false for too few moving samples, no acceleration in the
+     * data, a non-physical result, or a low R^2
+     */
     bool ok = false;
+    /** the fitted model */
     MotorFeedforward model;
 
-    /// How much of the variation in commanded voltage the model explains,
-    /// 0-1. Above ~0.95 is a clean fit; below ~0.8 is rejected.
+    /** how much of the voltage the model explains, 0-1. Above 0.95 is clean; below 0.8 fails */
     double rSquared = 0.0;
 
+    /** samples the fit used */
     int samplesUsed = 0;
 };
 
-/// Fits kS/kV/kA across `runs`.
-///
-/// Rather than differentiating position twice to get acceleration — which
-/// amplifies sensor noise so badly that it drags kA toward zero (a noisy
-/// regressor always biases its own coefficient down) — this fits the
-/// exact discrete-time solution of the model over short intervals:
-///
-///     v[k+m] = α·v[k] + β·u + γ·sign(v[k])
-///
-/// then recovers kV = (1−α)/β, kS = −γ/β, kA = −kV·T/ln α. Only velocity is
-/// needed, differentiated once with central differences `halfWindow`
-/// samples wide, and the interval m is chosen so the two velocity estimates
-/// in each row share no samples — so their noise is independent and
-/// doesn't masquerade as dynamics.
-///
-/// `delayTicks` shifts each commanded voltage that many samples later
-/// before fitting, to line the command up with when it actually moved the
-/// axis; see characterizeAxis() for how it's chosen. Rows moving slower
-/// than `minSpeed` are skipped: there, sign(v) is decided by noise and the
-/// axis is stuck in static friction the model doesn't describe.
+/**
+ * @brief Fit kS, kV, and kA to some runs
+ *
+ * Differentiating position twice amplifies noise and drags kA toward zero, so instead this fits
+ * the model's exact discrete-time solution, v[k+m] = a * v[k] + b * u + c * sign(v[k]), then
+ * recovers kV = (1 - a) / b, kS = -c / b, and kA = -kV * T / ln(a). The interval m is picked so the
+ * two velocity estimates in each row share no samples
+ *
+ * @param runs the runs to fit
+ * @param minSpeed slowest speed that counts, in units/s. Slower samples are stuck in friction
+ * @param halfWindow half width of the velocity difference, in samples. 5 by default
+ * @param delayTicks how many samples later each command took effect. 0 by default
+ * @param minRSquared lowest R^2 that counts as ok. 0.8 by default
+ * @return FeedforwardFit the fit
+ */
 FeedforwardFit fitFeedforward(const std::vector<CharacterizationRun>& runs, double minSpeed,
                               int halfWindow = 5, int delayTicks = 0, double minRSquared = 0.8);
 
-/// Result of fitMechanism() — FeedforwardFit with gravity.
+/**
+ * @brief Result of fitMechanism()
+ */
 struct MechanismFit {
+    /** whether the model can be trusted */
     bool ok = false;
+    /** the fitted model */
     MechanismModel model{};
+    /** how much of the voltage the model explains, 0-1 */
     double rSquared = 0.0;
+    /** samples the fit used */
     int samplesUsed = 0;
 };
 
-/// fitFeedforward() with one more term, for gravity:
-///
-///     v[k+m] = α·v[k] + β·u + γ·sign(v[k]) + δ·g
-///
-/// where g is `gravity`'s factor averaged over the interval, and kG = −δ/β.
-/// Separating kG from kS takes motion both ways — friction flips sign with
-/// the direction of travel, gravity doesn't — which is why the mechanism
-/// runner drives up and down. With GravityKind::none this is exactly
-/// fitFeedforward(), kG = 0.
+/**
+ * @brief fitFeedforward() with a gravity term: v[k+m] = a * v[k] + b * u + c * sign(v[k]) + d * g
+ *
+ * kG = -d / b. Telling kG from kS takes motion both ways, since friction flips with direction and
+ * gravity doesn't. With GravityKind::none this is exactly fitFeedforward()
+ *
+ * @param runs the runs to fit
+ * @param gravity how gravity loads the axis
+ * @param minSpeed slowest speed that counts, in units/s
+ * @param halfWindow half width of the velocity difference, in samples. 5 by default
+ * @param delayTicks how many samples later each command took effect. 0 by default
+ * @param minRSquared lowest R^2 that counts as ok. 0.8 by default
+ * @return MechanismFit the fit
+ */
 MechanismFit fitMechanism(const std::vector<CharacterizationRun>& runs, GravityShape gravity,
                           double minSpeed, int halfWindow = 5, int delayTicks = 0,
                           double minRSquared = 0.8);
 
-/// Estimates how long the axis takes to start responding to a command — the
-/// sum of loop, motor-controller, and sensor latency — from a step run
-/// (starting at rest, then a constant voltage).
-///
-/// Compares when the measured velocity first reaches half of the model's
-/// steady-state speed against when an ideal, delay-free axis with the same
-/// model would: kS/kV/kA say it should take kA/kV·ln 2 seconds, and
-/// whatever extra it actually took is delay. Half, rather than something
-/// like 10%, because the early part of the rise is exactly where sensor
-/// noise is proportionally largest.
-///
-/// Returns a negative number if `stepRun` has no step or never reaches half
-/// speed (e.g. it was cut short by its travel limit).
+/**
+ * @brief Estimate how long an axis takes to start responding to a command
+ *
+ * Compares when the step reaches half the model's steady speed against when a delay-free axis
+ * would (kA / kV * ln 2 seconds). Anything extra is delay
+ *
+ * @param stepRun a step run, starting at rest
+ * @param model the axis model
+ * @param halfWindow half width of the velocity difference, in samples. 5 by default
+ * @return double the delay, in seconds. Negative if the run has no step or never reaches half speed
+ */
 double estimateResponseDelayS(const CharacterizationRun& stepRun, const MotorFeedforward& model,
                               int halfWindow = 5);
 
-/// estimateResponseDelayS() for a mechanism: the step's steady-state speed is
-/// what's left of its volts after gravity (at the step's starting position)
-/// and friction. The step is the first tick commanding finite, nonzero volts,
-/// so held (NaN) pre-roll samples count as "at rest".
+/**
+ * @brief estimateResponseDelayS() for a mechanism
+ *
+ * The steady speed is what's left of the step's volts after gravity and friction. Held (NaN)
+ * samples before the step count as at rest
+ */
 double estimateMechanismDelayS(const CharacterizationRun& stepRun, const MechanismModel& model,
                                int halfWindow = 5);
 
-/// Result of characterizeAxis().
+/**
+ * @brief Result of characterizeAxis()
+ */
 struct AxisCharacterization {
+    /** whether the model can be trusted */
     bool ok = false;
+    /** the fit */
     FeedforwardFit fit;
 
-    /// Measured response delay in seconds; 0 if no step run produced one.
+    /** response delay, in seconds. 0 if no step run gave one */
     double delayS = 0.0;
 };
 
-/// The whole identification: fits a first model ignoring delay, measures
-/// the delay against it on the step runs, then refits with the commands
-/// shifted by that delay and re-measures. The second pass matters —
-/// fitting delayed data as if it weren't inflates kS and shrinks kA.
+/**
+ * @brief Measure an axis's model and delay from a characterization run
+ *
+ * Fits a model ignoring delay, measures the delay against it, then refits with the commands
+ * shifted by the delay. The second pass matters, since fitting delayed data as if it weren't
+ * inflates kS and shrinks kA
+ *
+ * @param data what the run collected
+ * @param minSpeed slowest speed that counts, in units/s
+ * @param halfWindow half width of the velocity difference, in samples. 5 by default
+ * @param minRSquared lowest R^2 that counts as ok. 0.8 by default
+ * @return AxisCharacterization the model and delay
+ *
+ * @b Example
+ * @code {.cpp}
+ * auto data = sapphirelib::tuning::runCharacterization(turnConfig);
+ * auto result = sapphirelib::tuning::characterizeAxis(data, turnConfig.minSpeed);
+ * if (result.ok) printf("kV %f kA %f\n", result.fit.model.kV, result.fit.model.kA);
+ * @endcode
+ */
 AxisCharacterization characterizeAxis(const CharacterizationData& data, double minSpeed,
                                       int halfWindow = 5, double minRSquared = 0.8);
 
-/// Result of characterizeMechanism().
+/**
+ * @brief Result of characterizeMechanism()
+ */
 struct MechanismCharacterization {
+    /** whether the model can be trusted */
     bool ok = false;
+    /** the fit */
     MechanismFit fit{};
+    /** response delay, in seconds */
     double delayS = 0.0;
 };
 
-/// characterizeAxis() with gravity: the same two passes, through
-/// fitMechanism() and estimateMechanismDelayS().
+/**
+ * @brief characterizeAxis() for a lift or arm, with gravity
+ *
+ * @param data what the run collected
+ * @param gravity how gravity loads it
+ * @param minSpeed slowest speed that counts, in units/s
+ * @param halfWindow half width of the velocity difference, in samples. 5 by default
+ * @param minRSquared lowest R^2 that counts as ok. 0.8 by default
+ * @return MechanismCharacterization the model and delay
+ */
 MechanismCharacterization characterizeMechanism(const CharacterizationData& data,
                                                 GravityShape gravity, double minSpeed,
                                                 int halfWindow = 5, double minRSquared = 0.8);

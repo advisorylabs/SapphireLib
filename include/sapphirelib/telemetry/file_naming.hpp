@@ -1,50 +1,63 @@
-/**
- * \file sapphirelib/telemetry/file_naming.hpp
- *
- * Log file names on the V5's SD card, which has no real-time clock to date
- * files by and no confirmed long-file-name support: "SL" + a six-digit run
- * index + ".CSV" — always a legal 8.3 name — and each new file takes the next
- * index after the highest already there. Pure string handling, unit-tested in
- * tests/telemetry/file_naming_test.cpp.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
+// log files are named "SL" + a six digit run number + ".CSV", always a legal 8.3 name, since the
+// V5 has no clock to date files by. Each new file takes the next number after the highest there
+
 namespace sapphirelib::telemetry {
 
-/// Highest run index a name can carry ("SL999999.CSV").
+// highest run number a name can carry ("SL999999.CSV")
 constexpr std::uint32_t kMaxLogIndex = 999999;
 
-/// Writes "SL000042.CSV" for 42 into `out`, NUL-terminated. False if `index`
-/// exceeds kMaxLogIndex or `size` is under 13.
+/**
+ * @brief Write a log file's name, like "SL000042.CSV" for 42
+ *
+ * @param out where to write, NUL-terminated
+ * @param size bytes available. At least 13
+ * @param index run number
+ * @return false index is past kMaxLogIndex, or size is too small
+ */
 bool formatLogFileName(char* out, std::size_t size, std::uint32_t index);
 
-/// Writes the full path fopen() wants — "/usd/sl/SL000042.CSV" for directory
-/// "/usd/sl" (a trailing '/' on the directory is fine) — into `out`,
-/// NUL-terminated. False if `index` is out of range or the path doesn't fit;
-/// PROS refuses paths of 128 characters or more anyway.
+/**
+ * @brief Write a log file's full path, like "/usd/sl/SL000042.CSV"
+ *
+ * @param out where to write, NUL-terminated
+ * @param size bytes available
+ * @param directory the folder. A trailing '/' is fine
+ * @param index run number
+ * @return false index is out of range, or the path doesn't fit
+ */
 bool formatLogFilePath(char* out, std::size_t size, std::string_view directory,
                        std::uint32_t index);
 
-/// 42 for "SL000042.CSV", matched case-insensitively (FAT short names can come
-/// back upper-case, and a card touched on a PC may differ) after any leading
-/// path. -1 for anything else, near-misses like "SL00042.CSV" or
-/// "SL000042.TXT" included, so an unrelated file can't push the index.
+/**
+ * @brief Get the run number from a log file's name
+ *
+ * Case-insensitive, after any leading path
+ *
+ * @param name the file name
+ * @return std::int32_t 42 for "SL000042.CSV", -1 for anything else (including near misses)
+ */
 std::int32_t parseLogFileIndex(std::string_view name);
 
-/// The highest index among the names in a pros::usd::list_files() listing
-/// (names separated by '\n'; '\r' tolerated), or -1 if it names no log file.
+/**
+ * @brief Get the highest run number in a pros::usd::list_files() listing
+ *
+ * @param listing names separated by '\n'
+ * @return std::int32_t the highest run number, or -1 if there are no log files
+ */
 std::int32_t highestLogFileIndex(std::string_view listing);
 
-/// The path list_files() wants, which omits the "/usd" prefix fopen() needs:
-/// "/usd/sl" -> "/sl"; "/usd" and "/usd/" -> "/"; a trailing '/' is dropped
-/// ("/usd/sl/" -> "/sl"). A directory without the prefix is returned as is.
+/**
+ * @brief Get the path list_files() wants, which leaves off the "/usd" fopen() needs
+ *
+ * @param directory the folder, like "/usd/sl"
+ * @return std::string_view "/sl" for "/usd/sl", "/" for "/usd"
+ */
 std::string_view listingPath(std::string_view directory);
 
 } // namespace sapphirelib::telemetry

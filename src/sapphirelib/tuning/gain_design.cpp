@@ -13,7 +13,7 @@ constexpr double kSettleBand = 0.02;
 constexpr double kMinDamping = 0.1;
 constexpr double kMaxDamping = 5.0;
 
-/// Unit step response of ω = 1 spring-damper with damping ratio `zeta`.
+// unit step response of a spring and damper with w = 1
 double stepResponse(double zeta, double t) {
     if (std::fabs(zeta - 1.0) < 1e-6) return 1.0 - (1.0 + t) * std::exp(-t);
     if (zeta < 1.0) {
@@ -41,15 +41,15 @@ double normalizedSettleTime(double dampingRatio) {
     constexpr double kStep = 0.001;
 
     if (zeta >= 1.0 - 1e-6) {
-        // Monotonic rise: settled the first time it's inside the band.
+        // no overshoot: settled the first time it's inside the band
         for (double t = 0.0; t < 1000.0; t += kStep) {
             if (1.0 - stepResponse(zeta, t) <= kSettleBand) return t;
         }
         return 1000.0;
     }
 
-    // Oscillatory: it may leave the band again after entering, so scan until
-    // the decay envelope guarantees it can't, keeping the last exit.
+    // overshoots: it can leave the band again, so scan until the decay envelope says it can't,
+    // keeping the last exit
     const double envelopeEndT =
         -std::log(kSettleBand * std::sqrt(1.0 - zeta * zeta)) / zeta + kStep;
     double lastOutside = 0.0;
@@ -62,16 +62,14 @@ double normalizedSettleTime(double dampingRatio) {
 double phaseMarginDeg(const MotorFeedforward& model, PIDGains gains, double delayS) {
     if (!(gains.kP > 0.0) || !model.valid()) return 180.0;
 
-    // Open loop L(jω) = (kP + jω·kD) / (jω·(jω·kA + kV)) · e^(−jωθ).
+    // open loop L(jw) = (kP + jw * kD) / (jw * (jw * kA + kV)) * e^(-jw * delay)
     const auto magnitude = [&](double w) {
         const double num = std::hypot(gains.kP, w * gains.kD);
         const double den = w * std::hypot(w * model.kA, model.kV);
         return num / den;
     };
 
-    // |L| falls monotonically (numerator grows like ω, denominator like ω²),
-    // so the crossover can be bisected — in log space, since plausible
-    // crossovers span several decades.
+    // |L| falls steadily, so bisect for the crossover, in log space since it can span decades
     double lo = std::log(1e-4);
     double hi = std::log(1e5);
     for (int i = 0; i < 100; ++i) {
@@ -99,9 +97,8 @@ GainDesign designPositionGains(const MotorFeedforward& model, ResponseSpec spec,
     double omega = unitSettle / spec.settleTimeS;
 
     if (phaseMarginDeg(model, placePoles(model, omega, zeta), delayS) < spec.minPhaseMarginDeg) {
-        // Phase margin shrinks as ω rises, so the fastest acceptable design
-        // is a bisection away. The lower bound is slow enough that delay
-        // can't matter.
+        // phase margin shrinks as w rises, so bisect for the fastest acceptable design. The lower
+        // bound is slow enough that delay can't matter
         double slow = 0.0;
         double fast = omega;
         for (int i = 0; i < 60; ++i) {

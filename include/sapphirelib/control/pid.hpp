@@ -1,200 +1,230 @@
-/**
- * \file sapphirelib/control/pid.hpp
- *
- * Generic PID controller: proportional-integral-derivative control with an
- * integral windup guard, optional derivative-on-measurement, and optional
- * output slew-rate limiting. Framework-agnostic — no PROS dependency, so it
- * can be unit-tested on a desktop compiler (see tests/control/pid_test.cpp).
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
 
 namespace sapphirelib {
 
-/// Proportional, integral, and derivative gains for a PID controller.
-///
-/// These are *continuous-time* gains, the standard convention: kI is
-/// "output units per (error unit x second)" and kD is "output units per
-/// (error unit / second)". PID::update() scales the integral and derivative
-/// terms by its timestep accordingly, so a set of gains stays valid if the
-/// loop period changes, and gains designed from a measured model (see
-/// sapphirelib::tuning::designPositionGains()) can be used directly without
-/// a per-tick conversion.
+/**
+ * @brief Gains for a PID controller
+ *
+ * The gains are continuous-time: kI is in output per (error * second) and kD in output per
+ * (error / second). PID::update() scales by its timestep, so the gains stay valid if the loop
+ * period changes, and gains from tuning::designPositionGains() can be used directly
+ */
 struct PIDGains {
+    /** proportional gain */
     double kP = 0.0;
+    /** integral gain */
     double kI = 0.0;
+    /** derivative gain */
     double kD = 0.0;
 };
 
 class PID;
 
-/// Everything one PID::update() worked out, not just what it returned — so a
-/// log (see telemetry::Logger::pid()) or a readout can show *why* the
-/// controller commanded what it did. Tuning needs the individual terms:
-/// "overshoots" is a kP/kD problem, "never quite arrives" an integral or
-/// friction one, and only the terms tell those apart.
-///
-/// `target` and `measurement` are exactly what the caller passed. Some loops
-/// fold the error into target and pass a measurement of 0 — the drivetrains'
-/// turn loops, and the pose motions' distance loops — so read `error`, not
-/// target or measurement, as the controller's view of how far off it was.
+/**
+ * @brief Everything one PID::update() worked out, not just its output
+ *
+ * Used by telemetry and readouts to show why the controller did what it did. Some loops pass the
+ * error as the target and 0 as the measurement (the drivetrain's turn loops, the pose motions'
+ * distance loops), so read error rather than target or measurement
+ */
 struct PidStep {
-    /// The output hit Config::outputLimit and was clamped.
+    /** flag: the output hit Config::outputLimit and was clamped */
     static constexpr std::uint8_t kSaturated = 1u << 0;
-    /// Config::slewRate limited this step's change in output.
+    /** flag: Config::slewRate limited this step's change in output */
     static constexpr std::uint8_t kSlewLimited = 1u << 1;
-    /// Conditional-integration anti-windup rolled back this step's
-    /// integration (see Config::outputLimit).
+    /** flag: anti-windup undid this step's integration */
     static constexpr std::uint8_t kIntegralHeld = 1u << 2;
-    /// First update() since construction or reset(): no derivative yet, and
-    /// the start of a new response for anything splitting a log into steps.
+    /** flag: first update() since construction or reset(), so no derivative yet */
     static constexpr std::uint8_t kFirstStep = 1u << 3;
-    /// The dtS passed in was non-positive or implausibly large, so
-    /// Config::nominalDtS was used instead.
+    /** flag: the timestep passed in was bad, so Config::nominalDtS was used */
     static constexpr std::uint8_t kDtFallback = 1u << 4;
 
+    /** the target passed to update() */
     double target = 0.0;
+    /** the measurement passed to update() */
     double measurement = 0.0;
+    /** target minus measurement */
     double error = 0.0;
 
-    /// kP·error, kI·integral, kD·derivative — each already in output units.
+    /** kP * error, in output units */
     double pTerm = 0.0;
+    /** kI * integral, in output units */
     double iTerm = 0.0;
+    /** kD * derivative, in output units */
     double dTerm = 0.0;
 
-    /// The output after anti-windup but before slew limiting and clamping.
+    /** output after anti-windup, before slew limiting and clamping */
     double rawOutput = 0.0;
-    /// What update() returned.
+    /** what update() returned */
     double output = 0.0;
-    /// The timestep actually used, in seconds.
+    /** the timestep used, in seconds */
     double dtS = 0.0;
+    /** the k* flags above */
     std::uint8_t flags = 0;
 };
 
-/// Receives every step of the PID it's attached to — see PID::setObserver().
-/// An interface rather than a std::function so an attached observer costs one
-/// indirect call on the loop's own task and PID stays allocation-free.
+/**
+ * @brief Receives every step of the PID it's attached to. See PID::setObserver()
+ */
 class PidObserver {
 public:
     virtual ~PidObserver() = default;
 
-    /// Called at the end of every update(), on whichever task called it, with
-    /// the step that update() just computed. Must not block or allocate: it
-    /// runs inside someone's control loop.
+    /**
+     * @brief Called at the end of every update(), on the task that called it
+     *
+     * @note runs inside a control loop, so it must not block or allocate
+     *
+     * @param pid the PID that updated
+     * @param step what the update worked out
+     */
     virtual void onPidUpdate(const PID& pid, const PidStep& step) = 0;
 
-    /// Called from reset() — but only when the PID had state to clear, so a
-    /// loop that resets every tick while idle (a lift resting on its hard
-    /// stop, say) doesn't report a reset every tick.
+    /**
+     * @brief Called from reset(), only when the PID had state to clear
+     *
+     * @param pid the PID that was reset
+     */
     virtual void onPidReset(const PID& /*pid*/) {}
 };
 
-/// A single-axis PID controller. One instance drives one control loop (e.g.
-/// drive distance, or heading); construct a fresh one per loop.
+/**
+ * @brief PID controller
+ *
+ * One instance drives one control loop, e.g. drive distance or heading
+ */
 class PID {
 public:
+    /**
+     * @brief PID settings
+     */
     struct Config {
+        /** kP, kI, and kD */
         PIDGains gains;
 
-        /// Clamps the accumulated integral (in error units x seconds) to
-        /// +-integralLimit before it's multiplied by kI. 0 disables the
-        /// clamp. This is the explicit integral windup guard — without it,
-        /// a controller stuck away from its target accumulates unbounded
-        /// integral and overshoots badly once it finally gets close.
-        ///
-        /// Note that update() *also* applies automatic anti-windup whenever
-        /// outputLimit is set (see below), so leaving this at 0 is a
-        /// reasonable default; set it when you want a tighter bound on the
-        /// integral term than "it alone may not saturate the output".
+        /**
+         * integral limit, in error * seconds. The integral is clamped to +-integralLimit before
+         * it's multiplied by kI. 0 disables the limit, which is fine when outputLimit is set,
+         * since that adds its own anti-windup
+         */
         double integralLimit = 0.0;
 
-        /// Clamps the final output to +-outputLimit. 0 disables the clamp.
-        ///
-        /// When set, this also enables automatic anti-windup: on any tick
-        /// where the unclamped output is saturated and this tick's error
-        /// would drive it further into saturation, the integration for that
-        /// tick is rolled back instead of accumulating charge the output
-        /// can't express (conditional integration). This is what keeps an
-        /// auto-tuned kI safe on a plant that spends real time at full
-        /// output, without needing integralLimit hand-picked per loop.
+        /**
+         * output limit. The output is clamped to +-outputLimit, and while it's saturated the
+         * integral stops growing (anti-windup). 0 disables the limit
+         */
         double outputLimit = 0.0;
 
-        /// Limits how much the output can change between consecutive
-        /// update() calls — per call, not per second, so the same number
-        /// ramps twice as fast in a 10ms loop as in a 20ms one. 0 disables
-        /// the limit.
+        /**
+         * the most the output can change between update() calls. Per call, not per second, so it
+         * ramps twice as fast in a 10ms loop as in a 20ms one. 0 disables the limit
+         */
         double slewRate = 0.0;
 
-        /// When true, the derivative term is computed from the change in
-        /// measurement instead of the change in error, avoiding "derivative
-        /// kick" when the target changes abruptly.
-        ///
-        /// Only meaningful for call sites that pass a real measurement.
-        /// Loops that fold the error into `target` and pass a constant
-        /// `measurement` of 0 (as the drivetrains' turn loops do) must
-        /// leave this false, since the measurement never changes there and
-        /// the derivative term would be identically zero.
+        /**
+         * whether to take the derivative of the measurement instead of the error, which avoids a
+         * kick when the target jumps. false by default. Leave it false for loops that pass 0 as
+         * the measurement, like the drivetrain's turn loops
+         */
         bool derivativeOnMeasurement = false;
 
-        /// Timestep, in seconds, assumed by the two-argument update()
-        /// overload — i.e. how often the loop calling it ticks. The
-        /// drivetrains run their control loops on a fixed 10ms delay, which
-        /// is where this default comes from.
-        ///
-        /// A fixed nominal timestep is deliberate rather than measuring the
-        /// real elapsed time every tick: on a jittery RTOS loop, dividing
-        /// the derivative term by a measured dt amplifies scheduling jitter
-        /// straight into the output. Loops that genuinely run at a variable
-        /// rate should call the three-argument update() instead.
+        /**
+         * timestep assumed by the two-argument update(), in seconds. 0.01 by default, matching
+         * the drivetrains' 10ms loops. A fixed timestep keeps loop jitter out of the derivative
+         */
         double nominalDtS = 0.01;
     };
 
+    /**
+     * @brief Construct a new PID
+     *
+     * @param config gains and settings
+     *
+     * @b Example
+     * @code {.cpp}
+     * // a lift PID with kP 0.3, kD 0.01, and its output limited to 12V
+     * sapphirelib::PID liftPID({.gains = {.kP = 0.3, .kI = 0.0, .kD = 0.01}, .outputLimit = 12.0});
+     * @endcode
+     */
     explicit PID(Config config);
 
-    /// Computes one control step, assuming Config::nominalDtS elapsed since
-    /// the previous call. `target` and `measurement` must be in the same
-    /// units; the returned output is clamped/rate-limited per Config.
+    /**
+     * @brief Update the PID, assuming Config::nominalDtS has passed since the last call
+     *
+     * @param target where the system should be
+     * @param measurement where the system is, in the same units as target
+     * @return double the output, clamped and slew limited per Config
+     *
+     * @b Example
+     * @code {.cpp}
+     * while (true) {
+     *     double volts = liftPID.update(90.0, liftSensor.get_position() / 100.0);
+     *     liftMotors.move_voltage(volts * 1000);
+     *     pros::delay(10);
+     * }
+     * @endcode
+     */
     double update(double target, double measurement);
 
-    /// Computes one control step over an explicit timestep `dtS`, in
-    /// seconds — for loops that don't run at a fixed rate. A non-positive
-    /// or implausibly large `dtS` falls back to Config::nominalDtS rather
-    /// than producing a divide-by-zero or a derivative spike.
+    /**
+     * @brief Update the PID over a given timestep, for loops that don't run at a fixed rate
+     *
+     * @param target where the system should be
+     * @param measurement where the system is, in the same units as target
+     * @param dtS time since the last call, in seconds. A bad value falls back to nominalDtS
+     * @return double the output, clamped and slew limited per Config
+     */
     double update(double target, double measurement, double dtS);
 
-    /// Clears integral, previous error/measurement, and previous output
-    /// state. Call before reusing a PID instance for a new motion.
+    /**
+     * @brief Reset the integral, the derivative, and the previous output. Call this before
+     * reusing the PID for a new motion
+     */
     void reset();
 
+    /**
+     * @brief Set the gains
+     *
+     * @param gains the new kP, kI, and kD
+     */
     void setGains(PIDGains gains);
+
+    /**
+     * @brief Get the gains
+     */
     const PIDGains& gains() const;
 
-    /// The config this PID was constructed with, gains as last set by
-    /// setGains(). For telemetry and readouts; there's no setter because
-    /// nothing but the gains is meant to change on a live controller.
+    /**
+     * @brief Get the config, with the gains as last set
+     */
     const Config& config() const;
 
-    /// What the most recent update() computed (all zeros before the first).
-    /// Left alone by reset(), so a readout can still show the last step of a
-    /// motion that has finished. Read it from the task that calls update(),
-    /// or accept a torn read.
+    /**
+     * @brief Get what the last update() worked out. All zeros before the first update
+     *
+     * reset() leaves it alone, so a readout can still show the last step of a finished motion
+     *
+     * @note read it from the task that calls update(), or accept a torn read
+     */
     const PidStep& lastStep() const;
 
-    /// Attaches `observer` (nullptr detaches) to receive every step and every
-    /// state-clearing reset — how telemetry::Logger::pid() records a
-    /// controller without the PID knowing anything about SD cards, tasks, or
-    /// PROS.
-    ///
-    /// Not synchronized: attach before any task starts calling update() on
-    /// this PID (in initialize(), before the loop that runs it), not while it
-    /// is live. The observer must outlive the attachment. Copying a PID copies
-    /// this pointer, so an observer that cares should check which PID it was
-    /// handed (telemetry::PidProbe does).
+    /**
+     * @brief Attach an observer that receives every step and reset
+     *
+     * This is how telemetry::Logger::pid() records a controller
+     *
+     * @note not synchronized: attach it before any task starts updating this PID. The observer
+     * must outlive the attachment
+     *
+     * @param observer the observer. nullptr detaches
+     */
     void setObserver(PidObserver* observer);
+
+    /**
+     * @brief Get the attached observer, or nullptr
+     */
     PidObserver* observer() const;
 
 private:

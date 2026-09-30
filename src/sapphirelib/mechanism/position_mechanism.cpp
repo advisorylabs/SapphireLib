@@ -13,10 +13,8 @@
 
 namespace sapphirelib::mechanism {
 
-// Commands cross tasks through these with no mutex (see the class comment). If
-// one of them ever needs a lock on this toolchain, that's a hidden mutex on
-// the control path, which PROS deleting a competition task mid-call could
-// orphan — so make it a build error instead.
+// commands cross tasks through these with no mutex. A hidden lock here could be orphaned by
+// PROS deleting a task, so make that a build error
 static_assert(std::atomic<double>::is_always_lock_free,
               "PositionMechanism shares its target across tasks without a mutex");
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
@@ -26,8 +24,7 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 
 namespace {
 
-/// commandGen_ keeps to 31 bits so settledState_ can hold (gen << 1) | settled
-/// without dropping any of it.
+// commandGen_ keeps to 31 bits so settledState_ can hold (gen << 1) | settled
 constexpr std::uint32_t kGenMask = 0x7FFFFFFFu;
 
 } // namespace
@@ -45,29 +42,24 @@ PositionMechanism::PositionMechanism(std::initializer_list<std::int8_t> motorPor
       gravityCosineVolts_(config.gravity.cosineVolts),
       gravityHorizontalPosition_(config.gravity.horizontalPosition),
       gravityArmDegreesPerUnit_(config.gravity.armDegreesPerUnit), gap_(config.resetAfterGapMs) {
-    // An empty std::function would throw when called. Reading "no sensor"
-    // instead leaves the mechanism braking, which is visible (law() reports
-    // "no sensor") rather than fatal.
+    // an empty std::function would throw. Reading no sensor instead leaves it braking, which
+    // shows up as law "no sensor" instead of crashing
     if (!source_) source_ = [] { return std::numeric_limits<double>::quiet_NaN(); };
 }
 
 void PositionMechanism::setTarget(double target) {
     if (!std::isfinite(target)) return;
-    // Target first, then mode, then the generation: step() loads them in the
-    // opposite order, so a step that sees the new generation is guaranteed to
-    // see this target and mode too, and settle state can't be credited to a
-    // command it wasn't computed for.
+    // target, then mode, then the generation. step() loads them in the opposite order, so a step
+    // that sees the new generation also sees this target and mode
     const double previousTarget = target_.exchange(target);
     const PositionMode previousMode = mode_.exchange(PositionMode::position);
     if (previousTarget != target || previousMode != PositionMode::position) bumpCommand();
 }
 
 void PositionMechanism::setVolts(double volts) {
-    // A NaN would survive the clamp in step(), and converting it to
-    // millivolts is undefined behavior.
+    // a NaN would survive the clamp in step(), and converting it to millivolts is undefined
     volts_.store(std::isnan(volts) ? 0.0 : volts);
-    // Only the mode change matters to settle state; new volts in voltage mode
-    // are the same command as far as settled() is concerned (never settled).
+    // only the mode change matters to settle state; voltage mode is never settled
     if (mode_.exchange(PositionMode::voltage) != PositionMode::voltage) bumpCommand();
 }
 
@@ -105,9 +97,8 @@ GravityFeedforward PositionMechanism::gravity() const {
 void PositionMechanism::beginExternalControl() { external_.store(true); }
 
 void PositionMechanism::endExternalControl() {
-    // Cleared by the reset the external steps already do, but asked for
-    // anyway: a step that loaded external_ just before this store has one
-    // more update() to run on stale memory otherwise.
+    // the external steps reset the PID anyway, but a step that read external_ just before this
+    // store would run one more update on stale memory
     resetRequested_.store(true);
     external_.store(false);
 }
@@ -119,7 +110,7 @@ PositionMode PositionMechanism::mode() const { return mode_.load(); }
 double PositionMechanism::position() const { return source_(); }
 
 bool PositionMechanism::isNear(double target) const {
-    // NaN (no reading) compares false, so "no sensor" is never "near".
+    // NaN (no reading) compares false, so no sensor is never near
     return std::fabs(position() - target) <= config_.tolerance;
 }
 
@@ -136,9 +127,7 @@ PositionLaw PositionMechanism::law() const { return law_.load(); }
 
 PositionStep PositionMechanism::update(std::uint32_t nowMs) {
     if (taskRunning_.load()) {
-        // Two loops commanding one motor group fight. Warn once rather than
-        // every tick (or asserting, which would take the robot down
-        // mid-match).
+        // two loops driving one motor group fight. Warn once, not every tick
         if (!warnedUpdateWithTask_) {
             warnedUpdateWithTask_ = true;
             SAPPHIRELIB_LOG_WARN("mechanism",
@@ -150,16 +139,13 @@ PositionStep PositionMechanism::update(std::uint32_t nowMs) {
 }
 
 bool PositionMechanism::startTask(std::uint32_t periodMs) {
-    // Claimed before the task exists, in one step, so a second call can't
-    // start a second loop, and update() is ignored from here on rather than
-    // interleaving with the task's first step.
+    // claim it in one step, so a second call can't start a second loop
     if (taskRunning_.exchange(true)) return false;
-    // A 0ms period would be a busy loop starving every lower-priority task.
+    // a 0ms period would be a busy loop that starves lower priority tasks
     periodMs = std::max<std::uint32_t>(periodMs, 1);
     const double periodS = periodMs / 1000.0;
     if (std::fabs(periodS - config_.pid.nominalDtS) > 0.0005) {
-        // kI and kD are per second, scaled by nominalDtS — which is only right
-        // if the loop really runs that often.
+        // kI and kD are scaled by nominalDtS, which is only right if the loop runs that often
         SAPPHIRELIB_LOG_WARN("mechanism",
                              "startTask(%lu) runs every %.3fs but pid.nominalDtS is %.3fs; set "
                              "nominalDtS = %.3f so kI and kD mean what they say",
@@ -168,8 +154,7 @@ bool PositionMechanism::startTask(std::uint32_t periodMs) {
     }
     task_ = std::make_unique<pros::Task>(
         [this, periodMs] {
-            // delay_until keeps the period steady however long a step takes,
-            // so nominalDtS stays true.
+            // delay_until keeps the period steady however long a step takes
             std::uint32_t wake = pros::millis();
             while (true) {
                 step(sapphirelib::millis(), pros::competition::is_disabled() != 0);
@@ -177,10 +162,7 @@ bool PositionMechanism::startTask(std::uint32_t periodMs) {
             }
         },
         "PositionMechanism");
-    // Never deleted: deleting a task in the middle of a PROS device call can
-    // orphan that port's kernel mutex. And since only this task touches the
-    // motors from now on, an autonomous or opcontrol task that PROS deletes
-    // was only ever touching atomics.
+    // never deleted: deleting a task inside a device call can orphan that port's kernel mutex
     return true;
 }
 
@@ -189,7 +171,7 @@ bool PositionMechanism::taskRunning() const { return taskRunning_.load(); }
 bool PositionMechanism::waitUntilSettled(std::uint32_t timeoutMs, std::uint32_t pollMs) {
     return waitUntil(
         [this] {
-            // Manual mode: nothing else is running the loop, so run it here.
+            // manual mode: nothing else runs the loop, so run it here
             if (!taskRunning_.load()) step(sapphirelib::millis(), /*disabled=*/false);
             return settled();
         },
@@ -212,49 +194,39 @@ void PositionMechanism::setStepListener(std::function<void(const PositionStep&)>
 }
 
 PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
-    // Updates far enough apart that the PID's memory (last reading, integral)
-    // is from before the gap: start it fresh. PID::reset() is idempotent, so
-    // this and an explicit resetController() can both fire on one step.
+    // updates far enough apart that the PID's memory is from before the gap: start fresh
     const bool gap = gap_.update(nowMs) && config_.resetAfterGapMs > 0;
     if (resetRequested_.exchange(false) || gap) pid_.reset();
 
-    // Generation first, then mode and target (the reverse of setTarget()'s
-    // stores; see there).
+    // generation first, then mode and target, the reverse of setTarget()
     const std::uint32_t gen = commandGen_.load();
     const PositionMode mode = mode_.load();
     const double target = target_.load();
     const double position = source_(); // the one sensor read of this update
 
     PositionCommand command;
-    // Whoever has the motors (see beginExternalControl()) is commanding
-    // them; this update only reads and reports. It wins over disabled too:
-    // braking would fight a run that is itself responsible for stopping.
+    // something else has the motors, so only read and report. Wins over disabled, since braking
+    // would fight a run that's stopping itself
     const bool external = external_.load();
     if (external) {
         pid_.reset();
         command = {.law = PositionLaw::external, .volts = 0.0, .brake = false};
     } else if (disabled) {
-        // VEXos ignores motor commands while the robot is disabled. Running
-        // the loop anyway would integrate an error it can't act on and lurch
-        // the mechanism at enable, so rest with the PID cleared instead (one
-        // reset, not one per tick, since nothing updates it in between) and
-        // start fresh on the first enabled step.
+        // VEXos ignores motors while disabled, so running the loop would wind up an error and lurch
+        // the mechanism at enable. Rest with the PID cleared instead
         pid_.reset();
         command = {.law = PositionLaw::off, .volts = 0.0, .brake = true};
     } else {
         switch (mode) {
             case PositionMode::position: {
-                // The config with the live gravity (setGravity()); copied per
-                // update rather than written into config_, which other tasks
-                // may be reading through config().
+                // a copy of the config with the live gravity, since other tasks may read config_
                 PositionConfig live = config_;
                 live.gravity = gravity();
                 command = computePositionCommand(pid_, live, target, position);
                 break;
             }
             case PositionMode::voltage:
-                // Reset every update, so handing back to closed loop starts
-                // without stale derivative or integral.
+                // reset every update, so going back to closed loop starts clean
                 pid_.reset();
                 command = {.law = PositionLaw::manual,
                            .volts = std::clamp(volts_.load(), -config_.maxVolts, config_.maxVolts),
@@ -266,10 +238,10 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
                 break;
         }
     }
-    // Brake mode, never move_voltage(0), on sensor loss and when off: the
-    // user's brake mode (hold, usually) is what keeps a lift up.
+    // brake, never move_voltage(0), on sensor loss and when off: the brake mode is what keeps a
+    // lift up
     if (external) {
-        // Not ours to command.
+        // not ours to command
     } else if (command.brake) {
         motors_.brake();
     } else {
@@ -277,9 +249,9 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
     }
 
     const bool near = mode == PositionMode::position &&
-                      std::fabs(position - target) <= config_.tolerance; // NaN -> false
+                      std::fabs(position - target) <= config_.tolerance; // NaN is never near
     if (gen != nearGen_) {
-        // A new command: settle timing starts over, whatever the old one's was.
+        // a new command: settle timing starts over
         near_ = TimedFlag(false, nowMs);
         nearGen_ = gen;
     }
@@ -303,17 +275,14 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
 }
 
 void PositionMechanism::bumpCommand() {
-    // A CAS loop rather than load-then-store, so even two tasks commanding at
-    // once (which the class comment says not to do) can't lose a bump and let
-    // an old settle flag count for the new command.
+    // a CAS loop, so even two tasks commanding at once can't lose a bump
     std::uint32_t gen = commandGen_.load();
     while (!commandGen_.compare_exchange_weak(gen, (gen + 1) & kGenMask)) {
     }
 }
 
 std::uint32_t PositionMechanism::nominalPeriodMs() const {
-    // Clamped so a zero, negative, NaN, or absurd nominalDtS can't make the
-    // poll a busy loop (or lround() meaningless).
+    // clamped so a zero, negative, NaN, or huge nominalDtS can't make a busy loop
     const double ms = config_.pid.nominalDtS * 1000.0;
     if (!(ms >= 1.0)) return 1;
     return static_cast<std::uint32_t>(std::lround(std::min(ms, 1000.0)));

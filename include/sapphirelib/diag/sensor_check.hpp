@@ -1,14 +1,3 @@
-/**
- * \file sapphirelib/diag/sensor_check.hpp
- *
- * Startup/live diagnostics: verifies that the sensors you tell it to expect
- * are actually the devices plugged into their configured ports, so a
- * mis-wired or unplugged sensor shows up as an on-screen warning instead of
- * a mysterious "the robot's not turning right" during a match.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
@@ -17,44 +6,62 @@
 
 namespace sapphirelib::diag {
 
-/// The device types SapphireLib knows how to check for. Extend as more
-/// sensor wrappers are added (e.g. vision, GPS). A check only asks the
-/// brain what's plugged into the port, so it covers devices SapphireLib
-/// doesn't wrap too — a mechanism's distance or optical sensor, say.
+/**
+ * @brief Device types a SensorCheck can expect
+ *
+ * A check only asks the brain what's plugged into the port, so it works for devices SapphireLib
+ * doesn't wrap too
+ */
 enum class DeviceKind { motor, imu, rotation, distance, optical };
 
-/// One sensor's expected configuration.
+/**
+ * @brief A device you expect on a port
+ */
 struct SensorCheck {
-    /// Human-readable name shown in results, e.g. "Front-left drive motor".
+    /** name shown in results, e.g. "Front left drive motor" */
     std::string label;
 
-    /// Port as you'd pass it to the rest of SapphireLib — sign is allowed
-    /// (negative = reversed motor) and ignored for the check, since a
-    /// device is either plugged into a port or it isn't, regardless of
-    /// which direction a motor on it spins. Anything outside ±1-21 fails
-    /// the check as a config error.
+    /** the port. A negative (reversed) port is fine; anything outside +-1-21 fails */
     std::int8_t port;
 
+    /** what should be plugged in */
     DeviceKind expected;
 };
 
-/// The result of running one SensorCheck.
+/**
+ * @brief The result of one SensorCheck
+ */
 struct CheckResult {
+    /** the check's name */
     std::string label;
+    /** the check's port */
     std::int8_t port;
+    /** whether the right device is plugged in */
     bool ok;
 
-    /// Empty when ok — otherwise a short description of what's actually
-    /// plugged in instead, e.g. "nothing plugged in" or "found a motor".
+    /** empty when ok, otherwise what's plugged in instead, e.g. "nothing plugged in" */
     std::string detail;
 };
 
-/// Reads what's actually plugged into `check.port` right now (via PROS's
-/// device registry — doesn't require the device to have been constructed
-/// first) and compares it against `check.expected`.
+/**
+ * @brief Check what's plugged into a port right now
+ *
+ * Uses PROS's device registry, so the device doesn't need to be constructed first
+ *
+ * @param check the device to expect
+ * @return CheckResult whether it's there, and what is if not
+ *
+ * @b Example
+ * @code {.cpp}
+ * auto result = sapphirelib::diag::runCheck({"IMU", 10, sapphirelib::diag::DeviceKind::imu});
+ * if (!result.ok) printf("%s: %s\n", result.label.c_str(), result.detail.c_str());
+ * @endcode
+ */
 CheckResult runCheck(const SensorCheck& check);
 
-/// Runs every check in order.
+/**
+ * @brief Run every check, in order
+ */
 std::vector<CheckResult> runChecks(const std::vector<SensorCheck>& checks);
 
 } // namespace sapphirelib::diag

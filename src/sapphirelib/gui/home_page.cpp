@@ -10,9 +10,8 @@ namespace sapphirelib::gui {
 HomePage::HomePage(sensors::Imu* imu) : imu_(imu) {}
 
 void HomePage::setTelemetry(const telemetry::Logger* logger) {
-    // Only stored: the row itself is created in build(), or — if the page
-    // was built already — by the next update(), which runs on the GUI's own
-    // task. Creating widgets from here could race LVGL mid-render.
+    // only stored here. The row is created in build(), or by the next update() on the GUI's task,
+    // since creating widgets from another task could race LVGL
     logger_.store(logger, std::memory_order_release);
 }
 
@@ -37,10 +36,8 @@ void HomePage::build(lv_obj_t* container) {
 void HomePage::update() {
     char buf[48];
 
-    // Battery capacity is reported in whole percent and changes over
-    // minutes, so this formats to the same string almost every tick —
-    // setLabelText() is what keeps that from re-invalidating the label 20
-    // times a second.
+    // the battery changes over minutes, so this is almost always the same string, and
+    // setLabelText() keeps that from redrawing the label every tick
     std::snprintf(buf, sizeof(buf), "Battery: %.0f%%", pros::battery::get_capacity());
     setLabelText(batteryLabel_, buf);
 
@@ -58,8 +55,7 @@ void HomePage::update() {
 
     const telemetry::Logger* logger = logger_.load(std::memory_order_acquire);
     if (logger != nullptr && telemetryLabel_ == nullptr && container_ != nullptr) {
-        // setTelemetry() came after build(): the row goes last, just where
-        // build() would have put it.
+        // setTelemetry() came after build(): add the row last, where build() would have
         telemetryLabel_ = lv_label_create(container_);
     }
     if (telemetryLabel_ != nullptr) {
@@ -68,8 +64,7 @@ void HomePage::update() {
         const char* text = "SD: off";
         switch (status.state) {
             case telemetry::LoggerState::logging:
-                // A missing log folder is what to fix before the next match;
-                // the file name can wait until it's fixed.
+                // a missing log folder is what to fix before the next match; the file name can wait
                 if (status.inRootFolder) {
                     text = "SD: no folder, root";
                 } else {

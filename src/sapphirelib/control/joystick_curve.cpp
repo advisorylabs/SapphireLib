@@ -15,8 +15,7 @@ double applyDeadband(double input, double deadband) {
     if (deadband >= 1.0) return 0.0;
     const double magnitude = std::fabs(input);
     if (magnitude <= deadband) return 0.0;
-    // Measured from the band's edge rather than from zero, so the output
-    // rises from 0 there instead of jumping straight to `deadband`.
+    // measured from the band's edge, so the output rises from 0 there instead of jumping
     return std::copysign((std::min(magnitude, 1.0) - deadband) / (1.0 - deadband), input);
 }
 

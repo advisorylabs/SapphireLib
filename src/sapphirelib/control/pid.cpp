@@ -7,10 +7,7 @@ namespace sapphirelib {
 
 namespace {
 
-/// Any timestep beyond this is treated as a scheduling hiccup (a preempted
-/// task, a paused motion) rather than real elapsed control time — folding
-/// it in would dump a huge lump of integral in and divide the derivative by
-/// a meaninglessly long interval.
+// longer timesteps are scheduling hiccups (a preempted task, a paused motion), not control time
 constexpr double kMaxPlausibleDtS = 0.5;
 
 } // namespace
@@ -30,15 +27,14 @@ double PID::update(double target, double measurement, double dtS) {
 
     const double error = target - measurement;
 
-    // Integral of error over time, so kI carries per-second units and stays
-    // valid across a change of loop period — see PIDGains' comment.
+    // integrate over time, so kI is per second and stays valid if the loop period changes
     const double integralDelta = error * dtS;
     integral_ += integralDelta;
     if (config_.integralLimit > 0.0) {
         integral_ = std::clamp(integral_, -config_.integralLimit, config_.integralLimit);
     }
 
-    // Rate of change per second, for the same reason.
+    // derivative per second, for the same reason
     double derivative = 0.0;
     if (hasPrev_) {
         derivative = (config_.derivativeOnMeasurement ? -(measurement - prevMeasurement_)
@@ -49,12 +45,9 @@ double PID::update(double target, double measurement, double dtS) {
     double output =
         config_.gains.kP * error + config_.gains.kI * integral_ + config_.gains.kD * derivative;
 
-    // Conditional-integration anti-windup: if the output is already pinned
-    // at the limit and this tick's error only pushes it further out, that
-    // integration can't affect the plant — it just accumulates charge that
-    // has to be paid back as overshoot once the error finally reverses. Roll
-    // it back and recompute instead. Only meaningful when an output limit
-    // exists to saturate against.
+    // anti-windup: if the output is already past the limit and this tick's error pushes it
+    // further, undo this tick's integration. It can't affect anything, and would only come back
+    // as overshoot
     if (config_.outputLimit > 0.0 && integralDelta != 0.0 &&
         std::fabs(output) > config_.outputLimit && (output > 0.0) == (integralDelta > 0.0)) {
         integral_ -= integralDelta;
@@ -66,8 +59,7 @@ double PID::update(double target, double measurement, double dtS) {
     const double rawOutput = output;
     if (config_.slewRate > 0.0 && hasPrev_) {
         const double delta = std::clamp(output - prevOutput_, -config_.slewRate, config_.slewRate);
-        // Compared against the same expression it was clamped from, so an
-        // unlimited step can't be flagged by a rounding difference.
+        // compare against the same expression it was clamped from, so rounding can't flag it
         if (delta != output - prevOutput_) flags |= PidStep::kSlewLimited;
         output = prevOutput_ + delta;
     }
@@ -83,12 +75,8 @@ double PID::update(double target, double measurement, double dtS) {
     prevOutput_ = output;
     hasPrev_ = true;
 
-    // Recorded after the fact, from the same inputs, rather than by splitting
-    // the output expression above into named terms: that expression is left
-    // exactly as it was, so observing a PID can't perturb its math by even a
-    // rounding step (a compiler may contract `a*b + c*d` differently from
-    // `t1 + t2`). The terms can therefore differ from rawOutput in the last
-    // bit; nothing downstream needs them to agree exactly.
+    // work out the terms separately from the output expression above, so observing a PID can't
+    // change its math by even a rounding step. They can differ from rawOutput in the last bit
     lastStep_ = PidStep{
         .target = target,
         .measurement = measurement,

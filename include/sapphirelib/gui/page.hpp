@@ -1,74 +1,76 @@
-/**
- * \file sapphirelib/gui/page.hpp
- *
- * The extension point for SapphireLib's brain-screen GUI: implement this to
- * add a tab to Gui, whether it's one of SapphireLib's own default pages
- * (HomePage, AutonSelectorPage, OdometryPage) or a team's custom one.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include "liblvgl/lvgl.h"
 
 namespace sapphirelib::gui {
 
-/// Sets a label's text only if it actually differs from what's already
-/// there. lv_label_set_text() unconditionally reallocates the label's text
-/// buffer and invalidates the object, so LVGL redraws that region on its
-/// next refresh even when the new text is byte-identical to the old. A page
-/// that reformats the same numbers every tick (which is most of them) would
-/// otherwise keep the whole screen in a permanent redraw loop; the V5's
-/// 480x240 ARGB8888 surface makes that expensive enough to feel. Prefer this
-/// over lv_label_set_text() everywhere in a Page::update().
+/**
+ * @brief Set a label's text, only if it changed
+ *
+ * lv_label_set_text() redraws even when the text is the same, and a page that reformats the same
+ * numbers every tick would keep the screen redrawing forever. Use this in every Page::update()
+ *
+ * @param label the label
+ * @param text the new text
+ */
 void setLabelText(lv_obj_t* label, const char* text);
 
-/// One tab's worth of brain-screen UI. Subclass this for anything Gui
-/// should show — a couple of custom pages fit comfortably alongside
-/// SapphireLib's defaults on the tab bar.
+/**
+ * @brief One tab of brain screen UI. Subclass it for your own pages
+ *
+ * @b Example
+ * @code {.cpp}
+ * class LiftPage : public sapphirelib::gui::Page {
+ * public:
+ *     const char* title() const override { return "Lift"; }
+ *     void build(lv_obj_t* container) override { label_ = lv_label_create(container); }
+ *     void update() override {
+ *         char text[32];
+ *         std::snprintf(text, sizeof(text), "lift: %.0f", lift.position());
+ *         sapphirelib::gui::setLabelText(label_, text);
+ *     }
+ *
+ * private:
+ *     lv_obj_t* label_ = nullptr;
+ * };
+ * @endcode
+ */
 class Page {
 public:
     virtual ~Page() = default;
 
-    /// Short label shown on the page's tab. Keep it short — there's not
-    /// much horizontal room across a handful of tabs on a 480px-wide
-    /// screen.
+    /**
+     * @brief Get the tab's label. Keep it short
+     */
     virtual const char* title() const = 0;
 
-    /// Builds this page's widgets inside `container` (the tab's content
-    /// area, already sized and positioned by the tabview). Called exactly
-    /// once, when the page is registered with Gui::addPage(), regardless of
-    /// whether the page is the active tab yet — LVGL keeps every tab's
-    /// content alive, not just the visible one.
+    /**
+     * @brief Build the page's widgets. Called once, when the page is added
+     *
+     * @param container the tab's content area
+     */
     virtual void build(lv_obj_t* container) = 0;
 
-    /// Called on Gui's refresh timer (see Gui::start()) while this page is
-    /// the active tab — plus once more on the tick it becomes active, so it
-    /// never renders a frame of stale data. Keep it cheap (label text
-    /// updates, not expensive computation).
+    /**
+     * @brief Refresh the page. Called on the Gui's timer while the tab is showing
+     *
+     * Keep it cheap: label updates, not heavy work
+     */
     virtual void update() {}
 
-    /// Override to return true if this page must keep running update() even
-    /// while a different tab is showing. Off by default: a hidden page's
-    /// widgets aren't on screen, so refreshing them is pure cost, and with
-    /// several tabs registered that dominates the GUI's steady-state load.
-    ///
-    /// Say true only for a page whose update() has a side effect beyond its
-    /// own widgets — DiagnosticsPage is the built-in example, since it
-    /// raises Gui::showWarning()'s screen-wide banner and a sensor coming
-    /// loose shouldn't go unnoticed just because the driver is looking at
-    /// another tab. A page that says true should throttle itself (see
-    /// DiagnosticsPage's poll interval) rather than lean on Gui's timer
-    /// period.
+    /**
+     * @brief Whether update() must keep running while another tab is showing. false by default
+     *
+     * Only for pages whose update() does something beyond their own widgets, like DiagnosticsPage
+     * raising the warning banner. Such a page should throttle itself
+     */
     virtual bool updatesWhenHidden() const { return false; }
 
-    /// True while this page runs a routine that drives the robot on its own
-    /// — a calibration spin, a tuning run. Driver control should skip
-    /// commanding the drivetrain while Gui::anyPageBusy() is true: a driver
-    /// loop keeps commanding the same motors every tick (even with centered
-    /// sticks) and would fight the routine. Called from other tasks, so
-    /// read an atomic here, never a widget.
+    /**
+     * @brief Whether the page is running a routine that drives the robot, like a calibration spin
+     *
+     * @note called from other tasks, so read an atomic here, never a widget
+     */
     virtual bool isBusy() const { return false; }
 };
 

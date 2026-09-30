@@ -6,9 +6,7 @@
 namespace sapphirelib::mechanism {
 
 PresetLadder::PresetLadder(std::vector<PresetTable> tables) : tables_(std::move(tables)) {
-    // Sanitized once here so no query below ever has to handle an empty
-    // table (or no tables) — an out-of-range index in a per-tick function is
-    // a crash mid-match, not an error message.
+    // cleaned up once here, so no query ever has to handle an empty table
     if (tables_.empty()) tables_.push_back({.name = "", .positions = {}});
     for (PresetTable& table : tables_) {
         if (table.positions.empty()) table.positions.push_back(0.0);
@@ -28,8 +26,7 @@ void PresetLadder::nextTable() { selectTable(table_ + 1); }
 
 void PresetLadder::selectTable(std::size_t index) {
     table_ = index % tables_.size();
-    // The level carries over (moving to the new table's position for it),
-    // capped if the new table has fewer levels.
+    // the level carries over, capped if the new table has fewer levels
     level_ = std::min(level_, maxLevel());
 }
 

@@ -1,11 +1,3 @@
-/**
- * \file sapphirelib/gui/odometry_page.hpp
- *
- * SapphireLib's default pose-visualization page.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -19,60 +11,66 @@
 
 namespace sapphirelib::gui {
 
-/// Numeric x/y/heading readout plus a small live position-and-heading
-/// indicator on a scaled field rectangle. Optionally also an auto-offset-
-/// calibration button — see enableOffsetCalibration().
+/**
+ * @brief Pose readout and a live field view, with an optional tracking wheel offset calibration
+ *
+ * @b Example
+ * @code {.cpp}
+ * gui.addPage(std::make_unique<sapphirelib::gui::OdometryPage>(odometry()));
+ * @endcode
+ */
 class OdometryPage : public Page {
 public:
-    /// `odometry` must outlive this page. `fieldWidthIn`/`fieldHeightIn`
-    /// default to a 12x12ft VRC field (144in square) — override for a
-    /// different game/field size.
+    /**
+     * @brief Construct a new OdometryPage
+     *
+     * @param odometry the odometry to show. Must outlive the page
+     * @param fieldWidthIn field width, in inches. 144 by default
+     * @param fieldHeightIn field height, in inches. 144 by default
+     */
     explicit OdometryPage(odom::Odometry& odometry, double fieldWidthIn = 144.0,
                           double fieldHeightIn = 144.0);
 
-    /// Adds a "Calibrate Offsets" button that automates
-    /// odom::calibrateTrackingWheelOffsetIn(): spins the chassis in place
-    /// for `turns` full rotations (negative spins the other way) — tracked
-    /// via `imu`'s cumulative heading, so the exact spin speed doesn't
-    /// matter — while recording how far each tracking wheel travels over
-    /// that same rotation, then applies
-    /// the computed offset(s) directly to the live Odometry passed to the
-    /// constructor. Pass nullptr for whichever wheel isn't wired up
-    /// (matching Odometry::Sensors) to skip calibrating that axis; passing
-    /// both nullptr makes the button a no-op. `verticalWheel`/
-    /// `horizontalWheel` should be the same TrackingWheel objects given to
-    /// that Odometry's Sensors — reading a sensor from two places is safe,
-    /// only *commanding* a device from more than one place would conflict.
-    ///
-    /// `setSpin` drives the chassis purely in place given a normalized
-    /// [-1, 1] turn command — e.g.
-    /// `[&](double turn){ drivetrain.holonomic(0.0, 0.0, turn); }` — so this
-    /// page doesn't depend on any concrete drivetrain type. It's called
-    /// with 0.0 to stop once the target rotation is reached.
-    ///
-    /// Runs on a background task, like Run Test/Auto-Tune elsewhere in the
-    /// GUI, so the screen doesn't freeze for the several seconds a
-    /// calibration spin takes. Must be called before this page is passed to
-    /// Gui::addPage() (which is when build() actually creates the button).
+    /**
+     * @brief Add a "Calibrate Offsets" button that measures the tracking wheel offsets
+     *
+     * Spins the chassis in place for `turns` turns, records how far each tracking wheel travels,
+     * and applies the offsets to the odometry (see odom::calibrateTrackingWheelOffsetIn()). Runs on
+     * a background task, so the screen doesn't freeze. Must be called before the page is added to
+     * the Gui
+     *
+     * @param imu measures the rotation
+     * @param verticalWheel the odometry's vertical wheel, or nullptr to skip it
+     * @param horizontalWheel the odometry's horizontal wheel, or nullptr to skip it
+     * @param setSpin spins the chassis in place, given a turn command from -1 to 1. Called with 0
+     * to stop
+     * @param spinPower turn command for the spin. 0.35 by default
+     * @param turns how many turns to spin. Negative spins the other way. 8 by default
+     *
+     * @b Example
+     * @code {.cpp}
+     * auto page = std::make_unique<sapphirelib::gui::OdometryPage>(odometry());
+     * page->enableOffsetCalibration(drivetrain().imu(), &verticalWheel, &horizontalWheel,
+     *                               [](double turn) { drivetrain().holonomic(0, 0, turn); });
+     * gui.addPage(std::move(page));
+     * @endcode
+     */
     void enableOffsetCalibration(sensors::Imu& imu, const odom::TrackingWheel* verticalWheel,
                                  const odom::TrackingWheel* horizontalWheel,
                                  std::function<void(double)> setSpin, double spinPower = 0.35,
                                  double turns = 8.0);
 
-    /// True from the moment "Calibrate Offsets" is tapped until the spin
-    /// finishes and the offset(s) are applied. Driver-control code (e.g.
-    /// opcontrol()'s joystick loop) should skip calling
-    /// holonomic()/holonomicFieldCentric() while this is true — those calls
-    /// unconditionally command the same motors the calibration spin is
-    /// using, so a concurrent driver-control loop (which keeps running
-    /// whenever there's no competition switch, even with centered sticks)
-    /// will fight it: the spin twitches once, then gets overwritten back
-    /// toward zero on the driver-control loop's next tick, and the
-    /// calibration hangs forever waiting for rotation that's no longer
-    /// happening.
+    /**
+     * @brief Whether a calibration spin is running
+     *
+     * Driver control must not command the drivetrain meanwhile, or it fights the spin and the
+     * calibration never finishes. See Gui::anyPageBusy()
+     */
     bool isCalibrating() const;
 
-    /// Busy for as long as isCalibrating() — see Page::isBusy().
+    /**
+     * @brief Busy while calibrating. See Page::isBusy()
+     */
     bool isBusy() const override { return isCalibrating(); }
 
     const char* title() const override;
@@ -94,24 +92,18 @@ private:
     std::int32_t fieldViewWidthPx_ = 0;
     std::int32_t fieldViewHeightPx_ = 0;
 
-    /// The heading indicator's endpoints. This has to be a member, not an
-    /// update() local: lv_line_set_points() stores only the *address* of the
-    /// array and dereferences it later, whenever LVGL next redraws the line
-    /// (see its doc comment — "the array needs to be alive while the line
-    /// exists"). Handing it a stack array left the line pointing at a dead
-    /// frame, so it drew from whatever happened to be on the stack by then.
+    // the heading line's endpoints. A member, not a local: lv_line_set_points() keeps only the
+    // array's address and reads it on every redraw
     lv_point_precise_t headingPoints_[2] = {};
 
-    /// Last pixel position actually pushed to robotDot_/headingLine_, so a
-    /// pose that hasn't moved far enough to change a pixel doesn't
-    /// re-invalidate them. Starts at a coordinate no field position maps to,
-    /// so the first update() always draws.
+    // the last pixels drawn, so a pose that hasn't moved a pixel doesn't redraw. Start somewhere
+    // no position maps to, so the first update always draws
     std::int32_t lastDotX_ = INT32_MIN;
     std::int32_t lastDotY_ = INT32_MIN;
     std::int32_t lastTipX_ = INT32_MIN;
     std::int32_t lastTipY_ = INT32_MIN;
 
-    // --- Offset calibration — see enableOffsetCalibration() ---
+    // offset calibration, see enableOffsetCalibration()
     sensors::Imu* calibImu_ = nullptr;
     const odom::TrackingWheel* calibVertical_ = nullptr;
     const odom::TrackingWheel* calibHorizontal_ = nullptr;

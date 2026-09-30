@@ -8,7 +8,7 @@ namespace sapphirelib::diag {
 
 namespace {
 
-/// Smart ports on a V5 brain.
+// smart ports on a V5 brain
 constexpr int kMaxPort = 21;
 
 pros::c::v5_device_e_t expectedRegistryType(DeviceKind kind) {
@@ -41,17 +41,14 @@ std::string deviceTypeName(pros::c::v5_device_e_t type) {
 } // namespace
 
 CheckResult runCheck(const SensorCheck& check) {
-    // Caught here because the conversion below would wrap it: port 0 would
-    // become registry port 255 and report "an unrecognized device", which
-    // reads like a wiring fault instead of a typo in the check list.
+    // caught here, since the conversion below would turn port 0 into 255 and report a wiring
+    // fault instead of a typo
     const int portNumber = std::abs(check.port);
     if (portNumber < 1 || portNumber > kMaxPort) {
         return CheckResult{check.label, check.port, false, "invalid port (must be 1-21)"};
     }
 
-    // SapphireLib ports are 1-21 (matching the brain's port labels) with
-    // sign indicating motor reversal; the device registry is 0-20 and
-    // doesn't care about reversal.
+    // our ports are 1-21 with the sign for reversal; the registry is 0-20
     const std::uint8_t zeroIndexedPort = static_cast<std::uint8_t>(portNumber - 1);
     const pros::c::v5_device_e_t actual = pros::c::registry_get_plugged_type(zeroIndexedPort);
     const pros::c::v5_device_e_t expected = expectedRegistryType(check.expected);

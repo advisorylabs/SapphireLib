@@ -20,26 +20,18 @@ constexpr std::uint32_t kLoopDelayMs = 10;
 
 constexpr const char* kNoOdometry = "no odometry - call setOdometry() first, or pass one";
 
-/// Full motor voltage. holonomic() takes normalized [-1, 1] sticks while
-/// holonomicVolts() and the PIDs work in volts; this is the scale between
-/// them in DriverInputMode::voltage.
+// full motor voltage: the scale between -1 to 1 sticks and volts in DriverInputMode::voltage
 constexpr double kFullScaleVolts = 12.0;
 
-/// Stick magnitude treated as centered in DriverInputMode::velocity — see
-/// stickVolts().
+// stick magnitude that counts as centered in DriverInputMode::velocity, see stickVolts()
 constexpr double kVelocityModeDeadband = 0.03;
 
-/// A gap longer than this between heading-hold calls means the driver loop
-/// wasn't running — an autonomous routine, a PID tuner test, a calibration
-/// spin — and whatever heading was being held belongs to before that, not
-/// now. Generous next to a 10-20ms driver loop, short next to any of those
-/// interruptions.
+// a gap this long between heading hold calls means driver control wasn't running (autonomous,
+// a tuner test, a calibration spin), so the held heading is stale
 constexpr double kHeadingHoldResumeGapS = 0.35;
 
-/// How often motor temperatures are actually re-read. A V5 motor takes tens
-/// of seconds to move a degree under load, so polling this near the 100Hz
-/// rate setWheelVoltages() runs at would be six device reads per tick for a
-/// number that hasn't changed.
+// how often motor temperatures are re-read. They change over tens of seconds, so there's no
+// point reading them at 100Hz
 constexpr std::uint32_t kThermalPollIntervalMs = 500;
 
 struct WheelMix {
@@ -49,16 +41,14 @@ struct WheelMix {
     double backRight;
 };
 
-/// Standard mecanum/X-drive mixing equations. `throttle`/`strafe`/`turn`
-/// share units (either normalized [-1, 1] driver input, or PID output volts
-/// — the caller decides); the result is in those same units, unclamped.
+// mecanum/X-drive mixing. The inputs share units (sticks or volts) and so does the result,
+// unclamped
 WheelMix mixHolonomic(double throttle, double strafe, double turn) {
     return {throttle + strafe + turn, throttle - strafe - turn, throttle - strafe + turn,
             throttle + strafe - turn};
 }
 
-/// Logs a motion's `end` event (see docs/TELEMETRY_FORMAT.md) and hands its
-/// result back, so every way out of a motion reads `return finishMotion(...)`.
+// log a motion's end event and return its result
 motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& result) {
     telemetry::event("motion", "end,%s,reason=%s,error=%.3f,ms=%u", kind,
                      motion::exitReasonName(result.reason), result.finalError,
@@ -66,10 +56,8 @@ motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& 
     return result;
 }
 
-/// For a motion that can't start at all (no odometry to read, an empty
-/// path): says why on the terminal, and still logs a start/end pair — the
-/// start with no parameters — so a telemetry log shows the motion was asked
-/// for and why nothing happened.
+// for a motion that can't start (no odometry, an empty path): print why, and still log a
+// start/end pair so the log shows it was asked for
 motion::MotionResult abortMotion(const char* kind, const char* why) {
     SAPPHIRELIB_LOG_ERROR("motion", "%s: %s", kind, why);
     telemetry::event("motion", "start,%s", kind);
@@ -100,16 +88,12 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
         middleLeft_.emplace(middleLeftPorts, gearset);
         middleRight_.emplace(middleRightPorts, gearset);
 
-        // Center wheels coast whenever they're not actively driving,
-        // turning, or correcting drift — see setWheelVoltages().
+        // center wheels coast when they aren't driving, turning, or correcting drift
         middleLeft_->setBrakeMode(BrakeMode::coast);
         middleRight_->setBrakeMode(BrakeMode::coast);
     }
 
-    // sensors::Imu's constructor already blocks until IMU calibration
-    // finishes, so the heading (used here and by
-    // driveDistance()/turnToHeading()/headingDeg()) is valid as soon as
-    // this constructor returns.
+    // sensors::Imu's constructor already waited for calibration, so the heading is valid here
     fieldHeadingZeroDeg_ = rotationHeadingDeg();
 }
 
@@ -163,10 +147,8 @@ double HolonomicDrivetrain::encoderStrafeIn() const {
 }
 
 void HolonomicDrivetrain::refreshThermalFractions() {
-    // Only reached with the Asterisk wheels configured (setWheelVoltages()
-    // returns before this otherwise). Bailing here when the feature is off
-    // keeps six device reads per poll off a chassis that isn't using it —
-    // the fractions stay at their 1.0 defaults, which produce no correction.
+    // only with Asterisk wheels. With thermal compensation off, skip the reads; the fractions stay
+    // at 1, which gives no correction
     if (!asterisk_ || asterisk_->thermalCompensation <= 0.0) return;
 
     const std::uint32_t now = pros::millis();
@@ -180,9 +162,7 @@ void HolonomicDrivetrain::refreshThermalFractions() {
         thermalPowerFraction(backRight_.getTemperatureC()),
     };
 
-    // Averaged, unlike the corners: this one only ever scales the whole
-    // correction down, so which of the two center wheels is hotter doesn't
-    // change what the correction should be, only how much of it to ask for.
+    // averaged, unlike the corners: it only scales the whole correction down
     centerThermalFraction_ = (thermalPowerFraction(middleLeft_->getTemperatureC()) +
                               thermalPowerFraction(middleRight_->getTemperatureC())) /
                              2.0;
@@ -195,17 +175,9 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
     backLeft_.moveVoltage(backLeft);
     backRight_.moveVoltage(backRight);
 
-    // Recover the pure throttle/strafe/turn components from the four
-    // already-mixed corner voltages (see mixHolonomic()): summing all four
-    // cancels strafe and turn, leaving 4x throttle; each cross-combination
-    // below cancels two of the three, leaving 4x the remaining one. This
-    // lets the center wheels react correctly no matter which call site
-    // produced the mix — holonomic() driver input, driveDistance()'s
-    // heading-corrected drive, or turnToHeading()'s turn-only mix.
-    //
-    // For the same reason it's what appliedAxisVolts() reports, which is
-    // why it happens ahead of the Asterisk check below: every chassis gets
-    // a readout, center wheels or not.
+    // recover throttle, strafe, and turn from the four mixed corner voltages (see mixHolonomic()),
+    // so the center wheels react the same whichever call made the mix. It's also what
+    // appliedAxisVolts() reports, so it runs before the Asterisk check
     const double throttleVolts = (frontLeft + frontRight + backLeft + backRight) / 4.0;
     const double strafeVolts = (frontLeft - frontRight - backLeft + backRight) / 4.0;
     const double turnVolts = (frontLeft - frontRight + backLeft - backRight) / 4.0;
@@ -213,11 +185,8 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
 
     if (!asterisk_) return;
 
-    // Feedforward from what the corners are failing to deliver. Computed
-    // from this tick's corner voltages rather than cached, because the same
-    // derating means different things depending on what's being driven —
-    // see refreshThermalFractions(). Purely additive: with every corner cool
-    // this is zero and the terms below are untouched.
+    // thermal feedforward, worked out from this tick's corner voltages since the same derating
+    // means different things depending on what's being driven. Zero with every corner cool
     refreshThermalFractions();
     const CenterCorrection thermal = centerThermalCorrection(
         CornerValues{frontLeft, frontRight, backLeft, backRight}, thermalFractions_,
@@ -233,11 +202,9 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
         const double headingDeg = imu_.getCumulativeHeadingDeg();
         const double dtS = (now - lastDriftTickMs_) / 1000.0;
 
-        // Only correct while strafing dominates — during forward/back
-        // driving the center wheels are just adding power. Skip a zero dt
-        // and unusually long gaps (e.g. a paused motion) rather than treat
-        // them as a drift spike. The baseline below refreshes on every call
-        // either way, so a stale gap never carries into the next strafe.
+        // only correct while strafing dominates; driving forward, the center wheels are just adding
+        // power. Skip a zero dt and long gaps rather than read them as a drift spike. The baseline
+        // below updates every call either way
         const bool strafingDominant = std::fabs(strafeVolts) > std::fabs(throttleVolts);
         if (asterisk_->driftCorrectionKP != 0.0 && strafingDominant && dtS > 1e-3 && dtS < 1.0) {
             const double verticalOffsetIn = driftOffsetSource_ != nullptr
@@ -256,29 +223,14 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
         lastDriftTickMs_ = now;
     }
 
-    // Differential turn term, on top of the common forward/back term. The
-    // left side takes +turn in mixHolonomic(), and the middle ports use the
-    // same sign convention as the corner ports, so middle-left matching
-    // front-left's sign is what makes these push the turn rather than fight
-    // it. Without this the center wheels saw a zero net command during a
-    // pure turn and just coasted through it; they now carry their share.
-    //
-    // This also means driveDistance()'s heading correction — which reaches
-    // here as a small turn component riding on top of the drive output —
-    // gets the center wheels helping hold the line, not just watching.
-    //
-    // The thermal term rides along here for the same reason it does on the
-    // throttle: a lopsided set of corner temperatures twists the chassis as
-    // well as pushing it off line, and cancelling that twist is differential
-    // work.
+    // differential turn term, on top of the forward term. The middle ports use the corners' sign
+    // convention, so this pushes the turn instead of fighting it. It also puts the center wheels
+    // behind driveDistance()'s heading correction. The thermal term rides along, since uneven
+    // corners twist the chassis as well as pushing it off line
     const double centerTurnVolts =
         turnVolts * asterisk_->turnContribution + thermal.differentialVolts;
 
-    // Clamped per side after summing, since it's the sum that has to fit in
-    // a motor's range. holonomic() normalizes its mix so neither side can
-    // reach the limit from driver input; this bounds the autonomous paths,
-    // whose raw PID volts have always been free to run past it (the corner
-    // wheels clamp the same way, inside moveVoltage()).
+    // clamp each side after summing, since the sum has to fit in the motor's range
     const double leftVolts = std::clamp(centerVolts + centerTurnVolts, -12.0, 12.0);
     const double rightVolts = std::clamp(centerVolts - centerTurnVolts, -12.0, 12.0);
     middleLeft_->moveVoltage(leftVolts);
@@ -288,9 +240,7 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
 void HolonomicDrivetrain::holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts) {
     const WheelMix mix = mixHolonomic(forwardVolts, strafeVolts, turnVolts);
 
-    // Scale the whole mix down (never up) so the largest wheel command never
-    // exceeds full voltage — preserves the requested direction instead of
-    // clipping one wheel and distorting it.
+    // scale the whole mix down (never up) so no wheel goes past 12V, keeping the direction
     const double largest =
         std::max({std::fabs(mix.frontLeft), std::fabs(mix.frontRight), std::fabs(mix.backLeft),
                   std::fabs(mix.backRight), kFullScaleVolts}) /
@@ -305,13 +255,11 @@ double HolonomicDrivetrain::stickVolts(double input, const MotorFeedforward& mod
         return input * kFullScaleVolts;
     }
 
-    // A resting V5 stick still reads a count or two. In voltage mode that's
-    // a harmless millivolt; here it would add the whole kS and creep the
-    // chassis, so centered has to mean exactly zero.
+    // a resting stick still reads a count or two, which would add all of kS and creep the chassis,
+    // so centered has to mean exactly zero
     if (std::fabs(input) < kVelocityModeDeadband) return 0.0;
 
-    // Full stick asks for the speed full voltage reaches, so this mode never
-    // costs top speed — it only reshapes the stick below that.
+    // full stick asks for the speed 12V reaches, so this mode never costs top speed
     const double clamped = std::clamp(input, -1.0, 1.0);
     return model.volts(clamped * model.maxVelocity(kFullScaleVolts));
 }
@@ -324,7 +272,7 @@ void HolonomicDrivetrain::holonomic(double throttle, double strafe, double turn)
 
 double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
     const std::uint32_t now = pros::millis();
-    // Rotation frame, like heldHeadingDeg_ — see heldHeadingDeg().
+    // rotation frame, like heldHeadingDeg_
     const double currentHeadingDeg = rotationHeadingDeg();
     const double dtS = (now - lastHeadingHoldMs_) / 1000.0;
     const bool resuming =
@@ -332,11 +280,8 @@ double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
     lastHeadingHoldMs_ = now;
 
     if (resuming) {
-        // Adopt wherever the chassis is pointing rather than steering it
-        // back to a heading from before whatever just interrupted driver
-        // control. The PID is reset for the same reason: its accumulated
-        // integral and last error describe a situation that no longer
-        // exists.
+        // start from where the chassis points now, not a heading from before whatever interrupted
+        // driver control, and clear the PID's stale state
         heldHeadingDeg_ = currentHeadingDeg;
         headingHoldPID_.reset();
         return 0.0;
@@ -345,9 +290,8 @@ double HolonomicDrivetrain::headingHoldTurnVolts(double turnInput) {
     heldHeadingDeg_ =
         advanceHeldHeadingDeg(heldHeadingDeg_, currentHeadingDeg, turnInput, dtS, headingHold_);
 
-    // Same target/measurement=0 trick as turnToHeading() — see that
-    // function's comment. Explicit dt because a driver loop's period is the
-    // caller's business and needn't match PID::Config::nominalDtS.
+    // same trick as turnToHeading(): the wrapped error as the target, 0 as the measurement.
+    // Explicit dt, since the driver loop's period needn't match nominalDtS
     return headingHoldPID_.update(wrapDegrees180(heldHeadingDeg_ - currentHeadingDeg), 0.0, dtS);
 }
 
@@ -374,9 +318,8 @@ double HolonomicDrivetrain::rotationHeadingDeg() {
 }
 
 void HolonomicDrivetrain::fieldToRobot(double& throttle, double& strafe) {
-    // Rotate the field-relative stick vector into the robot's current frame
-    // by the heading it has picked up since the last field-heading zero —
-    // matches pros::Imu::get_heading()'s clockwise-positive convention.
+    // rotate the field-relative stick into the robot's frame by how far it has turned since the
+    // field heading was zeroed. Clockwise positive, like the IMU
     const double headingDeltaRad =
         wrapDegrees180(rotationHeadingDeg() - fieldHeadingZeroDeg_) * (kPi / 180.0);
     const double cosHeading = std::cos(headingDeltaRad);
@@ -435,9 +378,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
         const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
         const double scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
 
-        // Hold heading the same way moveToPose() does. Translation would
-        // still arrive if the chassis yawed (toLocalFrame() uses the live
-        // heading); this just keeps it from yawing on the way.
+        // hold heading like moveToPose(), so the chassis doesn't yaw on the way
         const double turnOutput =
             turnPID_.update(wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
 
@@ -511,8 +452,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
 motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
                                                      const odom::Odometry& odometry,
                                                      motion::PursuitConfig config) {
-    // Path's constructor doesn't reject an empty list, and .back() below
-    // would be undefined behavior on one.
+    // Path doesn't reject an empty list, and back() below would be undefined on one
     if (path.waypoints().empty()) return abortMotion("followPath", "empty path");
 
     telemetry::event("motion",
@@ -531,8 +471,8 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
         const double distToFinalIn = std::hypot(finalPoint.xIn - pose.xIn, finalPoint.yIn - pose.yIn);
         if (distToFinalIn <= config.finalApproachIn) break;
 
-        // Checked after the distance, so reaching the final approach on the
-        // same tick the timer runs out still gets the settled stop there.
+        // check the timeout after the distance, so reaching the final approach on the same tick
+        // still gets the settled stop
         const std::uint32_t pursuitMs = pros::millis() - startMs;
         if (config.timeoutMs > 0 && pursuitMs >= config.timeoutMs) {
             stop();
@@ -559,12 +499,10 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
         pros::delay(kLoopDelayMs);
     }
 
-    // Keep holding the path's starting heading through the final approach,
-    // rather than re-capturing whatever the chassis yawed to on the way.
+    // keep holding the path's starting heading through the final approach
     motion::MotionResult result = moveToPointHolding(finalPoint.xIn, finalPoint.yIn,
                                                      holdHeadingDeg, odometry, config.finalExit);
-    // The final approach decides how the path ended, but the time is the
-    // whole path's.
+    // the final approach decides how the path ended, but the time covers the whole path
     result.elapsedMs = pros::millis() - startMs;
     return finishMotion("followPath", result);
 }
@@ -592,14 +530,11 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
                      inches, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
 
-    // Rotation frame: only the drift from here matters, and a setPose() from
-    // another task mustn't read as a sudden heading error.
+    // rotation frame, so a setPose() from another task doesn't look like a heading error
     const double startHeading = rotationHeadingDeg();
 
-    // Measured from wherever the encoders already read instead of taring
-    // them. A tare is device-level, so it would also zero any
-    // MotorGroupTrackingWheel on these motors and jump the odometry pose
-    // back by everything driven so far.
+    // measure from where the encoders read now instead of taring them. A tare would also zero
+    // any MotorGroupTrackingWheel on these motors and make odometry jump
     const double startDegrees = cornerAverageDegrees();
     drivePID_.reset();
 
@@ -651,8 +586,8 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
     while (true) {
         const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
 
-        // Same target/measurement=0 trick as TankDrivetrain::turnToHeading —
-        // see that function's comment for why.
+        // the PID doesn't know heading wraps at 360, so pass the wrapped error as the target and 0
+        // as the measurement
         const double output = turnPID_.update(error, 0.0);
 
         const WheelMix mix = mixHolonomic(/*throttle=*/0.0, /*strafe=*/0.0, output);
@@ -683,12 +618,10 @@ void HolonomicDrivetrain::stop(BrakeMode mode) {
     backLeft_.brake();
     backRight_.brake();
 
-    // Braking commands no voltage, so appliedAxisVolts() shouldn't keep
-    // reporting the last tick of whatever motion just ended.
+    // braking commands no voltage, so stop reporting the last motion's volts
     recordAppliedVolts(0.0, 0.0, 0.0);
 
-    // Center wheels keep their own permanent coast brake mode (set at
-    // construction) regardless of `mode` — see AsteriskConfig.
+    // the center wheels always coast, whatever mode is passed in
     if (asterisk_) {
         middleLeft_->brake();
         middleRight_->brake();

@@ -1,12 +1,3 @@
-/**
- * \file sapphirelib/gui/gui.hpp
- *
- * Branded, tab-based UI for the V5 brain screen — SapphireLib's default
- * replacement for LLEMU.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstddef>
@@ -20,61 +11,76 @@
 
 namespace sapphirelib::gui {
 
-/// Entirely opt-in: sapphirelib::initialize() never touches the screen, so
-/// a team that wants their own UI (or none) just never constructs a Gui —
-/// nothing else in the library depends on it. Add SapphireLib's default
-/// pages (HomePage, AutonSelectorPage, OdometryPage) and/or your own Page
-/// subclasses via addPage(); a handful of tabs fit comfortably across the
-/// screen.
+/**
+ * @brief Tab-based UI for the brain screen, with a branded header
+ *
+ * Optional: sapphirelib::initialize() never touches the screen. Add SapphireLib's pages (HomePage,
+ * AutonSelectorPage, OdometryPage, ...) or your own with addPage()
+ *
+ * @b Example
+ * @code {.cpp}
+ * void initialize() {
+ *     // first, so the header shows while the IMU calibrates
+ *     static sapphirelib::gui::Gui gui("SapphireLib - 1234A");
+ *     gui.addPage(std::make_unique<sapphirelib::gui::HomePage>(&drivetrain().imu()));
+ *     gui.addPage(std::make_unique<sapphirelib::gui::OdometryPage>(odometry()));
+ *     gui.start();
+ * }
+ * @endcode
+ */
 class Gui {
 public:
-    /// `brandText` is shown in a persistent header above the tabs, e.g.
-    /// "SapphireLib - 96671H". Builds the header and an empty tabview
-    /// immediately on lv_screen_active() — call addPage() to populate it,
-    /// then start() to bring it to life. Only one Gui should exist at a
-    /// time (it takes over the whole active screen).
+    /**
+     * @brief Construct a new Gui. Only one should exist, since it takes over the whole screen
+     *
+     * @param brandText text shown in the header above the tabs, e.g. "SapphireLib - 96671H"
+     */
     explicit Gui(const char* brandText);
 
-    /// Registers a page: adds it as a new tab and builds its widgets
-    /// immediately (see Page::build()). Takes ownership. Safe to call
-    /// before or after start(), and safe to call more than once.
+    /**
+     * @brief Add a page as a new tab, building its widgets right away
+     *
+     * Safe before or after start()
+     *
+     * @param page the page. The Gui takes ownership
+     */
     void addPage(std::unique_ptr<Page> page);
 
-    /// Starts refreshing pages' update() on an LVGL timer — not a separate
-    /// PROS task. LVGL isn't thread-safe: every callback that touches a
-    /// widget has to run from the same context LVGL's own display task
-    /// already drives its timers from, which is exactly what
-    /// lv_timer_create() guarantees and a raw pros::Task wouldn't. Only the
-    /// first call starts the timer — later calls do nothing; addPage() still
-    /// works for pages added after start().
-    ///
-    /// Only the *visible* tab's page is refreshed each tick (plus any page
-    /// that opts in via Page::updatesWhenHidden()). Every registered page's
-    /// widgets stay alive whether or not its tab is showing, so refreshing
-    /// the hidden ones just burns CPU redrawing pixels nobody can see — with
-    /// SapphireLib's five default pages that was most of the GUI's cost.
+    /**
+     * @brief Start refreshing pages on an LVGL timer
+     *
+     * An LVGL timer, not a PROS task, since LVGL isn't thread-safe. Only the visible tab refreshes
+     * (plus pages that opt in with Page::updatesWhenHidden()). Only the first call starts the timer
+     *
+     * @param periodMs refresh period, in milliseconds. 50 by default
+     */
     void start(std::uint32_t periodMs = 50);
 
-    /// Replaces the header with a warning banner (red background, `text`
-    /// in place of the brand text) — visible on every tab, not just
-    /// whichever page noticed the problem. Meant for things a driver
-    /// shouldn't be able to miss, like a diag::DiagnosticsPage finding a
-    /// sensor in the wrong port. Safe to call repeatedly (e.g. every
-    /// update() tick) — it doesn't flicker if the text hasn't changed.
+    /**
+     * @brief Replace the header with a red warning banner, visible on every tab
+     *
+     * For things a driver shouldn't miss, like a sensor in the wrong port. Safe to call every tick
+     *
+     * @param text the warning
+     */
     void showWarning(const std::string& text);
 
-    /// Restores the header to the normal brand text/color.
+    /**
+     * @brief Restore the normal header
+     */
     void clearWarning();
 
-    /// True while any registered page is running a routine that drives the
-    /// robot on its own — see Page::isBusy(). Driver control should skip
-    /// commanding the drivetrain while this is true, so a new page that
-    /// drives the chassis is covered without anyone remembering to add it
-    /// to a hand-written check.
-    ///
-    /// Callable from any task (opcontrol()'s loop, say): it only reads each
-    /// page's own thread-safe flag. Not while pages are still being added,
-    /// though — build the screen first, as initialize() does.
+    /**
+     * @brief Whether any page is running a routine that drives the robot (see Page::isBusy())
+     *
+     * Driver control should skip commanding the drivetrain while this is true. Safe from any task,
+     * once the pages are added
+     *
+     * @b Example
+     * @code {.cpp}
+     * if (!gui.anyPageBusy()) drivetrain().arcade(throttle, turn);
+     * @endcode
+     */
     bool anyPageBusy() const;
 
 private:

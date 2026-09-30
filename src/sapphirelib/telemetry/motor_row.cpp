@@ -7,7 +7,7 @@ namespace sapphirelib::telemetry {
 
 namespace {
 
-/// pros/error.h's PROS_ERR, spelled out: this file includes no PROS header.
+// PROS_ERR, spelled out, since this file includes no PROS header
 constexpr std::int32_t kProsErr = std::numeric_limits<std::int32_t>::max();
 
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();

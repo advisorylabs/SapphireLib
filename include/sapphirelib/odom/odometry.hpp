@@ -1,13 +1,3 @@
-/**
- * \file sapphirelib/odom/odometry.hpp
- *
- * Background pose tracker built on IMU heading plus zero, one, or two
- * tracking wheels — see the class comment for how the four supported sensor
- * combinations map onto Odometry::Sensors.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <atomic>
@@ -22,87 +12,119 @@
 
 namespace sapphirelib::odom {
 
-/// Supports all four sensor combinations from the roadmap purely through
-/// which TrackingWheel pointers are passed in via Sensors:
-///   - IMU + drive encoders only: vertical = a MotorGroupTrackingWheel, horizontal = nullptr
-///   - IMU + vertical wheel:      vertical = a RotationTrackingWheel,   horizontal = nullptr
-///   - IMU + horizontal wheel:    vertical = a MotorGroupTrackingWheel (forward fallback), horizontal = a RotationTrackingWheel
-///   - IMU + both wheels:         vertical/horizontal = a RotationTrackingWheel each
-/// See computeOdometryDelta() (odometry_math.hpp) for the tracking algorithm
-/// itself.
+/**
+ * @brief Tracks the robot's pose from the IMU and tracking wheels
+ *
+ * Which sensors it uses depends on which tracking wheels you pass in:
+ *   - IMU + drive encoders: vertical = MotorGroupTrackingWheel, horizontal = nullptr
+ *   - IMU + vertical wheel: vertical = RotationTrackingWheel, horizontal = nullptr
+ *   - IMU + horizontal wheel: vertical = MotorGroupTrackingWheel,
+ *     horizontal = RotationTrackingWheel
+ *   - IMU + both wheels: a RotationTrackingWheel for each
+ *
+ * @b Example
+ * @code {.cpp}
+ * sapphirelib::odom::Odometry& odometry() {
+ *     static sapphirelib::odom::RotationTrackingWheel vertical(11, 2.0);
+ *     static sapphirelib::odom::Odometry instance(
+ *         {.imu = &drivetrain().imu(), .vertical = &vertical},
+ *         {.verticalOffsetIn = 0.5});
+ *     return instance;
+ * }
+ * @endcode
+ */
 class Odometry {
 public:
+    /**
+     * @brief The sensors odometry reads from
+     */
     struct Sensors {
-        /// Required — every config needs a heading source. Pass a
-        /// sensors::Imu (not a raw pros::Imu) so heading readings get the
-        /// same multi-turn drift correction as the rest of SapphireLib — if
-        /// you're also using a TankDrivetrain/HolonomicDrivetrain, share its
-        /// imu() rather than constructing a second sensors::Imu on the same
-        /// port.
+        /**
+         * heading source. Required. Share the drivetrain's imu() instead of opening a second one
+         * on the same port
+         */
         sensors::Imu* imu;
 
-        /// Forward/back distance source. nullptr means no forward tracking
-        /// at all (not a supported config — pass a MotorGroupTrackingWheel
-        /// at minimum).
+        /** forward/backward distance source. Required; use a MotorGroupTrackingWheel at least */
         TrackingWheel* vertical = nullptr;
 
-        /// Left/right distance source. nullptr means no lateral tracking
-        /// (expected for the two configs without a horizontal wheel).
+        /** left/right distance source. nullptr for no sideways tracking */
         TrackingWheel* horizontal = nullptr;
     };
 
-    /// Holds a pros::Mutex internally (via pros::MutexVar), which is
-    /// non-copyable/non-movable, so — like MotorGroup-based classes
-    /// elsewhere in SapphireLib — Odometry can only be constructed in
-    /// place, never passed by value.
-    ///
-    /// Starts at `startPose`, heading included: it sets the Imu's field
-    /// heading to `startPose.headingDeg` (see setPose()), so construction
-    /// re-frames a shared drivetrain Imu too. The default Pose{} makes
-    /// wherever the chassis faces now heading 0.
+    /**
+     * @brief Construct a new Odometry
+     *
+     * Sets the IMU's field heading to startPose.headingDeg (see setPose()), which re-frames a
+     * shared drivetrain IMU too
+     *
+     * @param sensors the IMU and tracking wheels
+     * @param config tracking wheel offsets
+     * @param startPose the starting pose. Pose{} by default, which makes the way the robot faces
+     * now heading 0
+     */
     Odometry(Sensors sensors, OdometryConfig config, Pose startPose = Pose{});
 
-    /// Advances the pose estimate by one update. Call this yourself on your
-    /// own loop, or use startTask() to run it on a background PROS task.
+    /**
+     * @brief Update the pose once. Call this on your own loop, or use startTask()
+     */
     void update();
 
-    /// Thread-safe pose read.
+    /**
+     * @brief Get the pose. Thread-safe
+     *
+     * @return Pose x and y in inches, heading in degrees
+     *
+     * @b Example
+     * @code {.cpp}
+     * sapphirelib::odom::Pose pose = odometry().getPose();
+     * printf("x: %f, y: %f, heading: %f\n", pose.xIn, pose.yIn, pose.headingDeg);
+     * @endcode
+     */
     Pose getPose() const;
 
-    /// Thread-safe pose overwrite — e.g. to seed a known starting
-    /// position/heading at the top of an autonomous routine.
-    ///
-    /// The heading is applied through the Imu (sensors::Imu::setHeadingDeg()),
-    /// not just written into the pose, because a pose heading the IMU didn't
-    /// agree with would be overwritten by the next update(). With odometry
-    /// sharing the drivetrain's imu() (the recommended wiring), that one call
-    /// puts the whole robot in the new frame: turnToHeading(270) now means
-    /// the field's 270, moveToPose() compares against the same heading the
-    /// pose reports, and x/y integrate along the new axes. What it leaves
-    /// alone, on purpose: HolonomicDrivetrain's field-centric "forward" and
-    /// its driver heading hold, which track physical directions (see
-    /// resetFieldHeading()), and every getCumulativeHeadingDeg() reader.
-    ///
-    /// Travel from before the reset never lands in the new pose, even with
-    /// the chassis moving: this takes the wheel and rotation readings the next
-    /// update() measures from, and an update() already in flight when it
-    /// lands is discarded. The heading is stored wrapped to 0-360.
+    /**
+     * @brief Set the pose. Thread-safe
+     *
+     * The heading is set through the IMU, so with odometry sharing the drivetrain's IMU, the whole
+     * robot moves to the new frame: turnToHeading(270) means the field's 270. Field-centric forward
+     * and driver heading hold aren't affected, since they track physical directions. Travel from
+     * before the reset never ends up in the new pose
+     *
+     * @param pose the new pose. The heading is wrapped to 0-360
+     *
+     * @b Example
+     * @code {.cpp}
+     * void autonomous() {
+     *     // the robot starts at (-48, -60), facing 90 degrees
+     *     odometry().setPose({-48, -60, 90});
+     * }
+     * @endcode
+     */
     void setPose(Pose pose);
 
-    /// Thread-safe config read — e.g. to preserve one axis's offset while
-    /// recalibrating the other.
+    /**
+     * @brief Get the tracking wheel offsets. Thread-safe
+     */
     OdometryConfig getConfig() const;
 
-    /// Thread-safe config overwrite — e.g. to apply a freshly calibrated
-    /// tracking wheel offset (see odom::calibrateTrackingWheelOffsetIn() /
-    /// gui::OdometryPage::enableOffsetCalibration()) without reconstructing
-    /// Odometry. Takes effect on the next update().
+    /**
+     * @brief Set the tracking wheel offsets, e.g. after calibrating them. Thread-safe
+     *
+     * Takes effect on the next update(). See calibrateTrackingWheelOffsetIn()
+     *
+     * @param config the new offsets
+     */
     void setConfig(OdometryConfig config);
 
-    /// Starts a background pros::Task that calls update() every `periodMs`.
-    /// Only the first call starts one; later calls do nothing (a second task
-    /// would integrate every wheel delta twice). The task runs for the rest
-    /// of the program, so this Odometry must too — make it static.
+    /**
+     * @brief Start a task that calls update() every periodMs
+     *
+     * Only the first call starts a task; a second would count every movement twice. The task runs
+     * for the rest of the program, so the Odometry must be static
+     *
+     * @param periodMs update period, in milliseconds. 10 by default
+     */
     void startTask(std::uint32_t periodMs = 10);
 
 private:
@@ -110,25 +132,19 @@ private:
     mutable pros::MutexVar<OdometryConfig> config_;
     mutable pros::MutexVar<Pose> pose_;
 
-    /// The previous update's reading in the Imu's *rotation* frame
-    /// (getCumulativeHeadingDeg()), which setPose() never shifts. update()
-    /// adds the current heading offset to it, so the previous heading is
-    /// always expressed in the same frame as the current one — a re-frame
-    /// between two updates then isn't mistaken for a turn.
+    // the last update's rotation reading (getCumulativeHeadingDeg()), which setPose() never
+    // shifts, so a re-frame between two updates isn't mistaken for a turn
     double lastRotationDeg_;
 
-    /// Bumped by every setPose(), so an update() that read its sensors before
-    /// the reset knows to discard its result instead of adding pre-reset
-    /// motion to the new pose.
+    // bumped by setPose(), so an update that read its sensors before the reset throws its result
+    // away
     std::atomic<std::uint32_t> poseGeneration_{0};
 
-    /// The generation the last update() started from — update-task only.
-    /// When it differs from poseGeneration_, a setPose() happened since, and
-    /// the next update measures from the reset readings below instead of its
-    /// own previous ones.
+    // the generation the last update started from (update task only). When it differs from
+    // poseGeneration_, the next update measures from the reset readings below
     std::uint32_t seenGeneration_ = 0;
 
-    /// Rotation and wheel readings setPose() took at the moment of the reset.
+    // readings setPose() took at the reset
     std::atomic<double> resetRotationDeg_{0.0};
     std::atomic<double> resetVerticalIn_{0.0};
     std::atomic<double> resetHorizontalIn_{0.0};

@@ -1,16 +1,3 @@
-/**
- * \file sapphirelib/tuning/characterization_runner.hpp
- *
- * Drives one axis through the voltage ramps and steps
- * tuning::characterizeAxis() (or characterizeMechanism()) needs, recording
- * what it measures — the piece of system identification that has to run on
- * the robot. It reads time and sleeps only through util/clock.hpp, so a host
- * test runs it against a simulated axis with a fake clock
- * (tests/tuning/characterization_runner_test.cpp).
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdint>
@@ -20,117 +7,140 @@
 
 namespace sapphirelib::tuning {
 
-/// Configuration for characterizing one axis — see runCharacterization().
+/**
+ * @brief Settings for characterizing one axis. See runCharacterization()
+ */
 struct CharacterizationConfig {
-    /// Applies a raw open-loop voltage to this axis alone, before wheel
-    /// mixing (e.g. HolonomicDrivetrain::holonomicVolts(v, 0, 0) for
-    /// forward). Must be the same kind of command the axis's PIDs output,
-    /// or the model won't describe what those PIDs are driving.
+    /**
+     * applies a voltage to this axis alone, before wheel mixing, e.g.
+     * holonomicVolts(v, 0, 0) for forward. Must be the same kind of command the axis's PIDs output
+     */
     std::function<void(double)> actuate;
 
-    /// Reads the axis's position in the units its PIDs work in — inches
-    /// along the axis for translation, *cumulative* (unwrapped) degrees for
-    /// turning. Any fixed origin; only differences matter. A non-finite
-    /// reading (a sensor that stopped answering) ends the segment, so the run
-    /// never drives on blind.
+    /**
+     * reads the axis's position in the units its PIDs use: inches for driving, unwrapped degrees
+     * for turning. A reading that isn't finite ends the segment
+     */
     std::function<double()> measure;
 
-    /// Voltage each step jumps to. High enough to reach a good fraction of
-    /// top speed, since that's where kA and delay show most clearly.
+    /** voltage each step jumps to. High enough to reach a good part of top speed. 6 by default */
     double stepVolts = 6.0;
 
-    /// How fast each ramp raises the voltage, and the most it ramps to.
+    /** how fast each ramp raises the voltage, in volts per second. 4 by default */
     double rampVoltsPerS = 4.0;
+    /** the most a ramp goes to, in volts. 8 by default */
     double rampMaxVolts = 8.0;
 
-    /// Each segment stops once it has moved this far from where it started,
-    /// in measure()'s units — the only thing keeping a translation run on
-    /// the field. Leave room for coasting after cut-off. 0 means unlimited
-    /// (fine for turning in place). Ignored by runMechanismCharacterization(),
-    /// which has absolute limits instead.
+    /**
+     * how far each segment can move from where it started, in measure()'s units, to keep the
+     * robot on the field. Leave room for coasting. 0 for no limit (fine for turning)
+     */
     double maxTravel = 0.0;
 
-    /// Hard cap on any one segment's duration.
+    /** longest any one segment can last, in milliseconds. 2500 by default */
     std::uint32_t maxSegmentMs = 2500;
 
-    /// Samples recorded at 0V before each segment's voltage starts, so the
-    /// first moving samples have a full differentiation window behind them.
+    /** time recorded at 0V before each segment, in milliseconds. 100 by default */
     std::uint32_t preRollMs = 100;
 
-    /// Slowest speed, in measure()'s units per second, that counts toward
-    /// the fit — see tuning::fitFeedforward(). Pick something comfortably
-    /// above what sensor noise alone reads while sitting still: a few in/s
-    /// for translation, a few deg/s for turning.
+    /**
+     * slowest speed that counts toward the fit, in units/s. Pick something above what noise reads
+     * while sitting still: a few in/s for driving, a few deg/s for turning. 2 by default
+     */
     double minSpeed = 2.0;
 
-    /// Longest to wait for the axis to stop between segments.
+    /** longest to wait for the axis to stop between segments, in milliseconds. 1500 by default */
     std::uint32_t settleTimeoutMs = 1500;
 
+    /** time between samples, in milliseconds. 10 by default */
     std::uint32_t samplePeriodMs = 10;
 
-    /// Checked before every sample and while waiting for the axis to stop.
-    /// True ends the run at once — 0V (or the hold, for a mechanism), no
-    /// further segments — and the result comes back with
-    /// CharacterizationData::aborted set. For a Stop button, or the robot
-    /// being disabled mid-run. Empty never aborts.
+    /**
+     * checked before every sample. Returning true ends the run right away with
+     * CharacterizationData::aborted set. For a Stop button, or the robot being disabled
+     */
     std::function<bool()> shouldAbort{};
 
-    /// Called once before the run commands anything, and once after its last
-    /// command, however it ended (finished, aborted, a lost sensor). For
-    /// taking an axis's motors away from whatever else commands them for the
-    /// duration — e.g. PositionMechanism::beginExternalControl() and
-    /// endExternalControl() — or for marking the run in a log. Run on the
-    /// characterization task. Either may be empty.
+    /**
+     * called once before the run commands anything. For taking the motors from whatever else
+     * drives them, e.g. PositionMechanism::beginExternalControl(). Runs on the characterization
+     * task
+     */
     std::function<void()> start{};
+    /** called once after the run's last command, however it ended */
     std::function<void()> finish{};
 };
 
-/// Runs, in order: a ramp forward, a ramp back, a step forward, a step back
-/// — alternating direction so a translation axis ends up close to where it
-/// began. Each segment ends at its travel limit or duration cap; between
-/// segments the axis is commanded to 0V and given time to stop. Always
-/// commands 0V before returning. Blocks for several seconds.
+/**
+ * @brief Drive an axis through the ramps and steps characterizeAxis() needs, and record it
+ *
+ * Runs a ramp forward, a ramp back, a step forward, and a step back, so a drive axis ends up near
+ * where it started. Each segment ends at its travel limit or time cap, and the axis stops between
+ * segments. Always ends at 0V
+ *
+ * @note blocks for several seconds
+ *
+ * @param config the axis and run settings
+ * @return CharacterizationData the recorded samples
+ *
+ * @b Example
+ * @code {.cpp}
+ * auto data = sapphirelib::tuning::runCharacterization({
+ *     .actuate = [](double v) { drivetrain().holonomicVolts(0, 0, v); },
+ *     .measure = [] { return drivetrain().imu().getCumulativeHeadingDeg(); },
+ *     .minSpeed = 5.0,
+ * });
+ * @endcode
+ */
 CharacterizationData runCharacterization(const CharacterizationConfig& config);
 
-/// Configuration for characterizing a lift, an arm, or anything else gravity
-/// loads — see runMechanismCharacterization().
+/**
+ * @brief Settings for characterizing a lift, an arm, or anything else gravity loads
+ */
 struct MechanismCharacterizationConfig {
-    /// actuate/measure, the voltages, and the timing, as for a drive axis —
-    /// with "forward" meaning up: a positive voltage must raise the
-    /// measurement. `maxTravel` is ignored; the limits below bound the travel.
+    /**
+     * actuate, measure, the voltages, and the timing, as for a drive axis. A positive voltage
+     * must raise the measurement. maxTravel is ignored; the limits below are used instead
+     */
     CharacterizationConfig axis{};
 
-    /// Absolute travel bounds, in measure()'s units. An upward segment ends
-    /// once the reading reaches upperLimit, a downward one once it reaches
-    /// lowerLimit. The mechanism keeps moving for a moment after that while
-    /// its motors brake, so keep each limit short of its hard stop by more
-    /// than that. Start the run with the mechanism at or near lowerLimit.
+    /**
+     * lowest position, in measure()'s units. A downward segment ends here. Keep it short of the
+     * hard stop, since the mechanism coasts while braking. Start the run near this limit
+     */
     double lowerLimit = 0.0;
+    /** highest position, in measure()'s units. An upward segment ends here */
     double upperLimit = 0.0;
 
-    /// The downward step's volts, as a magnitude; 0 uses axis.stepVolts.
-    /// Gravity helps a lift down, so the same volts reach a much higher
-    /// speed going down than up — often worth asking for less.
+    /**
+     * the downward step's volts, as a positive number. 0 uses axis.stepVolts. Gravity helps a
+     * lift down, so it's often worth asking for less
+     */
     double downStepVolts = 0.0;
 
-    /// Holds the mechanism still: between segments, during each pre-roll,
-    /// and at the end — e.g. motors().brake() with the brake mode set to
-    /// hold. Empty commands 0V instead, which only suits a mechanism that
-    /// stays put unpowered. Samples taken while held record NaN volts, which
-    /// the fit skips (see CharacterizationSample).
+    /**
+     * holds the mechanism still between segments and at the end, e.g. braking with the brake mode
+     * set to hold. Empty commands 0V, which only suits a mechanism that stays put unpowered. Held
+     * samples record NaN volts
+     */
     std::function<void()> hold{};
 
-    /// How gravity loads it — what characterizeMechanism() fits kG against.
+    /** how gravity loads it */
     GravityShape gravity{};
 };
 
-/// A mechanism's characterization: ramp up, ramp down, step up, step down,
-/// each from rest (held) at the far end of the last, each ending at the limit
-/// in its direction or at the duration cap. Up and down both matter — friction
-/// opposes the motion either way while gravity always pulls down, which is
-/// the only thing that separates kS from kG. Holds the mechanism between
-/// segments and before returning. Blocks for several seconds. Feed the
-/// result to characterizeMechanism() with the same `gravity`.
+/**
+ * @brief Drive a mechanism through the ramps and steps characterizeMechanism() needs
+ *
+ * Ramp up, ramp down, step up, step down, each from rest at the end of the last, each ending at
+ * its limit or time cap. Moving both ways is what separates kS from kG. Holds the mechanism between
+ * segments and at the end. Feed the result to characterizeMechanism() with the same gravity
+ *
+ * @note blocks for several seconds
+ *
+ * @param config the mechanism and run settings
+ * @return CharacterizationData the recorded samples
+ */
 CharacterizationData runMechanismCharacterization(const MechanismCharacterizationConfig& config);
 
 } // namespace sapphirelib::tuning

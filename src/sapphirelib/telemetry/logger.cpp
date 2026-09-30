@@ -19,68 +19,58 @@
 #include "sapphirelib/util/log.hpp"
 #include "sapphirelib/version.hpp"
 
-// When the robot program was linked: PROS generates this at every link
-// (common.mk's _pros_ld_timestamp, compiled as C), and libpros carries a weak
-// default. Better than this file's own __DATE__/__TIME__, which only change
-// when logger.cpp itself is recompiled — a log should say which *program
-// build* wrote it.
+// when the robot program was linked. PROS generates this at every link (libpros has a weak
+// default), unlike __DATE__/__TIME__, which only change when this file is recompiled
 extern "C" const char* const _PROS_COMPILE_TIMESTAMP;
 
 namespace sapphirelib::telemetry {
 
 namespace {
 
-/// Ring sizes for the two built-in event channels. Phases change a handful of
-/// times a match; user events come in bursts (a motion's start and end are
-/// 2-3 Records each), so that ring gets more room.
+// ring sizes for the two event channels. Phases change a few times a match; user events come
+// in bursts, so that ring gets more room
 constexpr std::size_t kSystemEventsCapacity = 32;
 constexpr std::size_t kUserEventsCapacity = 128;
 
-/// The channel handed back for a registration that failed. It has no columns,
-/// so record() on it does nothing, and it's never announced or drained.
+// the channel handed back for a failed registration. No columns, never announced or drained
 constexpr std::size_t kNullChannelCapacity = 8;
 
-/// Smallest staging buffer: the header plus a few of the longest `#chan`
-/// lines must fit in an empty one.
+// smallest staging buffer: the header and a few of the longest #chan lines must fit
 constexpr std::size_t kMinStagingBytes = 4096;
 
-/// list_files() buffer — about 600 log names. Held only while opening a file.
+// list_files() buffer, about 600 log names. Only held while opening a file
 constexpr std::size_t kListingBytes = 8192;
 
-/// PROS refuses paths of 128 characters or more (vfs.c's MAX_FILELEN).
+// PROS refuses paths of 128 characters or more
 constexpr std::size_t kMaxPathBytes = 128;
 
-/// Rows one writer pass drains before yielding to its own schedule again.
+// rows one writer pass drains at most
 constexpr std::size_t kMaxRowsPerPass = 4096;
 
-/// How often the writer checks the card is still there while logging, and
-/// waits between attempts while there's no card.
+// how often the writer checks the card is still there, and retries with no card
 constexpr std::uint32_t kCardCheckMs = 1000;
 
-/// Wait after an attempt that found a card but couldn't create a file —
-/// exFAT, full, write-protected. Retrying fopen() in a tight loop only piles
-/// up the small allocation PROS leaks on each failed open.
+// wait after finding a card but failing to create a file (exFAT, full, write-protected). PROS
+// leaks a little on every failed open, so don't retry in a tight loop
 constexpr std::uint32_t kOpenFailedBackoffMs = 5000;
 
-/// Names tried past the listing's highest before giving up on an open.
+// names tried past the listing's highest before giving up
 constexpr int kMaxExistenceChecks = 50;
 
-/// SD faults after which the writer stops reopening files for the rest of the
-/// run. Each fault on a pulled card abandons a FILE (see fault()), so this is
-/// what keeps those leaks bounded.
+// SD faults after which the writer stops reopening files. Each fault on a pulled card abandons
+// a FILE, so this bounds the leak
 constexpr std::uint32_t kMaxFaults = 8;
 
-/// fopen() path of the card's root folder, the fallback for a missing one.
+// the card's root, the fallback for a missing folder
 constexpr const char* kRootDirectory = "/usd";
 
-/// The Logger the free telemetry::event() logs to: the last one started.
+// the Logger the free telemetry::event() logs to: the last one started
 std::atomic<Logger*> activeLogger{nullptr};
 
 static_assert(std::atomic<Logger*>::is_always_lock_free,
               "telemetry::event() reads the active Logger with one atomic load");
 
-/// The `phase` event's message for a competition::get_status() value, e.g.
-/// "autonomous,comp=1,field=1" (docs/TELEMETRY_FORMAT.md).
+// the phase event's message for a competition status, e.g. "autonomous,comp=1,field=1"
 void phaseText(std::uint8_t status, char* out, std::size_t size) {
     const char* mode = (status & COMPETITION_DISABLED) != 0     ? "disabled"
                        : (status & COMPETITION_AUTONOMOUS) != 0 ? "autonomous"
@@ -92,13 +82,12 @@ void phaseText(std::uint8_t status, char* out, std::size_t size) {
 
 } // namespace
 
-// --- Registration ------------------------------------------------------------
+// registration
 
 Logger::Logger(LoggerConfig config) : config_(config) {
     if (config_.directory == nullptr) config_.directory = LoggerConfig{}.directory;
     if (config_.robotName == nullptr) config_.robotName = "";
-    // A zero period would make that task spin; everything else tolerates any
-    // value.
+    // a zero period would make that task spin
     config_.samplePeriodMs = std::max<std::uint32_t>(config_.samplePeriodMs, 1);
     config_.writerPeriodMs = std::max<std::uint32_t>(config_.writerPeriodMs, 1);
     config_.stagingBytes = std::max(config_.stagingBytes, kMinStagingBytes);
@@ -107,7 +96,7 @@ Logger::Logger(LoggerConfig config) : config_(config) {
         ChannelSchema{.id = 0xFFFF, .name = "_", .kind = ChannelKind::samples},
         kNullChannelCapacity);
 
-    // Ids 0 and 1 are always the event channels (the format spec promises it).
+    // ids 0 and 1 are always the event channels
     channels_[0] = std::make_unique<Channel>(
         ChannelSchema{.id = 0, .name = "sys", .kind = ChannelKind::events, .decimals = 0},
         kSystemEventsCapacity, &fileEpoch_);
@@ -141,7 +130,7 @@ Channel& Logger::pid(const char* name, PID& pid, ChannelOptions options) {
     }
     auto probe = std::make_unique<PidProbe>(channel, pid);
     pid.setObserver(probe.get());
-    // Kept (not just the probe) so the destructor can detach it again.
+    // kept so the destructor can detach it
     probes_.emplace_back(&pid, std::move(probe));
     return channel;
 }
@@ -181,9 +170,8 @@ Channel& Logger::pollColumns(const char* name, const char* const* columns, std::
 
 Channel& Logger::pose(const odom::Odometry& odometry, const char* name, std::uint32_t periodMs) {
     return poll(name, {"x", "y", "heading"}, periodMs, [&odometry](double* values) {
-        // getPose() takes Odometry's pose mutex for a moment. That's safe
-        // here: PROS mutexes inherit priority, and neither this task nor the
-        // Odometry task is ever deleted while holding it.
+        // getPose() takes the odometry's mutex briefly. Fine here, since neither task is ever
+        // deleted while holding it
         const odom::Pose pose = odometry.getPose();
         values[0] = pose.xIn;
         values[1] = pose.yIn;
@@ -196,8 +184,7 @@ Channel& Logger::motor(const char* name, std::int8_t port, std::uint32_t periodM
     return pollColumns(
         name, kMotorColumns, kMotorColumnCount, periodMs,
         [port](double* values) {
-            // Six quick reads of state the brain already has cached from the
-            // motor's last status packet; no radio or device round trip.
+            // quick reads of what the brain already has cached from the motor
             motorRow(MotorReadings{.voltageMv = pros::c::motor_get_voltage(port),
                                    .currentMa = pros::c::motor_get_current_draw(port),
                                    .temperatureC = pros::c::motor_get_temperature(port),
@@ -214,8 +201,7 @@ Channel& Logger::addChannelLocked(const char* name, ChannelKind kind, const char
     std::string clean = sanitizeName(name);
     const std::size_t count = channelCount_.load(std::memory_order_relaxed);
 
-    // Channels are matched by name across files, so a second channel with the
-    // same name would silently merge two streams in the app.
+    // channels are matched by name across files, so a duplicate would merge two streams
     for (std::size_t i = 0; i < count; ++i) {
         if (channels_[i]->schema().name == clean) {
             SAPPHIRELIB_LOG_WARN("telemetry",
@@ -248,15 +234,14 @@ Channel& Logger::addChannelLocked(const char* name, ChannelKind kind, const char
     }
 
     channels_[count] = std::make_unique<Channel>(std::move(schema), options.capacity, &fileEpoch_);
-    // Published last: the sampler, writer, and status() only ever look at
-    // entries below the count they loaded.
+    // publish last: the tasks only ever look at entries below the count they loaded
     channelCount_.store(count + 1, std::memory_order_release);
     return *channels_[count];
 }
 
 bool Logger::isNullChannel(const Channel& channel) const { return &channel == nullChannel_.get(); }
 
-// --- Producers ---------------------------------------------------------------
+// producers
 
 bool Logger::event(const char* tag, const char* format, ...) {
     std::va_list args;
@@ -267,9 +252,7 @@ bool Logger::event(const char* tag, const char* format, ...) {
 }
 
 bool Logger::vevent(const char* tag, const char* format, std::va_list args) {
-    // On the caller's stack and sized to what one event can carry, so
-    // formatting never touches the heap (newlib's own float formatting
-    // aside — see the header).
+    // on the caller's stack, so formatting never touches the heap
     char message[kMaxEventMessageChars + 1];
     message[0] = '\0';
     if (format != nullptr && std::vsnprintf(message, sizeof(message), format, args) < 0) {
@@ -288,28 +271,24 @@ bool event(const char* tag, const char* format, ...) {
     return logged;
 }
 
-// --- Control -----------------------------------------------------------------
+// control
 
 bool Logger::start() {
     std::lock_guard<pros::Mutex> lock(registrationMutex_);
     if (started_) return false;
     started_ = true;
 
-    // Everything the writer needs up front, so neither task ever allocates
-    // on a schedule.
+    // allocate everything up front, so neither task allocates later
     staging_ = std::make_unique<char[]>(config_.stagingBytes);
     stdioBuffer_ = std::make_unique<char[]>(config_.stagingBytes);
     state_.store(LoggerState::waitingForCard, std::memory_order_release);
     activeLogger.store(this, std::memory_order_release);
 
-    // Below every control loop (8), so recording and polling never preempt
-    // one — and above the writer, whose SD writes can take a couple of
-    // hundred milliseconds that pose sampling shouldn't share.
+    // below every control loop, so polling never preempts one, and above the writer, whose SD
+    // writes can take a couple hundred milliseconds
     sampler_ = std::make_unique<pros::Task>([this] { samplerLoop(); }, TASK_PRIORITY_DEFAULT - 1,
                                             TASK_STACK_DEPTH_DEFAULT, "SL Sampler");
-    // As low as a task can usefully go: it only runs when nothing else wants
-    // the CPU. The ProducerGate reclaim rule depends on every producer being
-    // above this.
+    // as low as a task can usefully go. The ProducerGate reclaim needs every producer above this
     writer_ = std::make_unique<pros::Task>([this] { writerLoop(); }, TASK_PRIORITY_MIN + 1,
                                            TASK_STACK_DEPTH_DEFAULT, "SL Writer");
     return true;
@@ -335,7 +314,7 @@ std::uint32_t Logger::droppedRows() const {
     return dropped;
 }
 
-// --- Sampler task ------------------------------------------------------------
+// sampler task
 
 void Logger::samplerLoop() {
     std::uint32_t wake = pros::millis();
@@ -350,13 +329,10 @@ void Logger::samplerTick() {
     if (status != lastStatus_) {
         char text[48];
         phaseText(status, text, sizeof(text));
-        // Only marked seen once the row went in, so a dropped one is retried
-        // next tick rather than lost.
+        // only marked seen once the row went in, so a dropped one is retried next tick
         if (systemEvents_->recordEvent("phase", text)) lastStatus_ = status;
-        // Raised after the row is committed: the writer takes the request
-        // before it drains, so the pass that acts on it also writes the row.
-        // Entering disabled at the end of a match is on the card moments
-        // later, before anyone can reach the power switch.
+        // raised after the row is committed, so the pass that acts on it also writes the row. The
+        // end of a match is on the card moments after it's disabled
         flushRequested_.store(true, std::memory_order_release);
     }
 
@@ -368,8 +344,7 @@ void Logger::samplerTick() {
     const std::size_t count = polledCount_.load(std::memory_order_acquire);
     for (std::size_t i = 0; i < count; ++i) {
         Polled& source = *polled_[i];
-        // Half a sample period of slack, so a source whose period equals
-        // samplePeriodMs isn't skipped by a tick that ran a millisecond early.
+        // half a period of slack, so a tick that runs a millisecond early doesn't skip a source
         if (source.polledOnce &&
             nowMs - source.lastMs + config_.samplePeriodMs / 2 < source.periodMs) {
             continue;
@@ -384,20 +359,15 @@ void Logger::samplerTick() {
     }
 }
 
-// --- Writer task -------------------------------------------------------------
+// writer task
 //
-// The file is written with stdio, but on the writer's terms: rows are
-// formatted into staging_ and handed to the card in one fwrite() + fflush()
-// per chunk, through a FILE whose stdio buffer (setvbuf()) is exactly as big
-// as staging_. So a chunk is always one write — and on PROS 4.0.7+ every
-// write is also a vexFileSync — and stdio never allocates a buffer of its
-// own. Without that, newlib would split each chunk into BUFSIZ (1KB)
-// writes, a sync apiece.
+// rows are formatted into staging_ and handed to the card in one fwrite() + fflush() per chunk,
+// through a FILE whose stdio buffer is exactly as big as staging_. So each chunk is one write
+// (and one sync), instead of newlib splitting it into 1KB writes
 
 template <typename Format> bool Logger::stage(Format format, bool countsAsRow) {
-    // Two tries: a line that doesn't fit in what's left of the buffer is
-    // formatted again after writing the buffer out — never split across two
-    // writes. The formatters write nothing we count when they return 0.
+    // two tries: a line that doesn't fit is formatted again after writing the buffer out, so it's
+    // never split across two writes
     for (int attempt = 0; attempt < 2 && file_ != nullptr; ++attempt) {
         const std::size_t length = format(staging_.get() + used_, config_.stagingBytes - used_);
         if (length > 0) {
@@ -405,8 +375,8 @@ template <typename Format> bool Logger::stage(Format format, bool countsAsRow) {
             if (countsAsRow) ++fileRows_;
             return true;
         }
-        // Didn't fit even an empty buffer (can't happen at kMinStagingBytes):
-        // skip it rather than stall. Or the write failed, and we've faulted.
+        // didn't fit an empty buffer (can't happen at kMinStagingBytes), so skip it. Or the write
+        // failed, and we've faulted
         if (used_ == 0 || !writeStaged()) return false;
     }
     return false;
@@ -422,9 +392,8 @@ void Logger::writerLoop() {
 
 void Logger::writerPass() {
     const std::size_t count = channelCount_.load(std::memory_order_acquire);
-    // Taken before draining: the sampler commits a phase row and *then*
-    // raises this, so a request seen here guarantees the drain below includes
-    // that row.
+    // taken before draining: the sampler commits a phase row and then raises this, so the drain
+    // below includes that row
     const bool flushNow = flushRequested_.exchange(false, std::memory_order_acq_rel);
 
     manageFile(sapphirelib::millis(), count);
@@ -447,14 +416,13 @@ void Logger::writerPass() {
 
 void Logger::manageFile(std::uint32_t nowMs, std::size_t channelCount) {
     if (file_ == nullptr) {
-        if (faults_ >= kMaxFaults) return; // gave up; see fault()
+        if (faults_ >= kMaxFaults) return; // gave up, see fault()
         if (openBackoffMs_ != 0 && nowMs - lastOpenAttemptMs_ < openBackoffMs_) return;
         lastOpenAttemptMs_ = nowMs;
         tryOpen(channelCount);
         return;
     }
-    // A pulled card doesn't always fail the next write cleanly (that's
-    // undocumented), so look for it directly too.
+    // a pulled card doesn't always fail the next write cleanly, so check for it directly
     if (nowMs - lastCardCheckMs_ >= kCardCheckMs) {
         lastCardCheckMs_ = nowMs;
         if (pros::usd::is_installed() == 0) fault("card removed");
@@ -462,7 +430,7 @@ void Logger::manageFile(std::uint32_t nowMs, std::size_t channelCount) {
 }
 
 void Logger::tryOpen(std::size_t channelCount) {
-    // A fault stays visible (status(), HomePage) until a file opens again.
+    // a fault stays visible until a file opens again
     auto notLogging = [this] {
         if (state_.load(std::memory_order_relaxed) != LoggerState::faulted) {
             state_.store(LoggerState::waitingForCard, std::memory_order_release);
@@ -478,9 +446,8 @@ void Logger::tryOpen(std::size_t channelCount) {
     const OpenResult inFolder = openIn(config_.directory, channelCount, nullptr);
     if (inFolder == OpenResult::opened) return;
 
-    // The folder is missing — or fopen() failed in it, which on PROS usually
-    // means the same thing (a failed open always reports ENFILE, whatever the
-    // cause). The card's root is the fallback, unless that's where we were.
+    // the folder is missing, or fopen() failed in it (which on PROS usually means the same thing).
+    // Fall back to the card's root, unless that's where we were
     if (listingPath(config_.directory) != "/") {
         char note[kMaxPathBytes + 16];
         std::snprintf(note, sizeof(note), "%s,%s",
@@ -509,25 +476,23 @@ void Logger::tryOpen(std::size_t channelCount) {
 
 Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCount,
                                   const char* fallbackNote) {
-    // --- Pick a name: the next index after the highest already there -------
+    // pick a name: the next number after the highest already there
     std::int32_t index = 1;
     {
-        // list_files() wants the path without "/usd" — and NUL-terminated,
-        // which a string_view slice of `directory` may not be.
+        // list_files() wants the path without "/usd", NUL-terminated
         char listPath[kMaxPathBytes];
         const std::string_view view = listingPath(directory);
         if (view.size() >= sizeof(listPath)) return OpenResult::failed;
         listPath[view.copy(listPath, view.size())] = '\0';
 
-        // Zeroed, and filled to one byte short, so it's always terminated.
+        // zeroed and filled to one byte short, so it's always terminated
         auto listing = std::make_unique<char[]>(kListingBytes);
         errno = 0;
         if (pros::usd::list_files(listPath, listing.get(),
                                   static_cast<std::int32_t>(kListingBytes - 1)) == PROS_ERR) {
             if (errno == ENOENT && fallbackNote == nullptr) return OpenResult::folderMissing;
-            // Any other failure: carry on as if the folder were empty. The
-            // existence check below still keeps an old log from being
-            // overwritten.
+            // any other failure: carry on as if the folder were empty. The existence check below
+            // still keeps an old log from being overwritten
             listing[0] = '\0';
         }
         const std::int32_t highest =
@@ -535,9 +500,8 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
         if (highest >= 0) index = highest + 1;
     }
 
-    // Never trust the listing alone before opening with "w", which truncates:
-    // it may have been cut short by its buffer, or name files in a form we
-    // didn't expect. Each name that turns out to exist is skipped.
+    // don't trust the listing alone before opening with "w", which truncates. Skip each name that
+    // turns out to exist
     char path[kMaxPathBytes];
     for (int checks = 0;; ++checks) {
         if (checks >= kMaxExistenceChecks || index > static_cast<std::int32_t>(kMaxLogIndex) ||
@@ -553,19 +517,17 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
         ++index;
     }
 
-    // "w" is the only mode that creates a file here: PROS rejects every
-    // read-write mode, and whether "a" creates one is unverified.
+    // "w" is the only mode that creates a file here; PROS rejects the read-write modes
     std::FILE* file = std::fopen(path, "w");
     if (file == nullptr) return OpenResult::failed;
 
-    // After a fault on a pulled card the old buffer went with the abandoned
-    // FILE (see fault()); this file gets a fresh one.
+    // after a fault the old buffer went with the abandoned FILE, so this file gets a fresh one
     if (!stdioBuffer_) stdioBuffer_ = std::make_unique<char[]>(config_.stagingBytes);
     if (std::setvbuf(file, stdioBuffer_.get(), _IOFBF, config_.stagingBytes) != 0) {
         SAPPHIRELIB_LOG_WARN("telemetry", "setvbuf failed; SD writes will be split up");
     }
 
-    // --- The file is open: reset everything that's per file ----------------
+    // the file is open: reset everything that's per file
     char previousName[sizeof(fileName_)];
     std::memcpy(previousName, fileName_, sizeof(previousName));
     formatLogFileName(fileName_, sizeof(fileName_), static_cast<std::uint32_t>(index));
@@ -582,11 +544,10 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
     fileIndex_.store(index, std::memory_order_relaxed);
     inRootFolder_.store(fallbackNote != nullptr, std::memory_order_relaxed);
     bytesWritten_.store(0, std::memory_order_relaxed);
-    // Every PidProbe sees this at its next step and repeats its C and G rows,
-    // so each file can be read without the one before it.
+    // every PidProbe sees this and repeats its C and G rows, so each file stands on its own
     fileEpoch_.fetch_add(1, std::memory_order_release);
 
-    // --- Header, schemas, and the events that open every file --------------
+    // header, schemas, and the events that open every file
     const std::uint64_t openUs = sapphirelib::micros();
     const FileHeader header{.library = SAPPHIRELIB_VERSION,
                             .kernel = PROS_VERSION_STRING,
@@ -620,8 +581,7 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
     const std::uint32_t nowMs = sapphirelib::millis();
     lastCardCheckMs_ = nowMs;
     lastHealthMs_ = nowMs;
-    // On the card at once, so even a run cut short a moment from now leaves a
-    // readable file. (A failure here faults like any other write.)
+    // write it right away, so even a run cut short leaves a readable file
     if (writeStaged()) SAPPHIRELIB_LOG_INFO("telemetry", "logging to %s", path);
     return OpenResult::opened;
 }
@@ -636,9 +596,7 @@ void Logger::announceChannels(std::size_t channelCount) {
 }
 
 void Logger::drain(std::size_t channelCount) {
-    // A k-way merge on t_us over each channel's oldest row. A head is
-    // refreshed only for the channel just taken from, so one pass merges one
-    // snapshot; rows committed mid-pass wait for the next.
+    // merge the channels by t_us, one snapshot per pass; rows committed mid-pass wait for the next
     const Record* heads[kMaxChannels] = {};
     for (std::size_t i = 0; i < channelCount; ++i) heads[i] = channels_[i]->front();
 
@@ -654,9 +612,8 @@ void Logger::drain(std::size_t channelCount) {
         Channel& channel = *channels_[next];
         const Record& record = *heads[next];
 
-        // An event longer than one Record is its event Record plus
-        // continuations, committed together — so they're all here, and are
-        // taken together.
+        // a long event is its event Record plus continuations, committed together, so take them
+        // together
         const Record* parts[kMaxEventRecords] = {&record};
         std::size_t taken = 1;
         if (record.kind == RecordKind::event) {
@@ -667,8 +624,7 @@ void Logger::drain(std::size_t channelCount) {
             }
         }
 
-        // A continuation at the front with no event before it (only possible
-        // after a ring resync) has no row of its own; it's just discarded.
+        // a continuation with no event before it (only after a ring resync) is discarded
         if (record.kind != RecordKind::eventContinued) {
             bool staged = false;
             if (file_ != nullptr) {
@@ -723,8 +679,7 @@ void Logger::writeHealth(std::size_t channelCount) {
     healthWriteSumUs_ = 0;
     healthWrites_ = 0;
 
-    // D rows only for channels whose counts moved since the last ones in this
-    // file (lastDrops_ is cleared at each open, so a new file restates them).
+    // D rows only for channels whose counts moved since the last ones in this file
     for (std::size_t i = 0; i < channelCount; ++i) {
         const std::pair<std::uint32_t, std::uint32_t> dropped{channels_[i]->droppedFull(),
                                                               channels_[i]->droppedContended()};
@@ -746,8 +701,7 @@ bool Logger::writeStaged() {
     if (used_ == 0) return true;
 
     const std::uint64_t startUs = sapphirelib::micros();
-    // fwrite() only copies into stdioBuffer_ (the same size, so it never
-    // spills part of it); fflush() is the one write + sync.
+    // fwrite() only copies into the same-size stdio buffer; fflush() is the one write and sync
     const bool ok =
         std::fwrite(staging_.get(), 1, used_, file_) == used_ && std::fflush(file_) == 0;
     const auto us = static_cast<std::uint32_t>(
@@ -782,13 +736,8 @@ void Logger::fault(const char* reason) {
         if (pros::usd::is_installed() != 0) {
             std::fclose(file_);
         } else {
-            // What closing a file on a pulled card does is undocumented, so
-            // the FILE is abandoned instead — one of the VFS's 27 file slots,
-            // leaked (kMaxFaults bounds how many). It still points at
-            // stdioBuffer_, so the buffer is abandoned with it: the next file
-            // gets a fresh one, and nothing that ever walks newlib's open
-            // streams (a stray fflush(NULL)) can push the next file's bytes
-            // through this dead one.
+            // closing a file on a pulled card is undocumented, so abandon the FILE instead
+            // (kMaxFaults bounds the leak). Its buffer goes with it; the next file gets a new one
             static_cast<void>(stdioBuffer_.release());
         }
         file_ = nullptr;

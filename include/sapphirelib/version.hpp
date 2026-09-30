@@ -1,9 +1,3 @@
-/**
- * \file sapphirelib/version.hpp
- *
- * Library version information.
- */
-
 #pragma once
 
 #define SAPPHIRELIB_VERSION_MAJOR 0
@@ -13,7 +7,11 @@
 
 namespace sapphirelib {
 
-/// Returns the library version as a string, e.g. "0.0.1-dev".
+/**
+ * @brief Get the library version
+ *
+ * @return const char* the version string, e.g. "0.1.0"
+ */
 const char* version();
 
 } // namespace sapphirelib

@@ -19,13 +19,11 @@ PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double 
     const double dThetaDeg = wrapDegrees180(headingDeg - lastHeadingDeg);
     const double dThetaRad = dThetaDeg * kDegToRad;
 
-    // Remove each wheel's arc-length contribution from pure rotation,
-    // leaving its true translational contribution.
+    // remove each wheel's arc from turning, leaving its real movement
     const double localForwardIn = verticalDeltaIn - verticalOffsetIn * dThetaRad;
     const double localLateralIn = horizontalDeltaIn - horizontalOffsetIn * dThetaRad;
 
-    // Rotate the local (forward, lateral) displacement into the field frame
-    // using the average heading across this update.
+    // rotate the local movement onto the field using the average heading over the update
     const double avgHeadingRad = (lastHeadingDeg + dThetaDeg / 2.0) * kDegToRad;
     const double cosHeading = std::cos(avgHeadingRad);
     const double sinHeading = std::sin(avgHeadingRad);

@@ -12,22 +12,14 @@ namespace sapphirelib::gui {
 
 namespace {
 
-// Sized to fit the tab content area outright rather than overflow it. The
-// page gets 480x179 (see PidTunerPage's kReadoutX comment for where that
-// number comes from), and the field view starts 24px down under the pose
-// readout — so at the old 170px it ran to y=194 and the bottom ~15px of the
-// field, the half the robot usually starts on, was only reachable by
-// scrolling the tab. 150px squares it away with room to spare, which also
-// lets the container stop being a scroll area at all.
+// sized to fit the 480x179 tab area without scrolling: the field view starts 24px down, so
+// 150px fits with room to spare
 constexpr std::int32_t kFieldViewSizePx = 150;
 constexpr std::int32_t kRobotDotSizePx = 8;
 constexpr std::int32_t kHeadingLineLengthPx = 16;
 
-// Calibration controls sit to the right of the field view rather than below
-// it — the tab content area is only ~179px tall on the V5 brain screen
-// (240px display minus the header and tab bar), barely enough for the field
-// view alone, and touchscreen scrolling isn't reliable enough to rely on to
-// reach anything stacked underneath.
+// calibration controls sit right of the field view, since the tab area is only ~179px tall
+// and touchscreen scrolling isn't reliable
 constexpr std::int32_t kCalibrateColumnX = 4 + kFieldViewSizePx + 10;
 constexpr std::int32_t kCalibrateColumnWidthPx = 480 - kCalibrateColumnX - 4;
 constexpr std::int32_t kCalibrateButtonY = 24;
@@ -59,10 +51,8 @@ bool OdometryPage::isCalibrating() const { return calibrating_.load(); }
 const char* OdometryPage::title() const { return "Odom"; }
 
 void OdometryPage::build(lv_obj_t* container) {
-    // Exact positions, no theme padding to offset them — and nothing here
-    // overflows, so the tab doesn't need to scroll. Dropping the scroll flag
-    // also stops LVGL recomputing this container's scroll extents every time
-    // the robot dot moves.
+    // exact positions with no theme padding, and no scrolling, which also stops LVGL recomputing
+    // scroll extents every time the robot dot moves
     lv_obj_set_style_pad_all(container, 0, 0);
     lv_obj_remove_flag(container, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -79,15 +69,10 @@ void OdometryPage::build(lv_obj_t* container) {
     lv_obj_set_style_border_color(fieldView_, lv_color_hex(0x334155), 0);
     lv_obj_set_style_border_width(fieldView_, 2, 0);
     lv_obj_set_style_radius(fieldView_, 4, 0);
-    // A generic lv_obj picks up the theme's card styling, shadow included.
-    // Nothing here needs one, and a shadow under a container whose child
-    // moves every tick means recomputing it on every redraw.
+    // no card shadow, which would be recomputed every time the dot moves
     lv_obj_set_style_shadow_width(fieldView_, 0, 0);
-    // The field view is a fixed viewport onto the field, not a scroll area.
-    // fieldToScreen() doesn't clamp, so a pose at or past a field edge puts
-    // the robot dot partly outside these bounds — which, on a scrollable
-    // container, makes LVGL recompute the scroll extents every time the dot
-    // moves. Clipping is the behavior we want anyway.
+    // a fixed viewport, not a scroll area. A pose past the field edge puts the dot partly outside,
+    // and clipping it is what we want
     lv_obj_remove_flag(fieldView_, LV_OBJ_FLAG_SCROLLABLE);
 
     robotDot_ = lv_obj_create(fieldView_);
@@ -130,12 +115,9 @@ void OdometryPage::update() {
                                           fieldViewWidthPx_, fieldViewHeightPx_);
     const ScreenPoint tip = headingIndicatorEndpoint(dot.x, dot.y, pose.headingDeg, kHeadingLineLengthPx);
 
-    // Both the dot and the line are repositioned only when they'd actually
-    // land on a different pixel. The field view maps 144in of field across
-    // 150px, so a stationary robot's odometry noise moves it a fraction of a
-    // pixel — and lv_obj_set_pos()/lv_line_set_points() invalidate
-    // unconditionally, which would have LVGL redrawing this view (and the
-    // field rectangle behind it) every single tick for no visible change.
+    // only move the dot and line when they'd land on a different pixel. Odometry noise moves a
+    // still robot a fraction of a pixel, and LVGL redraws on every set_pos() whether it moved or
+    // not
     const bool dotMoved = dot.x != lastDotX_ || dot.y != lastDotY_;
     const bool tipMoved = tip.x != lastTipX_ || tip.y != lastTipY_;
 
@@ -143,8 +125,7 @@ void OdometryPage::update() {
         lv_obj_set_pos(robotDot_, dot.x - kRobotDotSizePx / 2, dot.y - kRobotDotSizePx / 2);
     }
     if (dotMoved || tipMoved) {
-        // headingPoints_ is a member on purpose — lv_line_set_points() keeps
-        // the pointer, not a copy. See its declaration.
+        // headingPoints_ is a member because lv_line_set_points() keeps the pointer, not a copy
         headingPoints_[0] = {static_cast<lv_value_precise_t>(dot.x),
                              static_cast<lv_value_precise_t>(dot.y)};
         headingPoints_[1] = {static_cast<lv_value_precise_t>(tip.x),
@@ -183,20 +164,14 @@ void OdometryPage::runCalibration() {
     calibrating_.store(true);
     calibResultsReady_.store(false);
 
-    // Runs on a background task, not this LVGL-owned callback, so the
-    // multi-second calibration spin doesn't freeze the whole screen — same
-    // pattern as PidTunerPage's Run Test/Auto-Tune. Only ever touches
-    // atomics here, never an LVGL widget directly (LVGL isn't thread-safe);
-    // update() reflects calibrating_/calibResultsReady_ from the correct
-    // context.
+    // runs on a background task so the spin doesn't freeze the screen. It only touches atomics,
+    // never a widget, since LVGL isn't thread-safe; update() shows the result
     pros::Task([this] {
         const double startVerticalIn = calibVertical_ ? calibVertical_->getDistanceIn() : 0.0;
         const double startHorizontalIn = calibHorizontal_ ? calibHorizontal_->getDistanceIn() : 0.0;
 
-        // getCumulativeHeadingDeg() must be polled regularly (see its class
-        // comment) or an in-between multi-turn spin could wrap past 180
-        // degrees between reads and get misdetected as a much smaller turn
-        // the other way — this loop's period is comfortably fast enough.
+        // getCumulativeHeadingDeg() has to be polled often or a fast spin can look like a smaller
+        // turn the other way. This loop is fast enough
         const double startCumulativeDeg = calibImu_->getCumulativeHeadingDeg();
         const double targetDeg = std::fabs(calibTurns_) * 360.0;
         const double spinPower = calibTurns_ < 0.0 ? -calibSpinPower_ : calibSpinPower_;
@@ -223,8 +198,7 @@ void OdometryPage::runCalibration() {
             calibHorizontalOffsetIn_.store(offsetIn);
             config.horizontalOffsetIn = offsetIn;
         }
-        // Applied straight to the live Odometry so the calibrated offsets
-        // take effect immediately — no rebuild/redeploy needed.
+        // applied straight to the live odometry, so the offsets take effect right away
         odometry_.setConfig(config);
 
         calibResultsReady_.store(true);

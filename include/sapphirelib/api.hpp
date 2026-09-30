@@ -1,13 +1,6 @@
-/**
- * \file sapphirelib/api.hpp
- *
- * Umbrella header for SapphireLib. Include this single header to pull in the
- * full public API of the library.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
+
+// include this one header to get all of SapphireLib
 
 #include "sapphirelib/util/angle.hpp"
 #include "sapphirelib/util/clock.hpp"
@@ -84,15 +77,18 @@
 namespace sapphirelib {
 
 /**
- * Call once at the start of `initialize()` in your PROS project, before using
- * any other SapphireLib functionality. Today it only logs the library version
- * to the USB terminal, so a terminal capture shows which build the robot was
- * running.
+ * @brief Initialize SapphireLib. This should be called at the start of initialize()
  *
- * It deliberately starts nothing else. The GUI, odometry, telemetry logging
- * and mechanism tasks are all opt-in: each starts only when your code calls
- * its own `start()`/`startTask()`, so a team that doesn't want one never
- * pays for it.
+ * Logs the library version to the terminal. Nothing else is started here: the GUI, odometry,
+ * telemetry and mechanism tasks each start only when you call their own start()/startTask()
+ *
+ * @b Example
+ * @code {.cpp}
+ * void initialize() {
+ *     // initialize the library before anything else
+ *     sapphirelib::initialize();
+ * }
+ * @endcode
  */
 void initialize();
 

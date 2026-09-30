@@ -1,13 +1,3 @@
-/**
- * \file sapphirelib/util/log.hpp
- *
- * Minimal logging/telemetry macros used across every SapphireLib subsystem.
- * Prints to stdout (PROS routes this to the USB terminal), tagged with an
- * uptime timestamp, level, and caller-supplied subsystem tag.
- *
- * Team 96671H — Hitmen
- */
-
 #pragma once
 
 #include <cstdio>
@@ -15,9 +5,10 @@
 #include "pros/rtos.hpp"
 
 /**
- * Minimum level that gets printed. Define before including this header (or
- * as a build flag, e.g. EXTRA_CXXFLAGS+=-DSAPPHIRELIB_LOG_LEVEL=0) to change
- * verbosity; defaults to Info so Debug-level spam is compiled in but silent.
+ * @brief Minimum level that gets printed to the terminal
+ *
+ * Define it before including this header, or as a build flag
+ * (EXTRA_CXXFLAGS+=-DSAPPHIRELIB_LOG_LEVEL=0). Info by default
  */
 #ifndef SAPPHIRELIB_LOG_LEVEL
 #define SAPPHIRELIB_LOG_LEVEL 1
@@ -25,6 +16,9 @@
 
 namespace sapphirelib {
 
+/**
+ * @brief Log levels, lowest to highest
+ */
 enum class LogLevel { Debug = 0, Info = 1, Warn = 2, Error = 3, None = 4 };
 
 namespace detail {
@@ -43,6 +37,14 @@ inline const char* logLevelTag(LogLevel level) {
 
 } // namespace sapphirelib
 
+/**
+ * @brief Print a message to the terminal, with the time, level, and a subsystem tag
+ *
+ * @b Example
+ * @code {.cpp}
+ * SAPPHIRELIB_LOG_INFO("lift", "reached level %d", level);
+ * @endcode
+ */
 #define SAPPHIRELIB_LOG(level, tag, fmt, ...)                                                    \
     do {                                                                                         \
         if (static_cast<int>(level) >= SAPPHIRELIB_LOG_LEVEL) {                                  \

@@ -8,14 +8,11 @@ namespace sapphirelib::telemetry {
 
 namespace {
 
-// What the wrapped measure() last read, handed to the next actuate() (or
-// hold()). Shared (rather than captured by value) because the wrappers are
-// separate std::functions; all of them run on the characterization task, so
-// it needs no synchronization.
+// what the wrapped measure() last read, for the next actuate() or hold(). Shared since the
+// wrappers are separate functions; they all run on one task, so no synchronization
 struct Tap {
     double position = std::numeric_limits<double>::quiet_NaN();
-    /// A measure() has happened since the last logged row. This is what
-    /// pairs rows one-to-one with the runner's samples — see the header.
+    // a measure() happened since the last row, which pairs rows one to one with samples
     bool fresh = false;
 
     void log(Channel& channel, double volts) {
@@ -25,8 +22,7 @@ struct Tap {
     }
 };
 
-/// Wraps measure() and actuate() in place; returns the shared state for any
-/// further wrappers.
+// wrap measure() and actuate() in place, and return the shared state
 std::shared_ptr<Tap> wrap(tuning::CharacterizationConfig& config, Channel& channel) {
     auto tap = std::make_shared<Tap>();
     config.measure = [tap, measure = std::move(config.measure)] {

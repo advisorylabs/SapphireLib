@@ -13,17 +13,12 @@ namespace {
 constexpr std::uint32_t kOkColor = 0x4ade80;
 constexpr std::uint32_t kFailColor = 0xf87171;
 
-// How often the port registry is actually re-read. This page is the one
-// default page that keeps updating while hidden (it owns the screen-wide
-// warning banner), and each pass costs a registry lookup plus a couple of
-// heap-allocated std::strings *per check* — nine of them on a typical
-// chassis. Cables come loose on a human timescale, so polling at Gui's full
-// refresh rate bought nothing; 250ms still catches a mid-match failure
-// within a quarter second.
+// how often the port registry is re-read. This page updates even while hidden, and each pass
+// costs a registry lookup and a few string allocations per check. Cables come loose on a
+// human timescale, so 250ms still catches it within a quarter second
 constexpr std::uint32_t kPollIntervalMs = 250;
 
-/// Commas split an event's key=value fields, so they can't appear inside
-/// one.
+// commas split an event's fields, so they can't appear inside one
 std::string withoutCommas(std::string text) {
     for (char& c : text) {
         if (c == ',') c = ';';
@@ -31,7 +26,7 @@ std::string withoutCommas(std::string text) {
     return text;
 }
 
-/// A `device` telemetry event for one check's verdict: missing/lost/back.
+// log a device event for one check's verdict: missing, lost, or back
 void logDevice(const char* what, const diag::CheckResult& result) {
     telemetry::event("device", "%s,port=%d,label=%s%s%s", what, static_cast<int>(result.port),
                      withoutCommas(result.label).c_str(), result.ok ? "" : ",found=",
@@ -54,10 +49,8 @@ void DiagnosticsPage::build(lv_obj_t* container) {
 
     for (Row& row : rows_) {
         row.label = lv_label_create(container);
-        // Matches Row::ok's initial false, so update()'s "only restyle when
-        // the verdict flips" check starts from a true statement about what's
-        // actually on screen. The update() call below repaints anything
-        // that's passing before this is ever drawn.
+        // start every row failing-colored, matching Row::ok's initial false, so update() only
+        // restyles on a change. The update() below repaints the passing rows before any drawing
         lv_obj_set_style_text_color(row.label, lv_color_hex(kFailColor), 0);
     }
 
@@ -90,9 +83,7 @@ void DiagnosticsPage::update() {
             std::snprintf(buf, sizeof(buf), "FAIL  %s (port %d): %s", result.label.c_str(),
                           static_cast<int>(result.port), result.detail.c_str());
         }
-        // Restyling a label invalidates it just like retexting it does, so
-        // the color is only reapplied when the check's verdict actually
-        // flips — which, for a healthy robot, is never.
+        // restyling a label redraws it like retexting does, so only recolor when the verdict flips
         if (row.ok != result.ok) {
             row.ok = result.ok;
             lv_obj_set_style_text_color(row.label,
