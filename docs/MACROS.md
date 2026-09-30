@@ -7,8 +7,8 @@ your ports, your numbers, and your rules.
 
 It deliberately isn't a framework. There's no subsystem base class, scheduler, command group, or
 button-callback registry: those add indirection and ordering rules to learn, and remove nothing from
-your file. The pattern that works is already the simple one — one function your opcontrol loop calls
-every tick, with an `if`/`else if` chain that states your priorities — and each primitive below
+your file. The pattern that works is already the simple one: one function your opcontrol loop calls
+every tick, with an `if`/`else if` chain that states your priorities, and each primitive below
 replaces one piece of the machinery teams otherwise rebuild by hand around it: new-press bookkeeping,
 controller-screen throttling, `now - startMs` timers, a lift loop with its edge cases, a phase state
 machine.
@@ -38,7 +38,7 @@ Everything is in `sapphirelib/api.hpp`.
 | `elapsedMs()`, `Stopwatch`, `TimedFlag`, `GapDetector` | `util/timing.hpp` | Wrap-safe timing for anything of your own: "has this been true for 200ms", debouncing, noticing a gap between calls. |
 | `applyDeadband()`, `curveJoystick()` | `control/joystick_curve.hpp` | Stick shaping for a manual mechanism control, same as for driving. |
 
-The decision logic in most of these is pure — no PROS, time passed in as an argument — and
+The decision logic in most of these is pure (no PROS, time passed in as an argument) and
 unit-tested on a desktop compiler (`tests/input/`, `tests/mechanism/`, `tests/util/`), in several
 cases against a copy of the hand-written code it replaced. `Controller`, `PositionMechanism`, `Piston`
 and `Roller` are the thin PROS-facing shells.
@@ -86,8 +86,8 @@ void opcontrol() {
 Four rules make this work:
 
 1. **Sample once, at the top of the tick.** `master.update()` reads all twelve buttons, the four
-   sticks and the connection state, and stamps the tick's time. Every query after that —
-   `pressed()`, `held()`, `heldMs()`, `longPressed()`, `repeated()`, `combo()` — is a pure function of
+   sticks and the connection state, and stamps the tick's time. Every query after that
+   (`pressed()`, `held()`, `heldMs()`, `longPressed()`, `repeated()`, `combo()`) is a pure function of
    this sample and the last one, so it doesn't matter what order you ask in, how often, or whether you
    ask at all. That's the difference from PROS's `get_digital_new_press()`, whose "already seen" flag
    only updates when a button is *read*: a button your code skips for a while fires late, two places
@@ -105,7 +105,7 @@ Four rules make this work:
    `setTarget()` with the same target doesn't restart settle timing, `Piston::set()` with the same
    value is a no-op that keeps its time-in-state, and `Roller::spin()` *must* run every tick (0V
    included), since jam detection only works while it's fed.
-4. **Flush the screen once, at the end.** Set every line's text every tick if you like —
+4. **Flush the screen once, at the end.** Set every line's text every tick if you like,
    `flushScreen()` sends at most one write per 60ms, and only for a line that changed, because V5
    controllers silently drop text that arrives faster than about every 50ms. `master.rumble(".")`
    goes through the same queue. Lines are 15 characters.
@@ -113,8 +113,8 @@ Four rules make this work:
 **Never block in the per-tick function.** `waitUntil()`, `moveTo()` and `runBlocking()` are for
 autonomous: called from opcontrol they freeze every other macro and the drive until they return. If
 a development shortcut really must run something blocking from opcontrol (96671H's runs the selected
-autonomous with B+DOWN, off the field only), stop the mechanisms first — nothing updates them until it
-returns — and `resumed()` will report the gap afterwards.
+autonomous with B+DOWN, off the field only), stop the mechanisms first; nothing updates them until it
+returns, and `resumed()` will report the gap afterwards.
 
 ## Where things live: namespace scope
 
@@ -130,14 +130,14 @@ sapphirelib::input::Controller master(pros::E_CONTROLLER_MASTER,
                                       {.resumeGapMs = 100, .screenIntervalMs = 60});
 ```
 
-`resumeGapMs` is how long a gap between `update()`s counts as a restart — comfortably longer than your
+`resumeGapMs` is how long a gap between `update()`s counts as a restart; keep it comfortably longer than your
 loop period (5 × a 20ms tick by default). A `Controller` isn't thread-safe: update it, query it, and
 flush it from one task.
 
 The mechanisms belong at namespace scope too. Their constructors only build PROS objects without
 commanding any device, so that's safe; a `PositionMechanism` with a running task must never be
 destroyed; and `PresetLadder` allocates when it's built, so build it once, never per tick. Sequence
-programs have to live there as well — see [Sequences](#sequences).
+programs have to live there as well, see [Sequences](#sequences).
 
 ## Mechanisms
 
@@ -160,7 +160,7 @@ const PositionConfig kLiftConfig{
 PositionMechanism lift({-20, 19}, [] { return readRotationDeg(liftSensor); }, kLiftConfig);
 ```
 
-- **The position source** returns a reading in the same units as your targets — usually
+- **The position source** returns a reading in the same units as your targets, usually
   `readRotationDeg()`, which gives NaN when the sensor isn't answering. With no reading the mechanism
   brakes and resets its PID instead of driving blind, and `isNear()`/`settled()` are false, so a
   sequence waiting on it falls through to its timeout. (To fall back to a second sensor, return its
@@ -170,7 +170,7 @@ PositionMechanism lift({-20, 19}, [] { return readRotationDeg(liftSensor); }, kL
   step in the target) from kicking the output. `nominalDtS` must match how often `update()` really
   runs.
 - **`gravity`** is added to the loop's output so the PID only corrects error instead of also holding
-  the load up — without it, a proportional loop settles short of every target. `constantVolts` suits
+  the load up. Without it, a proportional loop settles short of every target. `constantVolts` suits
   an elevator-style lift, whose load is the same at every height: raise it until the lift stops
   settling below its targets. An arm's load falls off as it swings toward vertical, so use
   `cosineVolts` (the volts to hold it level) with `horizontalPosition` (the reading when it's level).
@@ -194,7 +194,7 @@ controller line shows which branch is in charge (`track`, `seat`, `rest`, `no se
 | How | call `lift.update(now)` once per tick from your per-tick function | `lift.startTask(10)` once, in `initialize()` |
 | `nominalDtS` | your tick: 0.02 for a 20ms opcontrol loop | the task period: 0.01 for `startTask(10)` |
 | During autonomous | nothing drives it | keeps holding while autonomous blocks on drive motions |
-| `update()` | drives it | ignored, with a one-time warning — two loops on one motor group fight |
+| `update()` | drives it | ignored, with a one-time warning (two loops on one motor group fight) |
 | While disabled | nothing runs | brakes with its PID cleared, so nothing winds up while VEXos ignores the motors |
 
 Manual mode is the smallest change from a hand-written loop (96671H's lift works this way). But
@@ -245,7 +245,7 @@ With anti-jam enabled, a roller commanded at `minCommandVolts` (4V) or more that
 `stallRpm` (5RPM) for `stallMs` (250ms) gets `reverseVolts` (6V) the other way for `reverseMs`
 (200ms), then goes back to the command; a piece still stuck gets another pulse `stallMs` later.
 `stallMs` must be longer than the roller takes to spin up, or every start looks like a jam. Letting
-go of the button (or reversing) ends a pulse at once. `jammed()` is true while it's reversing — handy
+go of the button (or reversing) ends a pulse at once. `jammed()` is true while it's reversing, handy
 for one short rumble as each jam starts.
 
 ### PresetLadder
@@ -266,7 +266,7 @@ modes and levels read better as plain code, keep them there.
 
 ## Sequences
 
-A `Sequence` answers "which step of this timed action are we in, and is it time to move on?" — one
+A `Sequence` answers "which step of this timed action are we in, and is it time to move on?" one
 tick at a time, so driver control never blocks.
 
 ```cpp
@@ -296,14 +296,14 @@ Sequence<Phase> sequence;
   `start()` replaces whatever was running.
 - **Steps and programs are referenced, not copied**, so declare them at namespace scope, as above.
   Passing a temporary program to `start()` is a compile error.
-- For a step with an `until`, `lastExitWasTimeout()` tells a real arrival from a give-up — worth an
+- For a step with an `until`, `lastExitWasTimeout()` tells a real arrival from a give-up, which is worth an
   event in the log. (A fixed-length step always exits on its timeout, so check which step it was.)
 
 There are two ways for steps to act on the robot, and they mix freely:
 
 - **Level-triggered**: the rest of your tick computes each output from the step, e.g. the claw
   outtakes whenever `sequence.is(Phase::outtake)`. This fits when your per-tick function already
-  derives every output from state — 96671H's macros work this way.
+  derives every output from state; 96671H's macros work this way.
 - **`onEnter` commands**: each step commands its mechanism once as it begins
   (`.onEnter = [] { arm.setTarget(...); }`). The mechanism has to be in task mode to follow through,
   but then the same program also runs from autonomous with `runBlocking()`, where there's no per-tick
@@ -321,14 +321,14 @@ sequence.runBlocking(kScore, 3000);                                    // the dr
 ```
 
 - `moveTo()` is `setTarget()` then `waitUntilSettled()`; both return false on timeout. A timeout of 0
-  means no limit — not something to use in a match.
+  means no limit, not something to use in a match.
 - `waitUntil(condition, timeoutMs, pollMs = 10)` blocks until the condition is true or the time is up,
   and always has a timeout. The condition is checked before the timeout, so one that comes true right
   at the deadline counts.
 - `runBlocking()` starts a program and updates it until it finishes, giving up (and cancelling) after
-  its timeout. Anything its steps wait on must keep running meanwhile — a mechanism on its own task.
+  its timeout. Anything its steps wait on must keep running meanwhile, like a mechanism on its own task.
 - `waitUntilSettled()` also works in manual mode, running `update()` itself while it waits, but only
-  from the task that owns `update()` — and once it returns nothing drives the mechanism. If autonomous
+  from the task that owns `update()`, and once it returns nothing drives the mechanism. If autonomous
   uses a mechanism, give it a task.
 
 All of these are safe when PROS ends autonomous mid-wait: nothing holds a lock. The first
@@ -337,7 +337,7 @@ All of these are safe when PROS ends autonomous mid-wait: nothing holds a lock. 
 ## Telemetry
 
 With a [`telemetry::Logger`](TELEMETRY_FORMAT.md) running, a mechanism logs with two calls in
-`initialize()` — before `startTask()`, since the step listener belongs to whichever task runs
+`initialize()`, before `startTask()`, since the step listener belongs to whichever task runs
 `update()`:
 
 ```cpp
@@ -354,7 +354,7 @@ lift.setStepListener([channel = &act](const PositionStep& step) {
 
 The listener runs inside every `update()` and reuses that update's sensor read; `record()` never
 blocks or allocates, so it's safe on a control loop. For the moments a tuning session wants to find
-again — a macro firing, a sequence giving up — log an event where it happens:
+again (a macro firing, a sequence giving up) log an event where it happens:
 
 ```cpp
 if (sequence.active()) {

@@ -27,7 +27,7 @@ jobs:
           pros make
 
       # The checks below each run even if an earlier step failed
-      # (`!cancelled()`), so one red step can't hide the others' results — a
+      # (`!cancelled()`), so one red step can't hide the others' results: a
       # formatting problem shouldn't stop the unit tests from running.
 
       - name: Run host-side unit tests
@@ -43,7 +43,7 @@ jobs:
             [ -f "$src" ] || src=""
             # Most tests are self-contained (test + its one matching source
             # file), but some pure modules call into another module (e.g.
-            # odometry_math.cpp calls sapphirelib::wrapDegrees180) — list
+            # odometry_math.cpp calls sapphirelib::wrapDegrees180); list
             # those extra source files here, matching each test's own
             # "Build & run" comment.
             extra=""

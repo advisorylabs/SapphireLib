@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::motion::ExitTracker and
-// exitReasonName — no PROS/embedded dependencies, so it builds and runs with
+// exitReasonName, no PROS/embedded dependencies, so it builds and runs with
 // a normal desktop compiler.
 //
 // The drivetrain motions used to carry their settle/timeout bookkeeping

@@ -4,7 +4,7 @@
 // The golden file is read out of tools/telemetry/slt_read.py (its
 // SELFTEST_FILE, itself byte for byte the encoder's golden file in
 // tests/telemetry/csv_format_test.cpp), and the checks mirror slt_read.py's
-// own self-test — so the reference reader and this one read the same bytes
+// own self-test, so the reference reader and this one read the same bytes
 // the same way.
 'use strict';
 

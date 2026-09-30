@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::tuning's pole-placement gain design
-// — no PROS/embedded dependencies, so it builds and runs with a normal
+// no PROS/embedded dependencies, so it builds and runs with a normal
 // desktop compiler.
 //
 // Build & run:
@@ -48,8 +48,8 @@ struct StepResult {
 };
 
 /// Closes the designed PD loop around a frictionless simulated axis the way
-/// the drivetrains do — 10ms ticks, derivative on error, output clamped to
-/// 12V, each command reaching the axis `delayTicks` ticks late — and
+/// the drivetrains do, 10ms ticks, derivative on error, output clamped to
+/// 12V, each command reaching the axis `delayTicks` ticks late, and
 /// measures a small (unsaturated) step.
 StepResult simulateStep(const MotorFeedforward& truth, PIDGains gains, int delayTicks,
                         double stepSize) {

@@ -1,8 +1,8 @@
 /*
- * SapphireLib telemetry analyzer — analysis.js
+ * SapphireLib telemetry analyzer: analysis.js
  *
  * Turns a parsed log into findings: what went wrong, when, on which system,
- * and what probably caused it — the "why did the robot fade in the last 30
+ * and what probably caused it: the "why did the robot fade in the last 30
  * seconds" answer a team would otherwise dig out of charts by hand. Every
  * finding carries a time to jump the replay to and the channels worth
  * charting next to it.
@@ -14,7 +14,7 @@
  * Plain script: window.SA.analysis in a browser, require('./analysis.js') in
  * Node. Depends on slt.js and model.js.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
@@ -210,8 +210,8 @@
   }
 
   /**
-   * A motor that drops out shows up twice — its channel goes NaN, and the
-   * Diagnostics page logs the port lost — so fold the device event into the
+   * A motor that drops out shows up twice (its channel goes NaN, and the
+   * Diagnostics page logs the port lost), so fold the device event into the
    * motor finding that starts at the same moment.
    */
   function mergeDuplicates(findings) {
@@ -278,7 +278,7 @@
       if (answered === 0) {
         summary.neverAnswered = true;
         add({ severity: 'info', t: null, system: name, title: `${name}: never answered`,
-          detail: `No motor answered on ${ch.name}'s port in this range — unplugged, or the port ` +
+          detail: `No motor answered on ${ch.name}'s port in this range: unplugged, or the port ` +
             'in config.hpp is a placeholder. If it should be there, check its cable.',
           channels: [ch.name] });
         continue;
@@ -302,7 +302,7 @@
           detail: `The motor stopped answering at ${when(ep.start)}` +
             (cameBack ? ` and came back ${duration.toFixed(1)}s later` : '') +
             '. Whatever it drives had no power meanwhile. Usually a loose or damaged cable, or ' +
-            'a port knocked by a collision — reseat and check it.',
+            'a port knocked by a collision. Reseat and check it.',
           channels: [ch.name] });
       }
       for (let i = i0; i < i1 && !seenAlive; ++i) if (!dead(i)) seenAlive = true;
@@ -314,8 +314,8 @@
           title: `${name} overheated (${summary.peakTemp.toFixed(0)}°C)`,
           detail: `It reached ${T.motorDerateC}°C at ${when(summary.firstDerate)} and stayed there ` +
             `${summary.timeAboveDerate.toFixed(0)}s. A V5 motor cuts its own current limit as it ` +
-            `heats — to half at 55°C (${Math.round(fraction * 100)}% at its peak of ` +
-            `${summary.peakTemp.toFixed(0)}°C) — and reports nothing up the command path, so ` +
+            `heats (to half at 55°C, ${Math.round(fraction * 100)}% at its peak of ` +
+            `${summary.peakTemp.toFixed(0)}°C) and reports nothing up the command path, so ` +
             'whatever it drives quietly lost torque: slower to accelerate, weaker holding a load. ' +
             'Look for stalls or holding at high current before this (it heats fastest then), ' +
             'lower hold voltages, or rest it between matches.',
@@ -329,7 +329,7 @@
       }
       if (summary.faultBits & 2) {
         add({ severity: 'critical', t: null, system: name, title: `${name}: motor driver fault`,
-          detail: 'The motor reported a driver fault (fault bit 2) — an electrical problem inside ' +
+          detail: 'The motor reported a driver fault (fault bit 2): an electrical problem inside ' +
             'the motor or its cable. Swap the motor if it repeats.', channels: [ch.name] });
       }
 
@@ -443,7 +443,7 @@
         if (Number.isFinite(startPct) && startPct < T.batteryStartPct) {
           add({ severity: 'warning', t: s.start, system: 'Battery',
             title: `${s.label} started at ${startPct.toFixed(0)}% battery`,
-            detail: 'Start matches on a charged battery — a V5 battery at low charge sags more ' +
+            detail: 'Start matches on a charged battery. A V5 battery at low charge sags more ' +
               'under the same load.', channels: ['batt'] });
         }
       }
@@ -585,7 +585,7 @@
               title: `${ch.name} PID oscillated (${r.swings} swings)`,
               detail: `The error crossed zero ${r.swings} times from ${when(r.start)} without ` +
                 'dying out' + (r.gains ? ` (kP ${fmt(r.gains.kP)}, kD ${fmt(r.gains.kD)})` : '') +
-                '. Too much kP, too little kD, or more delay than the gains allow — the Tune tab ' +
+                '. Too much kP, too little kD, or more delay than the gains allow. The Tune tab ' +
                 'can design gains from a measured model.', channels: [ch.name] });
           }
         }
@@ -594,8 +594,8 @@
         const worst = gaps.reduce((a, b) => (b.gap > a.gap ? b : a));
         add({ severity: gaps.length > 3 ? 'warning' : 'info', t: worst.t, system: ch.name,
           title: `${ch.name} loop stalled ${gaps.length}× (worst ${(worst.gap * 1000).toFixed(0)}ms)`,
-          detail: 'Its control loop went much longer than its period between steps mid-response ' +
-            '— something blocked the task running it (a long device call, a busy loop at higher ' +
+          detail: 'Its control loop went much longer than its period between steps mid-response: ' +
+            'something blocked the task running it (a long device call, a busy loop at higher ' +
             'priority). The robot drove blind for that long.', channels: [ch.name] });
       }
       out.push({ name: ch.name, responses, saturatedFraction: i1 > i0 ? saturated / (i1 - i0) : 0,
@@ -650,14 +650,14 @@
         }
         if (stuckFrom === null) continue;
         const atFull = full / rows > 0.5;
-        // Stuck with volts to spare is the loop settling short under load —
+        // Stuck with volts to spare is the loop settling short under load;
         // the sag check below reports that once, rather than once per hold.
         if (!atFull) continue;
         summary.shortfalls.push({ start: stuckFrom, end: ep.end, worst, atFull });
         add({ severity: 'critical', t: stuckFrom, end: ep.end, system: base,
           title: `${base} stuck ${worst.toFixed(0)} short of its target`,
           detail: `From ${when(stuckFrom)} it stopped getting closer, still more than ` +
-            `${T.trackingBand} off, for ${(ep.end - stuckFrom).toFixed(1)}s — at full power. ` +
+            `${T.trackingBand} off for ${(ep.end - stuckFrom).toFixed(1)}s, at full power. ` +
             'Overloaded, jammed, or its motors are derating: check their temperatures at this ' +
             'moment.',
           channels: [ch.name, base] });
@@ -736,15 +736,15 @@
         add({ severity: 'warning', t: m.start, end: m.end, system: 'Drivetrain',
           title: `${m.kind} timed out ${m.error !== null ? `${m.error.toFixed(1)}${unit} short` : ''}`,
           detail: `Started ${when(m.start)}, gave up after ${m.ms} ms. ` +
-            (saturatedAtEnd ? 'It was still at full power when it gave up — pushing against ' +
+            (saturatedAtEnd ? 'It was still at full power when it gave up: pushing against ' +
               'something, or asking for more than the robot has. '
-              : 'Its output wasn\'t saturated — the loop settled short of the threshold (friction ' +
+              : 'Its output wasn\'t saturated: the loop settled short of the threshold (friction ' +
                 'against a small kP, or a threshold tighter than the robot can hold). ') +
             (context.length ? `(${context.join('; ')})` : ''),
           channels: ['drive', 'turn', 'odom'] });
       } else if (m.reason === 'aborted') {
         add({ severity: 'info', t: m.start, system: 'Drivetrain', title: `${m.kind} aborted`,
-          detail: 'It never started — no odometry set, or an empty path. The terminal log says which.',
+          detail: 'It never started: no odometry set, or an empty path. The terminal log says which.',
           channels: [] });
       } else if (m.end === null) {
         add({ severity: 'info', t: m.start, end: m.stop, system: 'Drivetrain',

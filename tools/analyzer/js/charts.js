@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — charts.js
+ * SapphireLib telemetry analyzer: charts.js
  *
  * Time-series charts on canvas, fast enough for a whole match at 100Hz: each
  * series is decimated to a min/max pair per pixel column before drawing. A
@@ -10,7 +10,7 @@
  *
  * Browser only: window.SA.charts.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function () {
   'use strict';
@@ -52,7 +52,7 @@
   }
 
   function formatValue(v) {
-    if (!Number.isFinite(v)) return Number.isNaN(v) ? '—' : String(v);
+    if (!Number.isFinite(v)) return Number.isNaN(v) ? '-' : String(v);
     const abs = Math.abs(v);
     if (abs >= 1000) return v.toFixed(0);
     if (abs >= 100) return v.toFixed(1);

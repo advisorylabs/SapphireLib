@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::input::ButtonTracker — no
+// Host-side unit test for sapphirelib::input::ButtonTracker, no
 // PROS/embedded dependencies, so it builds and runs with a normal desktop
 // compiler.
 //
@@ -102,7 +102,7 @@ struct RandomController {
 };
 
 // The property the whole class rests on: read every button every tick, and
-// the kernel's latch reports exactly pressed()/released() — including on the
+// the kernel's latch reports exactly pressed()/released(), including on the
 // very first sample, where both start "not seen".
 void testMatchesKernelLatchWhenEveryButtonIsReadEveryTick() {
     long ticksChecked = 0;

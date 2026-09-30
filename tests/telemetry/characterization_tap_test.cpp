@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::telemetry::tapCharacterization() and
-// tapMechanismCharacterization() — no PROS/embedded dependencies. The
+// tapMechanismCharacterization(), no PROS/embedded dependencies. The
 // characterization runners read time and sleep only through util/clock.hpp,
 // which this file defines as a fake clock that moves a simulated axis, so it
 // drives the real runners (src/sapphirelib/tuning/characterization_runner.cpp).
@@ -147,8 +147,8 @@ CharacterizationConfig configFor(Axis& target, double maxTravel, std::uint32_t m
     return config;
 }
 
-/// Runs the runner twice from the same start — once plain, once tapped
-/// — and returns what the tapped run logged, after checking the tap changed
+/// Runs the runner twice from the same start, once plain, once tapped,
+/// and returns what the tapped run logged, after checking the tap changed
 /// nothing the runner or the axis could see.
 struct TappedRun {
     CharacterizationData data;
@@ -209,7 +209,7 @@ bool sameAsSample(const Row& row, const CharacterizationSample& sample) {
 
 void testUnlimitedTravelLogsExactlyTheSamples() {
     // maxTravel 0 (a turn axis): every segment runs to its duration cap, so
-    // the rows are the samples — no more, no fewer, in order.
+    // the rows are the samples, no more, no fewer, in order.
     const TappedRun run = runBoth(0.0, 400);
     const std::vector<CharacterizationRun> segments = segmentsInOrder(run.data);
 
@@ -229,7 +229,7 @@ void testUnlimitedTravelLogsExactlyTheSamples() {
 
 void testTravelLimitedSegmentsEndWithOneZeroVoltRow() {
     // A translation axis with a short travel limit: each segment is cut off
-    // by it, and the runner's closing actuate(0) follows a measure() — the
+    // by it, and the runner's closing actuate(0) follows a measure(), the
     // one that found the axis out of range. That shows up as a single 0V row
     // at that position after the segment's samples (the documented extra).
     constexpr double kMaxTravel = 4.0;
@@ -327,8 +327,8 @@ void testActuateWithoutFreshMeasureLogsNothing() {
 void testMechanismHeldSamplesAreLoggedAsNan() {
     // The mechanism runner holds the axis (rather than 0V) through each
     // pre-roll and after each segment. Held samples are recorded with NaN
-    // volts, and the tap must log them the same way — plus one NaN row where
-    // each limit-cut segment ended — and change nothing else.
+    // volts, and the tap must log them the same way, plus one NaN row where
+    // each limit-cut segment ended, and change nothing else.
     const auto configFor = [](Axis& target) {
         MechanismCharacterizationConfig config;
         config.axis.actuate = [&target](double v) { target.actuate(v); };

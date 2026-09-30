@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::telemetry::RecordRing and ProducerGate
-// — no PROS/embedded dependencies, so it builds and runs with a normal
+// no PROS/embedded dependencies, so it builds and runs with a normal
 // desktop compiler.
 //
 // Build & run:
@@ -223,7 +223,7 @@ void testStaleLeaveAfterReclaimIsANoOp() {
     gate.leave(stale);
     std::uint32_t third = 0;
     assert(!gate.tryEnter(third));
-    // ...and the new holder's own leave still works — nothing is wedged.
+    // ...and the new holder's own leave still works; nothing is wedged.
     gate.leave(fresh);
     assert(gate.tryEnter(third));
     gate.leave(third);

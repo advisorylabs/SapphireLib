@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::chassis::thermalPowerFraction and
-// centerThermalCorrection — no PROS/embedded dependencies, so it builds and
+// centerThermalCorrection, no PROS/embedded dependencies, so it builds and
 // runs with a normal desktop compiler.
 //
 // Build & run:
@@ -162,7 +162,7 @@ void testStrafeDriftMatchesTheDriftItCancels() {
 void testWhichCornersAreHotDecidesWhetherAStrafeWanders() {
     // A strafe drives one diagonal forward and the other backward, so which
     // corners are hot decides both how far the chassis wanders and which
-    // way. An average over the four cannot tell these cases apart — which is
+    // way. An average over the four cannot tell these cases apart, which is
     // why the fractions are tracked per corner.
     const CornerValues strafing{10.0, -10.0, -10.0, 10.0};
 
@@ -174,7 +174,7 @@ void testWhichCornersAreHotDecidesWhetherAStrafeWanders() {
     expectNear(sameDiagonal.commonVolts, -5.0, "same diagonal: drift doubles");
 
     // The other diagonal drifts the opposite way, so a hot corner on each
-    // leaves the strafe straight — it only loses speed.
+    // leaves the strafe straight; it only loses speed.
     const CenterCorrection oppositeDiagonals = centerThermalCorrection(
         strafing, CornerValues{0.5, 0.5, kCool, kCool}, kCool, kGain, kUncapped);
     expectNear(oppositeDiagonals.commonVolts, 0.0, "one corner on each diagonal: no net drift");
@@ -202,7 +202,7 @@ void testMaxVoltsCapsEachComponent() {
         centerThermalCorrection(allCorners(12.0), allCorners(0.0), kCool, kGain, kMaxVolts);
     expectNear(capped.commonVolts, kMaxVolts, "common capped");
 
-    // Caps in the negative direction too — drift correction runs backwards.
+    // Caps in the negative direction too, drift correction runs backwards.
     const CornerValues strafing{12.0, -12.0, -12.0, 12.0};
     const CenterCorrection negative = centerThermalCorrection(
         strafing, CornerValues{kCool, 0.0, kCool, kCool}, kCool, kGain, /*maxVolts=*/3.0);

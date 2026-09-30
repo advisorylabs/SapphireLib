@@ -1,13 +1,13 @@
 # Contributing to SapphireLib
 
-Internal library for Team 96671H — Hitmen. This guide is for team members working on SapphireLib itself
+Internal library for Team 96671H: Hitmen. This guide is for team members working on SapphireLib itself
 (not for teams consuming it as a dependency). [`docs/SETUP.md`](docs/SETUP.md) covers getting a build
 going.
 
 ## Workflow
 
 1. Branch off `master`: `git checkout -b phase-<n>/<short-description>` (e.g. `phase-1/pid-controller`)
-2. Keep PRs scoped to one roadmap item where possible — see `docs/ROADMAP.md` for current phase.
+2. Keep PRs scoped to one roadmap item where possible: see `docs/ROADMAP.md` for current phase.
 3. Format what you change with `clang-format` (`.clang-format` is in the repo root and matches the
    house style below). The library has had its one-time format pass, so `clang-format -i` on any file
    under `include/sapphirelib/` or `src/sapphirelib/` changes only what you wrote. Elsewhere, format
@@ -18,7 +18,7 @@ going.
 5. Open a PR into `master`. CI must pass before merge: the build, the host-side unit tests, the
    telemetry reader's self-test, the telemetry analyzer's tests
    (`node --test tools/analyzer/test/*.test.js`), and the library's formatting check.
-6. At least one other team member should review before merging — two sets of eyes catches a lot before
+6. At least one other team member should review before merging: two sets of eyes catches a lot before
    it hits a competition robot.
 
 ## Code Style
@@ -32,7 +32,7 @@ going.
 - 4-space indent, 100 columns. `constexpr` constants are `kCamelCase`; private members end in `_`.
   Config structs have default member initializers and are built with designated initializers
   (`PID::Config{.gains = {.kP = 1.2}, .outputLimit = 12.0}`).
-- Prefer explicit, documented public APIs over clever templates — this library needs to be readable by
+- Prefer explicit, documented public APIs over clever templates: this library needs to be readable by
   teammates joining mid-season
 - Comments follow LemLib's style. Every public class and function gets a `/** */` block: a `@brief`
   line (capitalized, no period), `@param name description` and `@return` lines in lowercase, `@note`
@@ -77,5 +77,5 @@ code, note in the PR description:
 ## Reporting Issues
 
 Use the issue templates under `.github/ISSUE_TEMPLATE/`. Bug reports should include the sensor/robot
-config and, if possible, PROS terminal output — and the SD telemetry log for the run, if the robot was
+config and, if possible, PROS terminal output, and the SD telemetry log for the run, if the robot was
 logging (`docs/TELEMETRY_FORMAT.md`).

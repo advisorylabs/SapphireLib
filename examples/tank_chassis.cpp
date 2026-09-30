@@ -2,7 +2,7 @@
  * \file examples/tank_chassis.cpp
  *
  * Phase 1 example: closed-loop tank drive using only an IMU and drive motor
- * encoders — no tracking wheels. Assumes a 3-motor-per-side drivetrain with
+ * encoders, no tracking wheels. Assumes a 3-motor-per-side drivetrain with
  * green (200 RPM) gearing and a 3.25" wheel diameter.
  *
  * Not built into the program (the Makefile only compiles src/), but
@@ -10,7 +10,7 @@
  * silently fall out of date. Copy the relevant pieces into your own
  * src/main.cpp and adjust ports/gains for your robot.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "main.h"
@@ -35,7 +35,7 @@ Controller master(pros::E_CONTROLLER_MASTER);
 
 /// Built on the first call, which initialize() makes, rather than at namespace
 /// scope: constructing a drivetrain blocks for ~2-3s while its IMU calibrates,
-/// and static initialization runs before initialize() — before the program has
+/// and static initialization runs before initialize(), before the program has
 /// even started. A function-local static also means there's never a null
 /// pointer to check.
 TankDrivetrain& drivetrain() {

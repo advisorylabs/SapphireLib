@@ -2,7 +2,7 @@
 // simulated logs). Run: node --test tools/analyzer/test/*.test.js
 //
 // Small hand-written logs pin each rule down; the demo match is the
-// integration test — a match with known failures planted in it, which the
+// integration test: a match with known failures planted in it, which the
 // analysis has to find, at the right moments, and without false alarms.
 'use strict';
 

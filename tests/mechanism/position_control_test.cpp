@@ -1,6 +1,6 @@
 /*
  * Host-side unit test for sapphirelib::mechanism's position control law
- * (computePositionCommand, GravityFeedforward, positionLawName) — no
+ * (computePositionCommand, GravityFeedforward, positionLawName), no
  * PROS/embedded dependencies, so it builds and runs with a normal desktop
  * compiler.
  *
@@ -113,7 +113,7 @@ struct FakeRotation {
 // liftPositionDeg() and driveLift() are copied unchanged from the original
 // file. Only the declarations around them differ: the devices are the fakes
 // above, and the constants are variables rather than constexpr so each
-// scenario below can swap in its own — the first scenario is the robot's real
+// scenario below can swap in its own, the first scenario is the robot's real
 // values.
 namespace original {
 

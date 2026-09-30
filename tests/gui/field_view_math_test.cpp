@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::gui::fieldToScreen and
-// headingIndicatorEndpoint — no PROS/LVGL dependencies, so it builds and
+// headingIndicatorEndpoint, no PROS/LVGL dependencies, so it builds and
 // runs with a normal desktop compiler.
 //
 // Build & run:
@@ -32,7 +32,7 @@ void testFieldOriginIsBottomLeft() {
 }
 
 void testFieldFarCornerIsTopRight() {
-    // Field (144,144) — the far corner — should land at the view's
+    // Field (144,144), the far corner, should land at the view's
     // top-right pixel: field +y is upfield, screen +y is downward, so this
     // is where the y-flip matters most.
     expectPoint(fieldToScreen(144.0, 144.0, 144.0, 144.0, 150, 150), 150, 0, "far corner");

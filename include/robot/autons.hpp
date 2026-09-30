@@ -4,7 +4,7 @@
  * The robot's autonomous routines. Each one, and the list that puts it on the
  * brain screen, lives in autons.cpp, so adding a routine touches one file.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #pragma once

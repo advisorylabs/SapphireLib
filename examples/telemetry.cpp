@@ -5,7 +5,7 @@
  * with one vertical tracking wheel. Logs every step of the drivetrain's PIDs,
  * the odometry pose, the volts the drivetrain commanded, every motor's health,
  * the battery, a custom channel recorded from driver control, and event
- * markers — one file per program run, for tuning and troubleshooting off the
+ * markers, one file per program run, for tuning and troubleshooting off the
  * robot. docs/TELEMETRY_FORMAT.md is the file format (and what each column
  * means for tuning); open the files in tools/analyzer/index.html to see what
  * went wrong in a match, replay it, and tune from it, or read them with
@@ -19,7 +19,7 @@
  * `make check-examples` compiles it against the current headers so it can't
  * silently fall out of date. Copy the relevant pieces into your own files.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include <memory>

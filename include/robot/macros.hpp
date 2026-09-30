@@ -32,7 +32,7 @@
  * piece, to keep hold of it. The lift holds each level on a PID loop around
  * its rotation sensor.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #pragma once
@@ -60,12 +60,12 @@ void update(sapphirelib::input::Controller& controller);
 /// Stops the claw and intake and brakes the lift, right away. For disabled(),
 /// and for just before something runs a blocking routine from opcontrol()
 /// (driver.cpp's B+DOWN): nothing calls update() until that routine ends, and
-/// every motor would otherwise keep its last command for the whole routine —
+/// every motor would otherwise keep its last command for the whole routine,
 /// a lift climbing at 12V would stay at 12V into its hard stop.
 ///
 /// Nothing else changes: the claw's deploy state, the lift's level and the
 /// scoring mode are kept, and the next update() commands everything from
-/// them again — the lift back on its PID loop at its current level. (After
+/// them again, with the lift back on its PID loop at its current level. (After
 /// a pause long enough to count as a restart, update() also drops any
 /// half-finished score or re-seat, as it always has.)
 void stop();
@@ -73,7 +73,7 @@ void stop();
 /// Logs the lift to `logger`: its PID's every step (channel "lift") and
 /// what each update actually commanded (channel "lift.act": target and
 /// position in degrees, the volts sent after gravity feedforward and the
-/// clamp, and which branch of the control law ran — see
+/// clamp, and which branch of the control law ran, see
 /// docs/TELEMETRY_FORMAT.md). Call from initialize(), before opcontrol can
 /// run: it attaches the PID's observer and the lift's step listener, neither
 /// of which is synchronized with update(). Without it, nothing is logged and
@@ -89,14 +89,14 @@ sapphirelib::mechanism::PositionMechanism& liftMechanism();
 /// Auto-Tune's lift experiment: ramps and steps between two heights well
 /// inside the lift's travel, with the motors braked between segments. It
 /// takes the motors from the lift's own loop for the run
-/// (PositionMechanism::beginExternalControl()) — update() keeps running, and
-/// logs law "external" — and hands them back after. Start it with the lift
+/// (PositionMechanism::beginExternalControl()), update() keeps running, and
+/// logs law "external", and hands them back after. Start it with the lift
 /// all the way down.
 sapphirelib::tuning::MechanismCharacterizationConfig liftExperiment();
 
 /// Run Test for the Lift entry: raises the lift to a test height and back
-/// down to another, through its normal loop — the same PID, gravity volts and
-/// update() the macros run — then returns it to its current level. Blocks;
+/// down to another, through its normal loop (the same PID, gravity volts and
+/// update() the macros run), then returns it to its current level. Blocks;
 /// the PID page runs it on a task of its own. The lift only moves while
 /// driver control is running update().
 void liftTuningTest();

@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::advanceHeldHeadingDeg — no
+// Host-side unit test for sapphirelib::advanceHeldHeadingDeg, no
 // PROS/embedded dependencies, so it builds and runs with a normal desktop
 // compiler.
 //
@@ -98,7 +98,7 @@ void testImplausibleTimestepsAdvanceNothing() {
     expectNear(advanceHeldHeadingDeg(90.0, 90.0, 1.0, /*dtS=*/-0.02, kPlain), 90.0, "negative dt");
     expectNear(advanceHeldHeadingDeg(90.0, 90.0, 1.0, /*dtS=*/5.0, kPlain), 90.0, "implausible dt");
 
-    // The cutoff sits at half a second, which a driver loop never reaches —
+    // The cutoff sits at half a second, which a driver loop never reaches,
     // HolonomicDrivetrain re-adopts the live heading after a quarter of one,
     // so its own calls stay well inside this.
     expectNear(advanceHeldHeadingDeg(0.0, 0.0, 1.0, /*dtS=*/0.5, kPlain), 90.0, "half a second");
@@ -146,7 +146,7 @@ void testLeadCapPullsTheTargetBackWhenTheChassisIsShoved() {
 
 void testLeadCapWorksAcrossTheSeam() {
     // A held heading of 5 against a live heading of 355 is 10 degrees of
-    // lead, not 350 — the difference between a nudge and a full spin.
+    // lead, not 350, the difference between a nudge and a full spin.
     const HeadingHoldConfig config{.slewDegPerSec = 180.0, .deadband = 0.0, .maxLeadDeg = 20.0};
 
     const double justInside = advanceHeldHeadingDeg(5.0, 355.0, 0.0, 0.02, config);
@@ -158,7 +158,7 @@ void testLeadCapWorksAcrossTheSeam() {
 }
 
 void testDisabledLeadCapLetsTheTargetRunFree() {
-    // maxLeadDeg <= 0 is documented as "no cap" — only sensible when the
+    // maxLeadDeg <= 0 is documented as "no cap"; only sensible when the
     // slew rate is already slow enough that the chassis keeps up.
     const HeadingHoldConfig config{.slewDegPerSec = 180.0, .deadband = 0.0, .maxLeadDeg = 0.0};
     expectNear(advanceHeldHeadingDeg(0.0, 0.0, 1.0, 0.5, config), 90.0, "no cap applied");

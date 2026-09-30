@@ -1,12 +1,12 @@
 /*
- * SapphireLib telemetry analyzer — styles.
+ * SapphireLib telemetry analyzer: styles.
  *
  * Layout: a pit-side flight recorder. A sticky bar picks the log, the run and
  * the match; tabs below go from summary (Overview) to detail (Replay, Charts,
  * Responses, Motions) to action (Tune). Everything is built from the tokens
  * below; the dark theme redefines only tokens.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 :root {

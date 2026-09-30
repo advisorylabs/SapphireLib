@@ -4,7 +4,7 @@
  * Driver control: stick shaping, the drive call, and the B+DOWN testing
  * shortcut. The intake, claw, and lift buttons are in macros.cpp.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "robot/driver.hpp"
@@ -40,10 +40,10 @@ Controller& controller() { return master; }
 
 void drive(Controller& controller) {
     // Field-relative stick input: "forward" always means the field
-    // heading captured at initialize() (or the last A press — see
+    // heading captured at initialize() (or the last A press, see
     // shortcuts()), not the robot's nose.
     //
-    // The right stick steers a *heading*, not a turn rate — see
+    // The right stick steers a *heading*, not a turn rate, see
     // holonomicFieldCentricHeadingHold() below. Curving it still makes
     // sense: it shapes how fast the stick sweeps that heading, so small
     // deflections give fine aim and large ones swing around quickly.
@@ -66,7 +66,7 @@ void drive(Controller& controller) {
     // of the translation rather than replacing it. Releasing the stick
     // leaves the bot pointed somewhere definite instead of drifting on
     // through, and a strafe that used to wander off-heading gets
-    // straightened as it goes — including the wander an overheating
+    // straightened as it goes, including the wander an overheating
     // corner motor causes (see AsteriskConfig::thermalCompensation,
     // which attacks the same problem from the feedforward side).
     //
@@ -75,7 +75,7 @@ void drive(Controller& controller) {
     // sluggish, raise maxLeadDeg before slewDegPerSec.
     //
     // DISABLED: driving from the sticks is switched off on this robot for
-    // now — the robot can't drive in driver control. To drive again,
+    // now: the robot can't drive in driver control. To drive again,
     // uncomment `turn` above and the call below, and drop the two
     // [[maybe_unused]]s.
     // drivetrain().holonomicFieldCentricHeadingHold(fieldThrottle, fieldStrafe, turn);

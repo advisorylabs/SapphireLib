@@ -4,7 +4,7 @@
  * Construction of the drivetrain, tracking wheels, and odometry, in the order
  * initialize() needs it. Ports and geometry come from config.hpp.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "robot/devices.hpp"
@@ -29,7 +29,7 @@ HolonomicDrivetrain& drivetrain() {
     // Asterisk drivetrain: the standard 4 mecanum/X-drive corners plus a
     // straight-facing 5th/6th center wheel pair (middle-left/middle-right)
     // that add power during forward/backward driving and correct forward/
-    // back drift while strafing — see AsteriskConfig and setDriftSource()
+    // back drift while strafing, see AsteriskConfig and setDriftSource()
     // in initDevices(). All right-side motors are physically mounted
     // reversed.
     static HolonomicDrivetrain instance(
@@ -39,7 +39,7 @@ HolonomicDrivetrain& drivetrain() {
                          .externalGearRatio = 1.0,
                          .headingCorrectionKP = 0.4},
         // kI/kD are continuous-time gains (per second), not per control
-        // tick — see PIDGains' comment. The kD values below are the
+        // tick, see PIDGains' comment. The kD values below are the
         // previous per-tick numbers (0.1 / 0.02) converted at the
         // drivetrain's 10ms loop period, so they behave identically; run
         // Auto-Tune to replace them with measured ones.
@@ -50,18 +50,18 @@ HolonomicDrivetrain& drivetrain() {
         /*imuHeadingScale=*/1.0,
         /*asterisk=*/
         // TODO: driftCorrectionKP starts conservative (volts per in/sec of
-        // sensed drift) — tune it up on the real robot until sideways drift
+        // sensed drift), tune it up on the real robot until sideways drift
         // is corrected without the center wheels fighting an intentional
         // strafe.
         //
         // turnContribution = 1.0 gives the center wheels full rotational
         // authority, so they drive every turn instead of coasting through
-        // it. These are 5.5W motors against 11W corners — if they end up
+        // it. These are 5.5W motors against 11W corners; if they end up
         // saturating and dragging on fast turns, walk this down rather than
         // to 0.
         //
         // thermalCompensation = 1.0 has the center wheels make up whatever the
-        // corner motors stop delivering as they heat up — both the plain loss
+        // corner motors stop delivering as they heat up, both the plain loss
         // of speed when the corners derate together, and the forward/back
         // drift and twist that one derated corner throws into a strafe.
         // maxThermalCorrectionVolts caps how much they'll be asked for on top
@@ -79,12 +79,12 @@ HolonomicDrivetrain& drivetrain() {
 }
 
 RotationTrackingWheel& verticalWheel() {
-    // Dedicated tracking wheels on their own rotation sensors — the "IMU +
+    // Dedicated tracking wheels on their own rotation sensors, the "IMU +
     // both wheels" odometry config (see Odometry's class comment).
     //
     // Vertical is reversed (negative port): on this chassis, the sensor's
-    // raw positive direction is backward — confirmed by driving forward and
-    // watching Y decrease instead of increase on the Odom page — so this
+    // raw positive direction is backward, confirmed by driving forward and
+    // watching Y decrease instead of increase on the Odom page, so this
     // negation isn't a stylistic choice, it's required for Odometry's
     // forward/backward sign to actually match the chassis's forward
     // direction. If you re-mount or swap this sensor, re-check this.
@@ -133,7 +133,7 @@ void initDevices() {
     SAPPHIRELIB_LOG_INFO("init", "odometry task started");
 
     // Center wheels read the same vertical tracking wheel Odometry uses to
-    // detect forward/back drift while strafing — reading a sensor from two
+    // detect forward/back drift while strafing, reading a sensor from two
     // places is safe, only commanding a motor from two places would
     // conflict. Passing odometry lets drift correction read the wheel's
     // (live-recalibratable) verticalOffsetIn, so turning while strafing
@@ -145,7 +145,7 @@ void initDevices() {
     // because it isn't synchronized.
     chassis.setOdometry(&odometry());
 
-    // Intake/claw/lift driver macros — see macros.hpp. Zeroes the lift here,
+    // Intake/claw/lift driver macros, see macros.hpp. Zeroes the lift here,
     // so start the program with the lift all the way down.
     macros::initialize();
 }

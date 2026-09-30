@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — app.js
+ * SapphireLib telemetry analyzer: app.js
  *
  * The controller: opens logs (file picker, drag and drop, or the demo),
  * groups them into program runs, picks the run and the match being looked
@@ -9,7 +9,7 @@
  *
  * Browser only: window.SA.app.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function () {
   'use strict';
@@ -180,7 +180,7 @@
       this.runs.forEach((run, i) => {
         const matches = slt.sessions(run).filter((s) => s.kind === 'match').length;
         runSelect.append(h('option', { value: String(i) },
-          `${run.files.join(' + ')} — ${run.meta.robot || 'robot'}, ${(run.end - run.start).toFixed(0)}s` +
+          `${run.files.join(' + ')}, ${run.meta.robot || 'robot'}, ${(run.end - run.start).toFixed(0)}s` +
           (matches ? `, ${matches} match${matches > 1 ? 'es' : ''}` : '')));
       });
       runSelect.value = String(this.runIndex);
@@ -430,7 +430,7 @@
         app.seek(t0 + ((e.clientX - rect.left) / rect.width) * (t1 - t0), true);
       });
       canvas.style.cursor = 'pointer';
-      const peak = h('span', { class: 'peak' }, Number.isFinite(m.peakTemp) ? `${m.peakTemp.toFixed(0)}°` : '—');
+      const peak = h('span', { class: 'peak' }, Number.isFinite(m.peakTemp) ? `${m.peakTemp.toFixed(0)}°` : '-');
       return h('div', { class: 'thermal-row' }, h('span', { class: 'name' }, m.name), canvas, peak);
     });
     return h('section', { class: 'panel' },
@@ -448,17 +448,17 @@
       const chip = Number.isFinite(m.peakTemp)
         ? h('span', { class: 'heat-chip', style: { background: heatColor(m.peakTemp), color: heatInk(m.peakTemp) } },
           `${m.peakTemp.toFixed(0)}°C`)
-        : '—';
+        : '-';
       const perVolt = Number.isFinite(m.rpmPerVoltEarly)
-        ? `${m.rpmPerVoltEarly.toFixed(1)} → ${m.rpmPerVoltLate.toFixed(1)}` : '—';
+        ? `${m.rpmPerVoltEarly.toFixed(1)} → ${m.rpmPerVoltLate.toFixed(1)}` : '-';
       return h('tr', null,
         h('td', { class: 'data' }, m.name),
         h('td', { class: 'num' }, m.neverAnswered ? 'no motor' : chip),
-        h('td', { class: 'num' }, m.timeAboveDerate > 0 ? `${m.timeAboveDerate.toFixed(0)}s` : '—'),
-        h('td', { class: 'num' }, m.stallS > 0 ? `${m.stallS.toFixed(1)}s` : '—'),
-        h('td', { class: 'num' }, Number.isFinite(m.meanAmps) ? `${m.meanAmps.toFixed(2)} A` : '—'),
+        h('td', { class: 'num' }, m.timeAboveDerate > 0 ? `${m.timeAboveDerate.toFixed(0)}s` : '-'),
+        h('td', { class: 'num' }, m.stallS > 0 ? `${m.stallS.toFixed(1)}s` : '-'),
+        h('td', { class: 'num' }, Number.isFinite(m.meanAmps) ? `${m.meanAmps.toFixed(2)} A` : '-'),
         h('td', { class: 'num' }, perVolt),
-        h('td', { class: 'num' }, m.disconnects.length || '—'));
+        h('td', { class: 'num' }, m.disconnects.length || '-'));
     });
     return h('section', { class: 'panel' },
       h('header', null, h('h3', null, 'Motor health'),
@@ -590,13 +590,13 @@
           const row = h('tr', { class: 'clickable', tabindex: '0' },
             h('td', { class: 'num' }, i + 1),
             h('td', { class: 'data' }, app.shortLabel(r.start)),
-            h('td', null, motion ? motion.kind : r.end - r.start > 10 ? 'continuous' : '—'),
+            h('td', null, motion ? motion.kind : r.end - r.start > 10 ? 'continuous' : '-'),
             h('td', { class: 'num' }, fmt(r.initialError, 2)),
             h('td', { class: 'num' }, fmt(r.finalError, 2)),
             h('td', { class: 'num' }, `${(r.end - r.start).toFixed(2)}s`),
             h('td', { class: 'num' }, `${Math.round(r.saturatedFraction * 100)}%`),
             h('td', { class: 'num' }, r.swings),
-            h('td', { class: 'num' }, r.gains ? `${sig(r.gains.kP)} / ${sig(r.gains.kI)} / ${sig(r.gains.kD)}` : '—'));
+            h('td', { class: 'num' }, r.gains ? `${sig(r.gains.kP)} / ${sig(r.gains.kI)} / ${sig(r.gains.kD)}` : '-'));
           const open = () => {
             for (const other of row.parentNode.children) other.classList.remove('selected');
             row.classList.add('selected');
@@ -690,8 +690,8 @@
           h('td', null, m.kind),
           h('td', { class: 'data' }, describe(m)),
           h('td', null, result),
-          h('td', { class: 'num' }, m.error !== null ? fmt(m.error, 2) : '—'),
-          h('td', { class: 'num' }, m.ms !== null ? `${m.ms} ms` : '—'),
+          h('td', { class: 'num' }, m.error !== null ? fmt(m.error, 2) : '-'),
+          h('td', { class: 'num' }, m.ms !== null ? `${m.ms} ms` : '-'),
           h('td', null, h('button', { class: 'btn small', type: 'button', onclick: (e) => {
             e.stopPropagation();
             app.seek(m.start - 0.5, true);

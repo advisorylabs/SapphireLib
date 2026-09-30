@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::telemetry::Channel and PidProbe — no
+// Host-side unit test for sapphirelib::telemetry::Channel and PidProbe, no
 // PROS/embedded dependencies. Channel stamps rows through the clock seam
 // (sapphirelib::micros()), which this file defines as a fake clock it steps
 // by hand.

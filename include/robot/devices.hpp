@@ -5,7 +5,7 @@
  * file of the robot program (autons, driver control, the screen, tuning,
  * telemetry) through accessors instead of global pointers.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #pragma once

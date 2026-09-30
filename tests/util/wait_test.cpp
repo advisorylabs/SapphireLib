@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::waitUntil — no PROS/embedded
+// Host-side unit test for sapphirelib::waitUntil, no PROS/embedded
 // dependencies, so it builds and runs with a normal desktop compiler.
 //
 // waitUntil() reads time only through util/clock.hpp, which this test defines

@@ -23,7 +23,7 @@
  * silently fall out of date. Copy the pieces you need into your own files and
  * change the ports and numbers for your robot.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include <array>

@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::telemetry::motorRow() — what one motor
+// Host-side unit test for sapphirelib::telemetry::motorRow(), what one motor
 // channel row records, and above all what an unplugged motor looks like in
 // the log. No PROS dependency.
 //
@@ -84,7 +84,7 @@ void testOneFailedReadingIsOneNan() {
 }
 
 void testIdleMotorIsZeroesNotNan() {
-    // Plugged in and doing nothing is a row of zeros (and room temperature) —
+    // Plugged in and doing nothing is a row of zeros (and room temperature),
     // a very different thing from unplugged.
     double values[kMotorColumnCount];
     motorRow(MotorReadings{.temperatureC = 25.0}, values);

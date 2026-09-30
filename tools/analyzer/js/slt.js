@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — slt.js
+ * SapphireLib telemetry analyzer: slt.js
  *
  * Reads SLT v1 telemetry files (docs/TELEMETRY_FORMAT.md) into a columnar
  * model the rest of the analyzer charts and analyzes. Parsing follows
@@ -16,7 +16,7 @@
  *
  * Plain script: window.SA.slt in a browser, require('./slt.js') in Node.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
@@ -431,7 +431,7 @@
   }
 
   /**
-   * The log's drivetrain motions, start to end — slt_read.py's motions():
+   * The log's drivetrain motions, start to end, like slt_read.py's motions():
    * each `end` closes the most recent open `start` of the same kind; a motion
    * with no end was cut short and stops at the first phase change after it
    * started (or the end of the log).

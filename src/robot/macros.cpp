@@ -1,7 +1,7 @@
 /**
  * \file macros.cpp
  *
- * Driver macros for the intake, claw, and lift — see macros.hpp for the
+ * Driver macros for the intake, claw, and lift, see macros.hpp for the
  * controls. Everything meant to be tuned is in the constants at the top; the
  * ports are in config.hpp.
  *
@@ -10,7 +10,7 @@
  * input/, mechanism/, and util/ primitives. What's left here is this robot's
  * numbers and rules.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "robot/macros.hpp"
@@ -100,7 +100,7 @@ constexpr std::uint32_t kLiftDescendTimeoutMs = 1000;
 
 // --- Lift Auto-Tune and Run Test (the PID page's Lift entry) ---
 // Auto-Tune drives the lift up and down between these two heights, stopping
-// each segment once it passes one — so keep both well inside the lift's real
+// each segment once it passes one, so keep both well inside the lift's real
 // travel (it takes a few degrees to brake), and start with the lift down.
 // TODO: these assume the placeholder level heights below; set them from the
 // real ones once those are measured.
@@ -140,8 +140,8 @@ pros::Rotation liftSensor(ports::kLiftSensor);
 pros::Distance clawSensor(ports::kClawDistance);
 Piston clawPiston(ports::kClawPiston, /*extendedAtStart=*/false);
 
-// Driven from update(), once per opcontrol tick, with that tick's `now` —
-// not on a task of its own — so nothing moves the lift while opcontrol isn't
+// Driven from update(), once per opcontrol tick, with that tick's `now`,
+// not on a task of its own, so nothing moves the lift while opcontrol isn't
 // running, exactly as before these macros moved onto the library.
 PositionMechanism lift({ports::kLiftA, ports::kLiftB},
                        [] { return sapphirelib::mechanism::readRotationDeg(liftSensor); },
@@ -242,7 +242,7 @@ void showStatus(Controller& controller) {
         // The piston itself, not state.clawDeployed, so this also shows the
         // brief retract during a re-seat.
         screen.setLine(1, "CLAW %s", clawPiston.extended() ? "DEPLOYED" : "RETRACTED");
-        // Lift sensor reading, then target, in whole degrees — for measuring
+        // Lift sensor reading, then target, in whole degrees, for measuring
         // level heights and seeing whether the lift is short of its target.
         const double liftDeg = lift.position();
         if (std::isnan(liftDeg)) {
@@ -261,7 +261,7 @@ void showStatus(Controller& controller) {
 
 void initialize() {
     liftSensor.reset_position();
-    // Only matters when the lift falls back to brake() — with no sensor, or
+    // Only matters when the lift falls back to brake(), with no sensor, or
     // after stop().
     lift.motors().set_brake_mode_all(pros::v5::MotorBrake::hold);
 }
@@ -278,7 +278,7 @@ void update(Controller& controller) {
     }
 
     // controller.update() sampled every button once for this tick, and edges
-    // come from comparing samples — so reading (or not reading) a button
+    // come from comparing samples, so reading (or not reading) a button
     // changes nothing. No more reading every new-press every tick so that a
     // press made while one went unread doesn't fire late.
     const bool intaking = controller.held(Button::r1);
@@ -404,7 +404,7 @@ void attachTelemetry(sapphirelib::telemetry::Logger& logger) {
     // kD = 0.01 its derivative term is already in hundredths of a volt.
     // Capacity 128 is 2.5s at the 20ms opcontrol tick.
     logger.pid("lift", lift.pid(), {.capacity = 128, .decimals = 3});
-    // What the motors were actually sent, after gravity volts and the clamp —
+    // What the motors were actually sent, after gravity volts and the clamp,
     // the "lift" channel's "out" is only the loop's share. The listener runs
     // inside lift.update(), on the opcontrol task, and reuses that update's
     // one sensor read; recording never blocks.
@@ -450,7 +450,7 @@ MechanismCharacterizationConfig liftExperiment() {
         .upperLimit = kLiftTuneUpperDeg,
         .downStepVolts = kLiftTuneDownVolts,
         // initialize() sets the brake mode to hold, so this keeps the lift
-        // where it is between segments — which 0V wouldn't.
+        // where it is between segments, which 0V wouldn't.
         .hold = [] { lift.motors().brake(); },
         .gravity = {.kind = GravityKind::constant},
     };

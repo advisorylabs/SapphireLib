@@ -5,7 +5,7 @@
  * brain screen. autonomous() runs whichever one is picked there (see
  * runSelectedAuton() in screen.cpp); so does B+DOWN off the field.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "robot/autons.hpp"

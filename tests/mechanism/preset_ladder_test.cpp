@@ -1,5 +1,5 @@
 /*
- * Host-side unit test for sapphirelib::mechanism::PresetLadder — no
+ * Host-side unit test for sapphirelib::mechanism::PresetLadder, no
  * PROS/embedded dependencies, so it builds and runs with a normal desktop
  * compiler.
  *

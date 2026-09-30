@@ -1,5 +1,5 @@
 /*
- * SapphireLib telemetry analyzer — explorer.js
+ * SapphireLib telemetry analyzer: explorer.js
  *
  * The Charts tab: any column of any channel, stacked on one shared time axis.
  * Presets cover the usual questions (motor temperatures, the lift, each PID,
@@ -10,7 +10,7 @@
  *
  * Browser only: SA.views.charts.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 (function () {
   'use strict';
@@ -82,7 +82,7 @@
       const stack = h('div', { class: 'chart-stack' });
       const values = h('div', { class: 'table-wrap' });
       let charts = [];
-      // The selection: an ordered list of { channel, columns } — one chart each.
+      // The selection: an ordered list of { channel, columns }, one chart each.
       let selection = [];
       const bands = app.bands();
       const markers = app.findingMarkers();
@@ -131,7 +131,7 @@
           for (const p of rest) selection.push({ channel: p.channel, columns: p.columns });
           if (merged.length) {
             // Several channels, one column: one chart, one series per channel, in
-            // fixed slot order (never more than eight — the rest go to "more").
+            // fixed slot order (never more than eight; the rest go to "more").
             const first = merged.slice(0, 8);
             selection.push({ channel: first[0].channel, columns: [preset.merge], merged: true,
               title: `${preset.name}${merged.length > 8 ? ' (first 8)' : ''}`,
@@ -194,8 +194,8 @@
           for (const s of chart.series) {
             const i = SA.charts.indexAt(s.t, t);
             rows.push(h('tr', null, h('td', null, chart.titleEl.textContent), h('td', null, s.label),
-              h('td', { class: 'num' }, i >= 0 ? SA.charts.formatValue(s.y[i]) : '—'),
-              h('td', { class: 'num' }, i >= 0 ? `${(t - s.t[i]).toFixed(3)}s` : '—')));
+              h('td', { class: 'num' }, i >= 0 ? SA.charts.formatValue(s.y[i]) : '-'),
+              h('td', { class: 'num' }, i >= 0 ? `${(t - s.t[i]).toFixed(3)}s` : '-')));
           }
         }
         values.append(h('table', { class: 'data-table' },

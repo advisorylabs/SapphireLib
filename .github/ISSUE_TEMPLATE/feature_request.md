@@ -6,7 +6,7 @@ labels: enhancement
 ---
 
 **What roadmap phase does this belong to?**
-See `docs/ROADMAP.md` — note the phase, or say "new/unscheduled" if it doesn't fit yet.
+See `docs/ROADMAP.md` and note the phase, or say "new/unscheduled" if it doesn't fit yet.
 
 **Describe the feature**
 What should SapphireLib do?

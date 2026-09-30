@@ -59,7 +59,7 @@ TEMPLATE_FILES=$(INCDIR)/$(LIBNAME)/*.h $(INCDIR)/$(LIBNAME)/*.hpp $(INCDIR)/$(L
 ################################################################################
 ######################## Toolchain consistency guard ###########################
 # bin/ keeps no record of which compiler produced it, and make only rebuilds
-# the objects whose sources changed — so a build from a shell with a
+# the objects whose sources changed, so a build from a shell with a
 # different arm-none-eabi-g++ first on PATH silently mixes objects from two
 # GCC major versions into one image. That links without complaint and then
 # faults on the brain before LVGL paints anything, which reads as a dead
@@ -78,7 +78,7 @@ ifeq ($(filter clean clean-template all,$(MAKECMDGOALS)),)
 STAMPED_TOOLCHAIN:=$(shell cat $(TOOLCHAIN_STAMP) 2>/dev/null)
 ifneq ($(STAMPED_TOOLCHAIN),)
 ifneq ($(STAMPED_TOOLCHAIN),$(TOOLCHAIN_VERSION))
-$(error bin/ was built with $(ARCHTUPLE)g++ $(STAMPED_TOOLCHAIN) but $(TOOLCHAIN_VERSION) is first on PATH. Mixing them links fine and then crashes on the brain. Build from a shell using $(STAMPED_TOOLCHAIN) — VS Code's PROS terminal — or run `make clean` to rebuild everything with $(TOOLCHAIN_VERSION).)
+$(error bin/ was built with $(ARCHTUPLE)g++ $(STAMPED_TOOLCHAIN) but $(TOOLCHAIN_VERSION) is first on PATH. Mixing them links fine and then crashes on the brain. Build from a shell using $(STAMPED_TOOLCHAIN), VS Code's PROS terminal, or run `make clean` to rebuild everything with $(TOOLCHAIN_VERSION).)
 endif
 endif
 $(shell mkdir -p $(BINDIR) && echo $(TOOLCHAIN_VERSION) > $(TOOLCHAIN_STAMP))
@@ -87,8 +87,8 @@ endif
 
 ################################################################################
 ############################### Example checking ###############################
-# Nothing else compiles examples/ — they aren't part of the program or the
-# library — so an API change that breaks one would otherwise only surface once
+# Nothing else compiles examples/; they aren't part of the program or the
+# library, so an API change that breaks one would otherwise only surface once
 # a team has copied it into their own project. `make check-examples`
 # syntax-checks each example with the same compiler and flags as src/main.cpp
 # (as if it had been copied there), writes no objects, and fails if any of them

@@ -1,7 +1,7 @@
 // Host-side end-to-end test for Auto-Tune: the real characterization runners
 // (src/sapphirelib/tuning/characterization_runner.cpp) drive a simulated axis
 // through a fake clock, the real fit identifies it, the real design picks
-// gains, and those gains close the loop on the same simulated axis — the
+// gains, and those gains close the loop on the same simulated axis, the
 // whole chain PidTunerPage runs on the robot, minus the robot. The fake clock
 // is util/clock.hpp's seam: time only moves when the runner (or the closed
 // loop below) sleeps, and moving it moves the axis.

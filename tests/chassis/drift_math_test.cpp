@@ -1,4 +1,4 @@
-// Host-side unit test for sapphirelib::chassis::strafeDriftIn — no
+// Host-side unit test for sapphirelib::chassis::strafeDriftIn, no
 // PROS/embedded dependencies, so it builds and runs with a normal desktop
 // compiler.
 //

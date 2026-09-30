@@ -1,5 +1,5 @@
 // Host-side unit test for sapphirelib::tuning's system identification math
-// — no PROS/embedded dependencies, so it builds and runs with a normal
+// no PROS/embedded dependencies, so it builds and runs with a normal
 // desktop compiler.
 //
 // Every test drives a simulated axis with known kS/kV/kA and delay through
@@ -146,7 +146,7 @@ CharacterizationData collect(const MotorFeedforward& truth, int delayTicks, doub
 /// the brake (logged as NaN volts, not moving), then `voltsAt(seconds since
 /// the hold ended)` until the reading passes `limit` in `direction` (the
 /// runner stops there without commanding that tick) or `maxTicks`. Each
-/// command reaches the mechanism `delayTicks` ticks later — the brake too, so
+/// command reaches the mechanism `delayTicks` ticks later, the brake too, so
 /// it keeps holding that long after the first command.
 CharacterizationRun simulateMechanism(const MechanismModel& truth, int delayTicks, double start,
                                       int holdTicks, const std::function<double(double)>& voltsAt,

@@ -2,7 +2,7 @@
  * \file examples/holonomic_chassis.cpp
  *
  * Phase 1 example: closed-loop holonomic (mecanum/X-drive) drive using only
- * an IMU and drive motor encoders — no tracking wheels. Assumes one motor
+ * an IMU and drive motor encoders, no tracking wheels. Assumes one motor
  * per corner with green (200 RPM) gearing and a 4" wheel diameter.
  *
  * Not built into the program (the Makefile only compiles src/), but
@@ -10,7 +10,7 @@
  * silently fall out of date. Copy the relevant pieces into your own
  * src/main.cpp and adjust ports/gains for your robot.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #include "main.h"
@@ -36,7 +36,7 @@ Controller master(pros::E_CONTROLLER_MASTER);
 
 /// Built on the first call, which initialize() makes, rather than at namespace
 /// scope: constructing a drivetrain blocks for ~2-3s while its IMU calibrates,
-/// and static initialization runs before initialize() — before the program has
+/// and static initialization runs before initialize(), before the program has
 /// even started.
 HolonomicDrivetrain& drivetrain() {
     static HolonomicDrivetrain instance(
@@ -71,7 +71,7 @@ void opcontrol() {
 
         if (master.pressed(Button::a)) {
             // Redefine "forward" as whichever way the chassis is facing now
-            // — handy after defense spins the robot, or to re-square against
+            // handy after defense spins the robot, or to re-square against
             // a wall. Only relevant to the field-centric calls below.
             drivetrain().resetFieldHeading();
         }

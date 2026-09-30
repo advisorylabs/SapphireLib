@@ -5,7 +5,7 @@
  * controllers and the lift's, and the Auto-Tune axes their gains are designed
  * from.
  *
- * Team 96671H — Hitmen
+ * Team 96671H: Hitmen
  */
 
 #pragma once

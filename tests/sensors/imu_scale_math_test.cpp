@@ -1,6 +1,6 @@
 // Host-side unit test for sapphirelib::sensors::rawHeadingDeltaDeg,
 // wrapDegrees360, fieldHeadingDeg, headingOffsetFor, and
-// calibrateHeadingScale — no PROS/embedded
+// calibrateHeadingScale, no PROS/embedded
 // dependencies, so it builds and runs with a normal desktop compiler.
 //
 // Build & run:
@@ -43,7 +43,7 @@ void testRawHeadingDeltaAcrossSeam() {
 
 void testCumulativeTrackingAccumulatesPastOneRevolution() {
     // Simulate spinning through 355 -> 5 -> 15, accumulating deltas exactly
-    // like Imu::updateCumulative() does — should total +20, not wrap.
+    // like Imu::updateCumulative() does, should total +20, not wrap.
     double cumulative = 0.0;
     cumulative += rawHeadingDeltaDeg(355.0, 5.0);
     cumulative += rawHeadingDeltaDeg(5.0, 15.0);
@@ -84,7 +84,7 @@ void testFieldHeadingWithoutOffsetIsWrappedRotation() {
 
 void testOffsetRoundTrip() {
     // setHeadingDeg(target) stores headingOffsetFor(target, cumulative); the
-    // very next read must give the target back — for any rotation history
+    // very next read must give the target back, for any rotation history
     // (negative, several turns) and any target, seam values included.
     const double cumulatives[] = {0.0, 12.5, -12.5, 359.999, 360.0, 725.0, -1080.3, 12345.678};
     const double targets[] = {0.0, 90.0, 180.0, 270.0, 359.999, 360.0, -90.0, 450.0, 1e-9};
@@ -115,7 +115,7 @@ void testRotationAfterOffsetKeepsTracking() {
 
 void testCalibrateHeadingScale() {
     // IMU under-reports: chassis actually did 10 full turns, IMU only
-    // measured 9.8 — scale should be > 1 to correct future readings up.
+    // measured 9.8, scale should be > 1 to correct future readings up.
     expectNear(calibrateHeadingScale(/*actualTurns=*/10.0, /*measuredTurns=*/9.8), 10.0 / 9.8,
                "under-reporting IMU");
     // Exact measurement needs no correction.
