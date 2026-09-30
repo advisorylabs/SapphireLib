@@ -11,13 +11,14 @@
 #pragma once
 
 #include "sapphirelib/chassis/holonomic_drivetrain.hpp"
+#include "sapphirelib/localization/monte_carlo_localizer.hpp"
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/odom/rotation_tracking_wheel.hpp"
 
 namespace robot {
 
-/// Constructs every device in a fixed order, starts the odometry task, and
-/// zeroes the lift (see macros::initialize()). Call once from initialize(),
+/// Constructs every device in a fixed order, starts the odometry and
+/// localizer tasks, and zeroes the lift (see macros::initialize()). Call once from initialize(),
 /// right after robot::screen(): the drivetrain blocks for ~2-3s on IMU
 /// calibration, and the header should already be painted by then, so a
 /// fault here reads as "initialize() stopped here" rather than "the GUI is
@@ -38,5 +39,11 @@ sapphirelib::chassis::HolonomicDrivetrain& drivetrain();
 sapphirelib::odom::Odometry& odometry();
 sapphirelib::odom::RotationTrackingWheel& verticalWheel();
 sapphirelib::odom::RotationTrackingWheel& horizontalWheel();
+
+/// Monte Carlo localization on the four side distance sensors, correcting
+/// odometry()'s pose (see devices.cpp). Its estimate means field coordinates
+/// only once an auton has called odometry().setPose() with where the robot
+/// really starts.
+sapphirelib::localization::MonteCarloLocalizer& localizer();
 
 } // namespace robot

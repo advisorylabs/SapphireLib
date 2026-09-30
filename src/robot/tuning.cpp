@@ -107,7 +107,12 @@ CharacterizationConfig translationExperiment(TranslationAxis axis) {
     // Captured by value into `measure` below, so every sample reads distance
     // along *this* run's starting heading. The open-loop voltages don't
     // hold heading, and the live heading can drift slightly over a run.
-    const Pose reference = odometry().getPose();
+    //
+    // The raw pose, not getPose(): a localizer correction easing in mid-run
+    // moves getPose() by up to a few in/s the chassis never drove, which the
+    // fit would read as speed. The tracking wheels' own travel is what the
+    // model has to explain.
+    const Pose reference = odometry().snapshot().rawPose;
 
     return CharacterizationConfig{
         .actuate =
@@ -120,7 +125,7 @@ CharacterizationConfig translationExperiment(TranslationAxis axis) {
             },
         .measure =
             [reference, axis] {
-                const Pose pose = odometry().getPose();
+                const Pose pose = odometry().snapshot().rawPose;
                 const LocalOffset local = toLocalFrame(pose.xIn - reference.xIn,
                                                        pose.yIn - reference.yIn, reference.headingDeg);
                 return axis == TranslationAxis::forward ? local.forwardIn : local.lateralIn;
