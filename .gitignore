@@ -28,3 +28,6 @@ __pycache__/
 
 # Telemetry analyzer single-file bundle (node tools/analyzer/build.js)
 tools/analyzer/dist/
+
+# Simulator single-file bundle (node tools/sim/build.js)
+tools/sim/dist/
