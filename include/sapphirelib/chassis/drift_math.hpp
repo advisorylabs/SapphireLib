@@ -11,7 +11,8 @@ namespace sapphirelib::chassis {
  * cause of strafe drift
  *
  * @param verticalWheelDeltaIn the vertical tracking wheel's travel this tick, in inches
- * @param verticalOffsetIn the wheel's offset from the tracking center, in inches. Positive is right
+ * @param verticalOffsetIn the wheel's offset from the tracking center, in inches, as
+ * odom::OdometryConfig::verticalOffsetIn takes it: positive is left of center
  * @param rotationDeltaDeg the chassis's heading change this tick, in degrees. Clockwise positive
  * @param strafeTravelIn sideways travel from the corner encoders this tick, in inches. Positive is
  * right

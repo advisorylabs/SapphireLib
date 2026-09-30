@@ -122,6 +122,69 @@ void testCalibrateTrackingWheelOffset() {
                "calibrate: 10 turns");
 }
 
+// How far a wheel fixed to the chassis rolls while the chassis turns in
+// place clockwise by `turnDeg`, worked out from the geometry rather than
+// from a formula: step the rigid body through the turn and add up each
+// step's displacement of the wheel along the way it rolls. `rightIn` /
+// `forwardIn` place the wheel; `rollsForward` picks a vertical wheel (rolls
+// along the robot's forward axis) or a horizontal one (along its right axis).
+double wheelTravelOnTurnIn(double rightIn, double forwardIn, bool rollsForward, double turnDeg) {
+    // the odom::Pose frame: heading clockwise from +y, forward = (sin, cos),
+    // right = (cos, -sin)
+    const auto position = [&](double h, double& x, double& y) {
+        x = rightIn * std::cos(h) + forwardIn * std::sin(h);
+        y = -rightIn * std::sin(h) + forwardIn * std::cos(h);
+    };
+    const int steps = 20000;
+    const double total = turnDeg * kPi / 180.0;
+    double travel = 0.0;
+    for (int i = 0; i < steps; ++i) {
+        const double h0 = total * i / steps;
+        const double h1 = total * (i + 1) / steps;
+        double x0, y0, x1, y1;
+        position(h0, x0, y0);
+        position(h1, x1, y1);
+        const double mid = (h0 + h1) / 2.0;
+        const double dirX = rollsForward ? std::sin(mid) : std::cos(mid);
+        const double dirY = rollsForward ? std::cos(mid) : -std::sin(mid);
+        travel += (x1 - x0) * dirX + (y1 - y0) * dirY;
+    }
+    return travel;
+}
+
+void testOffsetSignsMatchWhereTheWheelsAre() {
+    // Pins OdometryConfig's sign convention to the physical placement: turn
+    // in place and see which offset makes odometry read no movement. A
+    // vertical wheel RIGHT of center rolls backward on a clockwise turn (a
+    // tank's right side), so it needs a NEGATIVE offset; left is positive.
+    // The horizontal wheel is the intuitive way round: ahead is positive.
+    const double r = 3.59;
+    const double rightWheel = wheelTravelOnTurnIn(r, 0.0, true, 90.0);
+    const double leftWheel = wheelTravelOnTurnIn(-r, 0.0, true, 90.0);
+    expectNear(rightWheel, -r * kPi / 2.0, "right-side vertical wheel rolls backward");
+    expectNear(leftWheel, r * kPi / 2.0, "left-side vertical wheel rolls forward");
+
+    auto moved = [](double vertical, double horizontal, double vOffset, double hOffset) {
+        const auto d = computeOdometryDelta(0.0, 90.0, vertical, horizontal, vOffset, hOffset);
+        return std::hypot(d.dxIn, d.dyIn);
+    };
+    expectNear(moved(rightWheel, 0.0, -r, 0.0), 0.0, "right-side wheel, offset -r");
+    expectNear(moved(leftWheel, 0.0, r, 0.0), 0.0, "left-side wheel, offset +r");
+    // the wrong sign doubles the arc instead of removing it: 11in of motion
+    // on a 90 degree turn that never went anywhere
+    expectNear(moved(rightWheel, 0.0, r, 0.0), r * kPi, "wrong sign on a right-side wheel");
+
+    const double f = 4.18;
+    const double aheadWheel = wheelTravelOnTurnIn(0.0, f, false, 90.0);
+    const double behindWheel = wheelTravelOnTurnIn(0.0, -f, false, 90.0);
+    expectNear(moved(0.0, aheadWheel, 0.0, f), 0.0, "horizontal wheel ahead, offset +f");
+    expectNear(moved(0.0, behindWheel, 0.0, -f), 0.0, "horizontal wheel behind, offset -f");
+
+    // and calibration measures exactly those signs
+    expectNear(calibrateTrackingWheelOffsetIn(rightWheel, kPi / 2.0), -r, "calibrates right as -r");
+    expectNear(calibrateTrackingWheelOffsetIn(aheadWheel, kPi / 2.0), f, "calibrates ahead as +f");
+}
+
 } // namespace
 
 int main() {
@@ -131,6 +194,7 @@ int main() {
     testHeadingWrapAcrossSeam();
     testReframingRotatesTheDeltaButIsNotATurn();
     testCalibrateTrackingWheelOffset();
+    testOffsetSignsMatchWhereTheWheelsAre();
     std::puts("odometry_math_test: all assertions passed");
     return 0;
 }

@@ -65,6 +65,18 @@ constexpr double kTrackingWheelDiameterIn = 2.75;
 // measure them, or use the Odom page's "Calibrate Offsets", which applies
 // what it measures to the running odometry and shows the numbers, but
 // doesn't change this file: copy them in here to keep them.
+//
+// Mind the vertical wheel's sign, which is the opposite of what you'd guess
+// (see OdometryConfig): positive is LEFT of center. A vertical wheel on the
+// robot's right side rolls backward on a right turn, so it needs a negative
+// offset. The horizontal wheel is the intuitive way round: positive is
+// ahead. So 3.59 below says the vertical wheel is 3.59in left of center.
+// Nothing records whether it was calibrated (which gets the sign right on
+// its own) or measured by hand; if the wheel is really on the right, it
+// should be -3.59, and every 90 degree turn is putting about 11in of
+// phantom travel into the pose. TODO: check once on the robot: on the Odom
+// page, spin in place a few turns and watch x/y, which should barely move;
+// or run "Calibrate Offsets" and compare its signs with these.
 constexpr double kVerticalWheelOffsetIn = 3.59;
 constexpr double kHorizontalWheelOffsetIn = 4.18;
 
