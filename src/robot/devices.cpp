@@ -20,6 +20,10 @@ using sapphirelib::chassis::AsteriskConfig;
 using sapphirelib::chassis::DrivetrainConfig;
 using sapphirelib::chassis::Gearset;
 using sapphirelib::chassis::HolonomicDrivetrain;
+using sapphirelib::localization::DistanceSensorConfig;
+using sapphirelib::localization::FieldMap;
+using sapphirelib::localization::LocalizerConfig;
+using sapphirelib::localization::MonteCarloLocalizer;
 using sapphirelib::odom::Odometry;
 using sapphirelib::odom::OdometryConfig;
 using sapphirelib::odom::Pose;
@@ -113,6 +117,43 @@ Odometry& odometry() {
     return instance;
 }
 
+MonteCarloLocalizer& localizer() {
+    // Four distance sensors, one per side, watching the field walls. The
+    // localizer moves its particles by odometry's own measured travel, weighs
+    // them by how well they explain the four readings, and eases odometry's
+    // pose toward the answer (Odometry::setPositionCorrection()), so every
+    // moveToPoint()/moveToPose()/followPath() drives by the corrected pose
+    // with the same Auto-Tuned PIDs. Heading stays the IMU's.
+    //
+    // The map is just the perimeter, origin in the middle of the field.
+    // Game elements get pushed around, and one in the map where it no longer
+    // is does more harm than one missing from it: a reading off something
+    // that isn't in the map is treated as an outlier, and the other sensors
+    // carry on. Try a change in the simulator (tools/sim) before the robot.
+    static MonteCarloLocalizer instance(
+        odometry(),
+        {
+            DistanceSensorConfig{.port = ports::kDistanceFront,
+                                 .mount = {.forwardIn = kFrontSensorForwardIn,
+                                           .rightIn = kFrontSensorRightIn,
+                                           .facingDeg = 0.0}},
+            DistanceSensorConfig{.port = ports::kDistanceRight,
+                                 .mount = {.forwardIn = kRightSensorForwardIn,
+                                           .rightIn = kRightSensorRightIn,
+                                           .facingDeg = 90.0}},
+            DistanceSensorConfig{.port = ports::kDistanceBack,
+                                 .mount = {.forwardIn = kBackSensorForwardIn,
+                                           .rightIn = kBackSensorRightIn,
+                                           .facingDeg = 180.0}},
+            DistanceSensorConfig{.port = ports::kDistanceLeft,
+                                 .mount = {.forwardIn = kLeftSensorForwardIn,
+                                           .rightIn = kLeftSensorRightIn,
+                                           .facingDeg = 270.0}},
+        },
+        FieldMap::centered(), LocalizerConfig{});
+    return instance;
+}
+
 void initDevices() {
     // Blocks until the IMU finishes calibrating (~2-3s).
     HolonomicDrivetrain& chassis = drivetrain();
@@ -131,6 +172,14 @@ void initDevices() {
 
     odometry().startTask();
     SAPPHIRELIB_LOG_INFO("init", "odometry task started");
+
+    // After odometry, which it reads. It corrects nothing until an auton's
+    // setPose() puts the pose in field coordinates (LocalizerConfig::
+    // waitForSetPose): before that, the pose is relative to wherever the robot
+    // sat at startup, and the particles can only hunt for the robot, which in
+    // the simulator briefly latched onto the wrong spot on the way.
+    localizer().startTask();
+    SAPPHIRELIB_LOG_INFO("init", "localizer task started");
 
     // Center wheels read the same vertical tracking wheel Odometry uses to
     // detect forward/back drift while strafing, reading a sensor from two

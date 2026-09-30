@@ -53,8 +53,30 @@ void startTelemetry() {
     log.pid("turn", chassis.turnPID());
     log.pid("hold", chassis.headingHoldPID());
 
-    // x, y, heading at 100Hz.
+    // x, y, heading at 100Hz. The corrected pose, what every motion drives by.
     log.pose(odometry(), "odom", 10);
+
+    // The localizer, at its own 20Hz: its estimate, how sure it is (spread in
+    // inches, effective particle count), how many of the four sensors gave a
+    // reading and how many of those agree with the walls, whether that update
+    // corrected odometry, and the correction odometry is easing toward, which
+    // is how far raw odometry had drifted. status() is atomics, safe from the
+    // sampler task.
+    log.poll(
+        "mcl", {"x", "y", "spread", "neff", "used", "agree", "correcting", "corr_x", "corr_y"}, 50,
+        [](double* values) {
+            const sapphirelib::localization::LocalizationStatus status = localizer().status();
+            values[0] = status.estimate.xIn;
+            values[1] = status.estimate.yIn;
+            values[2] = status.spreadIn;
+            values[3] = status.effectiveParticles;
+            values[4] = status.sensorsUsed;
+            values[5] = status.sensorsAgreeing;
+            values[6] = status.correcting ? 1.0 : 0.0;
+            values[7] = status.correctionXIn;
+            values[8] = status.correctionYIn;
+        },
+        {.capacity = 32, .decimals = 2});
 
     // What the drivetrain actually commanded on each axis (the PIDs' "out" is
     // only the loop's share, before mixing and heading correction): the

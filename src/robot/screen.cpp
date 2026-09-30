@@ -108,6 +108,10 @@ void buildScreen() {
             // check("Claw motor", ports::kClawMotor, DeviceKind::motor),
             // check("Lift rotation sensor", ports::kLiftSensor, DeviceKind::rotation),
             // check("Claw distance sensor", ports::kClawDistance, DeviceKind::distance),
+            // check("Front distance sensor", ports::kDistanceFront, DeviceKind::distance),
+            // check("Right distance sensor", ports::kDistanceRight, DeviceKind::distance),
+            // check("Back distance sensor", ports::kDistanceBack, DeviceKind::distance),
+            // check("Left distance sensor", ports::kDistanceLeft, DeviceKind::distance),
         },
         &gui));
 

@@ -48,6 +48,17 @@ constexpr std::int8_t kLiftSensor = 16;
 constexpr std::uint8_t kClawDistance = 5;
 constexpr char kClawPiston = 'A'; // a 3-wire port on the brain, not a smart port
 
+// --- Localization distance sensors (devices.cpp) ---
+// One per side, for Monte Carlo localization. TODO: these are placeholders on
+// free ports; set each to where that sensor is really plugged in, then
+// uncomment its entry in the Diagnostics page's list (screen.cpp). A port with
+// no distance sensor on it just reads nothing, and the localizer leaves
+// odometry alone without readings, so a wrong port is harmless, only useless.
+constexpr std::uint8_t kDistanceFront = 1;
+constexpr std::uint8_t kDistanceRight = 4;
+constexpr std::uint8_t kDistanceBack = 6;
+constexpr std::uint8_t kDistanceLeft = 11;
+
 } // namespace robot::ports
 
 namespace robot {
@@ -79,5 +90,20 @@ constexpr double kTrackingWheelDiameterIn = 2.75;
 // or run "Calibrate Offsets" and compare its signs with these.
 constexpr double kVerticalWheelOffsetIn = 3.59;
 constexpr double kHorizontalWheelOffsetIn = 4.18;
+
+// Where each localization distance sensor's face sits, measured from the
+// tracking center (see DistanceSensorMount): inches forward (negative is
+// behind) and right (negative is left). Measure to the face of the sensor,
+// the spot its reading starts from; an inch off here is an inch of bias in
+// the localizer's estimate along that sensor's direction. TODO: measure them;
+// these are placeholders for sensors centered on each side of a ~14in chassis.
+constexpr double kFrontSensorForwardIn = 7.0;
+constexpr double kFrontSensorRightIn = 0.0;
+constexpr double kRightSensorForwardIn = 0.0;
+constexpr double kRightSensorRightIn = 7.0;
+constexpr double kBackSensorForwardIn = -7.0;
+constexpr double kBackSensorRightIn = 0.0;
+constexpr double kLeftSensorForwardIn = 0.0;
+constexpr double kLeftSensorRightIn = -7.0;
 
 } // namespace robot
