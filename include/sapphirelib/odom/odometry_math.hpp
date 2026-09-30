@@ -42,4 +42,17 @@ PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double 
  */
 double calibrateTrackingWheelOffsetIn(double wheelDistanceIn, double rotatedRadians);
 
+/**
+ * @brief Work out how far a position correction moves in one update
+ *
+ * Odometry eases a correction in (see Odometry::setPositionCorrection()) rather than jumping,
+ * since a jump in the pose is a spike in every motion's derivative term
+ *
+ * @param remainingXIn correction still to apply in x (the target minus what's applied), in inches
+ * @param remainingYIn correction still to apply in y, in inches
+ * @param maxStepIn the most it may move this update, in inches, 0 or more. Infinity for no limit
+ * @return PoseDelta the step, straight toward the target and no longer than maxStepIn
+ */
+PoseDelta correctionStep(double remainingXIn, double remainingYIn, double maxStepIn);
+
 } // namespace sapphirelib::odom
