@@ -52,12 +52,14 @@
   }
 
   /** The heat class for a motor temperature, and its token. */
+  // Green while a motor has full power, then one step per V5 derating step:
+  // half its current at 55°C, a quarter at 60°C, an eighth (or none) at 65°C+.
   const HEAT_BINS = [
-    { max: 35, token: '--heat-0', label: 'under 35°C' },
-    { max: 45, token: '--heat-1', label: '35–45°C' },
-    { max: 55, token: '--heat-2', label: '45–55°C' },
-    { max: 60, token: '--heat-3', label: '55–60°C (derating)' },
-    { max: Infinity, token: '--heat-4', label: '60°C+ (25% power or less)' },
+    { max: 45, token: '--heat-0', label: 'under 45°C' },
+    { max: 55, token: '--heat-1', label: '45–55°C' },
+    { max: 60, token: '--heat-2', label: '55–60°C (half power)' },
+    { max: 65, token: '--heat-3', label: '60–65°C (quarter power)' },
+    { max: Infinity, token: '--heat-4', label: '65°C+ (eighth power or off)' },
   ];
 
   function heatBin(tempC) {
@@ -70,14 +72,27 @@
     return bin ? SA.charts.token(bin.token) : SA.charts.token('--surface-3');
   }
 
-  /** Ink that reads on a heat fill (the two hottest bins are dark in light mode). */
+  /** Relative luminance of a #rrggbb color (WCAG). */
+  function luminance(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+    if (!m) return null;
+    const channel = (i) => {
+      const v = parseInt(m[1].slice(i, i + 2), 16) / 255;
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+  }
+
+  /** Ink that reads on a heat fill: white or near-black, whichever contrasts more. */
   function heatInk(tempC) {
     const bin = heatBin(tempC);
-    const dark = document.documentElement.dataset.theme === 'dark' ||
-      (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
     if (!bin) return SA.charts.token('--ink');
-    const index = HEAT_BINS.indexOf(bin);
-    return (dark ? index <= 1 : index >= 3) ? '#ffffff' : '#0e1117';
+    const fill = luminance(SA.charts.token(bin.token));
+    if (fill === null) return SA.charts.token('--ink');
+    const dark = '#0e1117';
+    const onWhite = 1.05 / (fill + 0.05);
+    const onDark = (fill + 0.05) / (luminance(dark) + 0.05);
+    return onWhite > onDark ? '#ffffff' : dark;
   }
 
   function heatLegend() {
