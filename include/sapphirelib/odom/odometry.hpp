@@ -73,6 +73,9 @@ public:
     /**
      * @brief Get the pose. Thread-safe
      *
+     * Includes any position correction a localizer has set (see setPositionCorrection()), so every
+     * motion reading it drives by the corrected pose
+     *
      * @return Pose x and y in inches, heading in degrees
      *
      * @b Example
@@ -89,7 +92,7 @@ public:
      * The heading is set through the IMU, so with odometry sharing the drivetrain's IMU, the whole
      * robot moves to the new frame: turnToHeading(270) means the field's 270. Field-centric forward
      * and driver heading hold aren't affected, since they track physical directions. Travel from
-     * before the reset never ends up in the new pose
+     * before the reset never ends up in the new pose, and any position correction is cleared
      *
      * @param pose the new pose. The heading is wrapped to 0-360
      *
@@ -102,6 +105,55 @@ public:
      * @endcode
      */
     void setPose(Pose pose);
+
+    /**
+     * @brief The pose, the tracking-only pose it came from, and the setPose() count, read together
+     */
+    struct Snapshot {
+        /** what getPose() returns: rawPose plus the position correction applied so far */
+        Pose pose;
+
+        /**
+         * the pose from the IMU and tracking wheels alone, before any setPositionCorrection().
+         * Measure travel with this: unlike pose, a correction easing in never moves it
+         */
+        Pose rawPose;
+
+        /** how many times setPose() has run. Pass it to setPositionCorrection() */
+        std::uint32_t resetCount = 0;
+    };
+
+    /**
+     * @brief Get the pose, the raw pose, and the setPose() count in one consistent read.
+     * Thread-safe
+     *
+     * @b Example
+     * @code {.cpp}
+     * // how far the tracking wheels say the robot has driven, ignoring any localizer correction
+     * sapphirelib::odom::Pose start = odometry().snapshot().rawPose;
+     * @endcode
+     */
+    Snapshot snapshot() const;
+
+    /**
+     * @brief Correct the measured position, for a localizer like
+     * localization::MonteCarloLocalizer. Thread-safe
+     *
+     * getPose() becomes the raw pose plus this offset. The correction eases in at up to
+     * maxRateInPerS rather than jumping, since a jump in the pose is a spike in every motion's
+     * derivative term. Heading is never corrected; the IMU owns it. Each call replaces the last
+     * target, and setPose() clears it
+     *
+     * @param xIn the offset to add to the raw x, in inches
+     * @param yIn the offset to add to the raw y, in inches
+     * @param maxRateInPerS how fast the pose may move toward it, in inches per second. 0 or less
+     * applies it on the next update
+     * @param resetCount snapshot().resetCount from the reading the correction was worked out from
+     * @return false if setPose() has run since, so the correction belongs to an old frame and was
+     * dropped
+     */
+    bool setPositionCorrection(double xIn, double yIn, double maxRateInPerS,
+                               std::uint32_t resetCount);
 
     /**
      * @brief Get the tracking wheel offsets. Thread-safe
@@ -128,16 +180,29 @@ public:
     void startTask(std::uint32_t periodMs = 10);
 
 private:
+    // everything the pose is made of, behind one lock so a snapshot() is consistent
+    struct State {
+        Pose raw;
+        double correctionXIn = 0.0;
+        double correctionYIn = 0.0;
+        double targetXIn = 0.0;
+        double targetYIn = 0.0;
+        double maxCorrectionRateInPerS = 0.0;
+    };
+
     Sensors sensors_;
     mutable pros::MutexVar<OdometryConfig> config_;
-    mutable pros::MutexVar<Pose> pose_;
+    mutable pros::MutexVar<State> state_;
+
+    // when the last update() ran, for easing the correction in. 0 before the first
+    std::uint32_t lastUpdateMs_ = 0;
 
     // the last update's rotation reading (getCumulativeHeadingDeg()), which setPose() never
     // shifts, so a re-frame between two updates isn't mistaken for a turn
     double lastRotationDeg_;
 
     // bumped by setPose(), so an update that read its sensors before the reset throws its result
-    // away
+    // away. Written with state_ locked, so snapshot() reads it together with the pose it belongs to
     std::atomic<std::uint32_t> poseGeneration_{0};
 
     // the generation the last update started from (update task only). When it differs from

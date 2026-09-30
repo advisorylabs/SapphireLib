@@ -5,6 +5,7 @@
 #include "sapphirelib/util/angle.hpp"
 #include "sapphirelib/util/clock.hpp"
 #include "sapphirelib/util/log.hpp"
+#include "sapphirelib/util/random.hpp"
 #include "sapphirelib/util/sequence.hpp"
 #include "sapphirelib/util/timing.hpp"
 #include "sapphirelib/util/wait.hpp"
@@ -28,6 +29,11 @@
 #include "sapphirelib/odom/pose.hpp"
 #include "sapphirelib/odom/rotation_tracking_wheel.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
+
+#include "sapphirelib/localization/field_map.hpp"
+#include "sapphirelib/localization/monte_carlo_localizer.hpp"
+#include "sapphirelib/localization/particle_filter.hpp"
+#include "sapphirelib/localization/sensor_model.hpp"
 
 #include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/motion_config.hpp"

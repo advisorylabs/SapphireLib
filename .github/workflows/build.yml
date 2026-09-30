@@ -78,6 +78,8 @@ jobs:
             extra=""
             case "$test" in
               tests/control/heading_hold_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
+              tests/localization/particle_filter_test.cpp)
+                extra="src/sapphirelib/localization/field_map.cpp src/sapphirelib/localization/sensor_model.cpp" ;;
               tests/mechanism/position_control_test.cpp) extra="src/sapphirelib/control/pid.cpp" ;;
               tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;

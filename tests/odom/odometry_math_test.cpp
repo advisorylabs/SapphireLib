@@ -10,11 +10,13 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 #include "sapphirelib/odom/odometry_math.hpp"
 
 using sapphirelib::odom::calibrateTrackingWheelOffsetIn;
 using sapphirelib::odom::computeOdometryDelta;
+using sapphirelib::odom::correctionStep;
 
 namespace {
 
@@ -185,6 +187,50 @@ void testOffsetSignsMatchWhereTheWheelsAre() {
     expectNear(calibrateTrackingWheelOffsetIn(aheadWheel, kPi / 2.0), f, "calibrates ahead as +f");
 }
 
+void testCorrectionStep() {
+    // Within the step limit, the whole remaining correction lands at once.
+    auto step = correctionStep(0.3, -0.4, 1.0);
+    expectNear(step.dxIn, 0.3, "small correction: dx");
+    expectNear(step.dyIn, -0.4, "small correction: dy");
+
+    // Past it, the step points straight at the target and is exactly the
+    // limit long: 3-4-5 triangle, limited to 0.5in.
+    step = correctionStep(3.0, -4.0, 0.5);
+    expectNear(step.dxIn, 0.3, "limited correction: dx");
+    expectNear(step.dyIn, -0.4, "limited correction: dy");
+
+    // No time passed (a limit of 0): nothing moves.
+    step = correctionStep(3.0, -4.0, 0.0);
+    expectNear(step.dxIn, 0.0, "zero limit: dx");
+    expectNear(step.dyIn, 0.0, "zero limit: dy");
+
+    // Infinity is no limit at all.
+    step = correctionStep(30.0, 40.0, std::numeric_limits<double>::infinity());
+    expectNear(step.dxIn, 30.0, "unlimited: dx");
+    expectNear(step.dyIn, 40.0, "unlimited: dy");
+
+    // Nothing left to apply.
+    step = correctionStep(0.0, 0.0, 0.5);
+    expectNear(step.dxIn, 0.0, "done: dx");
+    expectNear(step.dyIn, 0.0, "done: dy");
+
+    // Easing a correction in at 4in/s over 10ms updates takes as long as it
+    // should: 2in at 0.04in per update is 50 updates.
+    double appliedX = 0.0;
+    double appliedY = 0.0;
+    int updates = 0;
+    while (std::hypot(1.2 - appliedX, -1.6 - appliedY) > 1e-12 && updates < 1000) {
+        const auto s = correctionStep(1.2 - appliedX, -1.6 - appliedY, 4.0 * 0.01);
+        appliedX += s.dxIn;
+        appliedY += s.dyIn;
+        ++updates;
+    }
+    if (updates != 50) {
+        std::printf("FAIL correction ease-in took %d updates, expected 50\n", updates);
+        assert(false);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -195,6 +241,7 @@ int main() {
     testReframingRotatesTheDeltaButIsNotATurn();
     testCalibrateTrackingWheelOffset();
     testOffsetSignsMatchWhereTheWheelsAre();
+    testCorrectionStep();
     std::puts("odometry_math_test: all assertions passed");
     return 0;
 }

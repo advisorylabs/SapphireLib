@@ -38,4 +38,11 @@ double calibrateTrackingWheelOffsetIn(double wheelDistanceIn, double rotatedRadi
     return wheelDistanceIn / rotatedRadians;
 }
 
+PoseDelta correctionStep(double remainingXIn, double remainingYIn, double maxStepIn) {
+    const double remainingIn = std::hypot(remainingXIn, remainingYIn);
+    if (remainingIn <= maxStepIn) return PoseDelta{.dxIn = remainingXIn, .dyIn = remainingYIn};
+    const double scale = maxStepIn / remainingIn;
+    return PoseDelta{.dxIn = remainingXIn * scale, .dyIn = remainingYIn * scale};
+}
+
 } // namespace sapphirelib::odom
