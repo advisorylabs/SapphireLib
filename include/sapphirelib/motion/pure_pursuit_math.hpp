@@ -53,4 +53,21 @@ struct LookaheadResult {
 LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, double lookaheadIn,
                                    std::size_t fromIndex);
 
+/**
+ * @brief Whether followPath() should stop pursuing and drive its final approach
+ *
+ * Only once pursuit has reached the path's last segment, not just whenever the robot is near the
+ * last waypoint: a closed path (a lap that ends where it started) begins right on top of its own
+ * end, and the distance alone would finish it before the robot moved
+ *
+ * @param distanceToFinalIn distance from the robot to the last waypoint, in inches
+ * @param finalApproachIn PursuitConfig::finalApproachIn, in inches
+ * @param segmentIndex the segment pursuit is on: the last LookaheadResult::segmentIndex, 0 before
+ * the first search
+ * @param waypointCount how many waypoints the path has, at least 1
+ * @return true to switch to the final approach
+ */
+bool reachedFinalApproach(double distanceToFinalIn, double finalApproachIn,
+                          std::size_t segmentIndex, std::size_t waypointCount);
+
 } // namespace sapphirelib::motion

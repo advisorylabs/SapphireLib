@@ -54,7 +54,8 @@ struct PursuitConfig {
 
     /**
      * distance from the last waypoint where followPath() switches to moveToPoint(), so it slows
-     * down and settles instead of circling the end, in inches. 6 by default
+     * down and settles instead of circling the end, in inches. Only counts once pursuit is on the
+     * last segment, so a path that ends where it starts drives the whole lap. 6 by default
      */
     double finalApproachIn = 6.0;
 
