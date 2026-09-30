@@ -119,6 +119,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: node --test tools/analyzer/test/*.test.js
 
+      # The simulator (tools/sim) runs JavaScript ports of the localizer,
+      # odometry and motions; its tests hold the ports to the C++ tests'
+      # golden values and check MCL end to end against the simulated field.
+      - name: Test the simulator
+        if: ${{ !cancelled() }}
+        run: node --test tools/sim/test/*.test.js
+
       # The whole library has had its one-time format pass, so this should stay
       # green: run clang-format on what you change.
       - name: Check formatting

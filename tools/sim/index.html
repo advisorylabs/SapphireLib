@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sapphire Sim</title>
+<!--
+  SapphireLib localization simulator. Open this file in a browser: no install,
+  no server, works offline. It runs the robot's own odometry, Monte Carlo
+  localization, motions and Auto-Tune gain design (ported from the library)
+  against a simulated field. See README.md next to this file.
+  Team 96671H: Hitmen
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="css/sim.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1><span class="mark" aria-hidden="true"></span> Sapphire Sim</h1>
+    <span class="sub">Odometry + Monte Carlo localization, no robot needed</span>
+  </div>
+  <div class="transport" role="group" aria-label="Simulation">
+    <button class="btn primary" id="play-btn" type="button">Pause</button>
+    <button class="btn" id="reset-btn" type="button" title="Put the robot back at the start">Reset</button>
+    <label class="inline">Speed
+      <select class="select" id="speed-select">
+        <option value="0.1">0.1×</option>
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+      </select>
+    </label>
+    <span class="clock num" id="clock">0.0s</span>
+    <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch light or dark theme" title="Theme">◐</button>
+  </div>
+</header>
+
+<main class="sim">
+  <section class="stage">
+    <div class="field-wrap" id="field-wrap">
+      <canvas id="field" aria-label="The field: the robot, its particles, and its sensor beams"></canvas>
+      <div class="segments field-tools" id="zoom-seg" role="group" aria-label="View">
+        <button type="button" data-value="1" aria-pressed="true">Whole field</button>
+        <button type="button" data-value="4" aria-pressed="false">Follow ×4</button>
+        <button type="button" data-value="12" aria-pressed="false">×12</button>
+      </div>
+      <div class="step-caption" id="step-caption" hidden></div>
+      <div class="field-hint" id="field-hint" hidden></div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="panel chart-panel">
+      <header>
+        <h3>How far off is it?</h3>
+        <span class="hint">Distance from where the robot really is, in inches, over the last minute</span>
+      </header>
+      <canvas id="chart" aria-label="Position error over time"></canvas>
+    </div>
+  </section>
+
+  <aside class="controls">
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Controls">
+      <button role="tab" data-tab="drive" aria-selected="true">Drive</button>
+      <button role="tab" data-tab="show">Show</button>
+      <button role="tab" data-tab="learn">Learn</button>
+      <button role="tab" data-tab="events">Events</button>
+      <button role="tab" data-tab="robot">Robot</button>
+      <button role="tab" data-tab="mcl">MCL</button>
+    </nav>
+
+    <!-- Drive -->
+    <div class="tab-body" data-body="drive">
+      <section class="panel">
+        <header><h3>Autonomous</h3></header>
+        <div class="row">
+          <select class="select grow" id="routine-select" aria-label="Routine"></select>
+          <button class="btn primary" id="run-btn" type="button">Run</button>
+          <button class="btn" id="stop-btn" type="button">Stop</button>
+        </div>
+        <p class="hint" id="routine-desc"></p>
+        <p class="result" id="routine-result" hidden></p>
+      </section>
+      <section class="panel">
+        <header><h3>Drive it yourself</h3><span class="hint">Space pauses</span></header>
+        <div class="keys">
+          <span><kbd>W</kbd><kbd>S</kbd> forward, back</span>
+          <span><kbd>A</kbd><kbd>D</kbd> strafe</span>
+          <span><kbd>Q</kbd><kbd>E</kbd> or <kbd>←</kbd><kbd>→</kbd> turn</span>
+          <span><kbd>Shift</kbd> slow</span>
+        </div>
+        <label class="slider">Stick <output id="stick-out">70%</output>
+          <input type="range" id="stick" min="20" max="100" step="5" value="70">
+        </label>
+      </section>
+      <section class="panel">
+        <header><h3>Pose the motions drive by</h3></header>
+        <div class="segments" id="correct-seg" role="group" aria-label="Pose source">
+          <button type="button" data-value="on" aria-pressed="true">Odometry + MCL</button>
+          <button type="button" data-value="off" aria-pressed="false">Odometry alone</button>
+        </div>
+        <p class="hint">MCL keeps running either way; this is <code>setCorrectionEnabled()</code>. Run a routine each way and compare where it ends up.</p>
+      </section>
+      <section class="panel">
+        <header><h3>PID gains</h3></header>
+        <div class="segments" id="gains-seg" role="group" aria-label="Gains">
+          <button type="button" data-value="auto" aria-pressed="true">Auto-Tuned</button>
+          <button type="button" data-value="hand" aria-pressed="false">Hand-set (devices.cpp)</button>
+        </div>
+        <div class="gains num" id="gains-readout"></div>
+      </section>
+    </div>
+
+    <!-- Show -->
+    <div class="tab-body" data-body="show" hidden>
+      <section class="panel">
+        <header><h3>Particles</h3></header>
+        <div class="checks" id="show-particles"></div>
+      </section>
+      <section class="panel">
+        <header><h3>Sensors</h3></header>
+        <div class="checks" id="show-sensors"></div>
+      </section>
+      <section class="panel">
+        <header><h3>Poses</h3></header>
+        <div class="checks" id="show-poses"></div>
+      </section>
+      <section class="panel">
+        <header><h3>Field</h3></header>
+        <div class="checks" id="show-field"></div>
+      </section>
+    </div>
+
+    <!-- Learn -->
+    <div class="tab-body" data-body="learn" hidden>
+      <section class="panel">
+        <header><h3>How Monte Carlo localization works</h3></header>
+        <p>Odometry is good but it drifts: tracking wheels slip, get bumped, and read a little long or short, and every error stays in the pose for the rest of the match. MCL keeps a cloud of <em>particles</em>, each one a guess at where the robot is, and uses the distance sensors to keep the cloud honest. Every 50&nbsp;ms it runs three steps:</p>
+        <ol class="steps">
+          <li><strong>Predict.</strong> Move every particle by what odometry measured since last time, plus a little random noise, because odometry isn't perfect. The cloud follows the robot and spreads out a bit.</li>
+          <li><strong>Weigh.</strong> For each particle, work out what each distance sensor <em>would</em> read from there, and compare with what it <em>did</em> read. Particles that explain the readings get heavy; the rest get light. A reading nothing explains (another robot in the way) counts as an outlier, so it can't drag the cloud off.</li>
+          <li><strong>Resample.</strong> Copy heavy particles and drop light ones, so the cloud gathers where the robot really is.</li>
+        </ol>
+        <p>The cloud's average is the estimate. When the cloud is tight and enough sensors agree with the walls, the localizer eases odometry's pose toward it, at most 4&nbsp;in/s so the PIDs never see a jump. Heading always comes from the IMU.</p>
+      </section>
+      <section class="panel">
+        <header><h3>Step through one update</h3></header>
+        <p class="hint">Pauses the simulation. Each click runs the next step of the next update, and the field shows what it did.</p>
+        <div class="row">
+          <button class="btn primary" id="step-btn" type="button">Step: predict</button>
+          <button class="btn" id="step-full-btn" type="button">Whole update</button>
+        </div>
+      </section>
+      <section class="panel">
+        <header><h3>Inspect a particle</h3><span class="hint">Click one on the field</span></header>
+        <div id="inspector" class="inspector"><p class="hint">No particle selected.</p></div>
+      </section>
+      <section class="panel">
+        <header><h3>Sensors right now</h3><span class="hint">From the estimate</span></header>
+        <div class="table-wrap"><table class="data-table" id="sensor-table"></table></div>
+        <p class="hint" id="gate-line"></p>
+      </section>
+    </div>
+
+    <!-- Events -->
+    <div class="tab-body" data-body="events" hidden>
+      <section class="panel">
+        <header><h3>Things odometry never sees</h3></header>
+        <div class="row wrap">
+          <button class="btn" id="bump-btn" type="button">Bump the robot</button>
+          <button class="btn" id="kidnap-btn" type="button">Pick it up and move it</button>
+          <button class="btn" id="relocalize-btn" type="button">Relocalize globally</button>
+        </div>
+        <p class="hint">A bump shoves the robot 6&nbsp;in without its tracking wheels turning: odometry is now wrong, and only the sensors can tell. <em>Pick it up</em> drops it where you click next. Recovery reaches about 18&nbsp;in from the estimate (see MCL); farther than that, relocalize globally, which scatters every particle over the field (try 1500 particles).</p>
+      </section>
+      <section class="panel">
+        <header><h3>Defender robot</h3></header>
+        <div class="checks" id="defender-checks"></div>
+        <p class="hint">Another robot the map knows nothing about. Drag it on the field. Watch its sensor readings turn red (disagree) while the others carry the estimate.</p>
+      </section>
+      <section class="panel">
+        <header><h3>Field elements</h3></header>
+        <div class="checks" id="element-checks"></div>
+        <p class="hint">Generic boxes, not any season's game. A thing in the world but not the map is only outliers; a thing in the map that isn't there is worse. Try both.</p>
+      </section>
+      <section class="panel">
+        <header><h3>Scenarios</h3></header>
+        <div class="row wrap" id="scenario-buttons"></div>
+      </section>
+    </div>
+
+    <!-- Robot -->
+    <div class="tab-body" data-body="robot" hidden>
+      <section class="panel">
+        <header><h3>What the robot program doesn't know</h3><span class="hint">The world's errors</span></header>
+        <div class="sliders" id="world-sliders"></div>
+      </section>
+      <section class="panel">
+        <header><h3>Chassis model</h3><span class="hint">What Auto-Tune measures: V = kS·sign(v) + kV·v + kA·a</span></header>
+        <div class="model-grid" id="model-grid"></div>
+        <div class="row"><button class="btn" id="autotune-btn" type="button">Auto-Tune (design gains)</button></div>
+        <p class="hint">The sim's chassis <em>is</em> these three axis models, the six motors and the center wheels folded in, the way Auto-Tune measures the whole chassis at once. Designing gains here runs the robot's own pole placement (same specs as <code>src/robot/tuning.cpp</code>). Edits change the running chassis at once. The gains follow when you Auto-Tune, and at every Reset or routine start while Auto-Tuned gains are selected (Drive tab).</p>
+      </section>
+    </div>
+
+    <!-- MCL -->
+    <div class="tab-body" data-body="mcl" hidden>
+      <section class="panel">
+        <header><h3>LocalizerConfig</h3><span class="hint">The robot's defaults; changes restart the localizer</span></header>
+        <div class="sliders" id="mcl-sliders"></div>
+        <div class="checks" id="mcl-checks"></div>
+        <div class="row"><button class="btn" id="mcl-defaults-btn" type="button">Back to defaults</button></div>
+        <p class="hint">Everything here is a field of <code>LocalizerConfig</code> or <code>ParticleFilterConfig</code>. Find settings you like here, then copy them into <code>localizer()</code> in <code>src/robot/devices.cpp</code>:</p>
+        <pre class="code" id="mcl-code"></pre>
+      </section>
+    </div>
+  </aside>
+</main>
+
+<script src="../analyzer/js/model.js"></script>
+<script src="js/mcl.js"></script>
+<script src="js/world.js"></script>
+<script src="js/robot.js"></script>
+<script src="js/routines.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/render.js"></script>
+<script src="js/app.js"></script>
+<script>SIM.app.start();</script>
+</body>
+</html>
