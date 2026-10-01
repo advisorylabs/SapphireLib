@@ -14,8 +14,8 @@ and now that pose is corrected.
 **Try it without a robot first.** [`tools/sim/`](../tools/sim/) is a simulator of 96671H's robot:
 the same odometry, localizer and motions (ported line for line and checked against these C++ tests),
 against a simulated field with realistic sensor noise, slip, bumps and a defender. Open
-`tools/sim/index.html` (see its [README](../tools/sim/README.md)). Its Learn tab steps through one
-update at a time, which is the quickest way to see what the rest of this page describes.
+`tools/sim/index.html` (see [`docs/TOOLS.md`](TOOLS.md)). Bump the robot (Events tab) and zoom in
+(Follow ×4) to watch the particles do what the rest of this page describes.
 
 Contents: [How it works](#how-it-works) · [Setting it up](#setting-it-up) ·
 [Autonomous](#autonomous) · [What it won't do](#what-it-wont-do) · [Tuning](#tuning) ·
@@ -167,7 +167,7 @@ in `TUNE.CFG` on the SD card, no rebuild needed. The whole loop is
 
 | Setting | Default | Raise it when | Lower it when |
 |---|---|---|---|
-| `filter.particleCount` | 300 | the estimate is jumpy, or for `relocalizeGlobally()` (try 1500) | the brain is short on CPU |
+| `filter.particleCount` | 300 | recovery after bumps is slow, or for `relocalizeGlobally()`: 1000 costs about what 300 did before the lookup tables (1–2.5 ms an update) | the brain is short on CPU (check `mcl`'s `us`) |
 | `filter.motionNoise.perInch` | 0.05 | odometry's error outruns the cloud (worn wheels, slip): the corrected pose lags behind | the estimate wanders between readings |
 | `filter.beam.outlierProbability` | 0.1 | the field is crowded and readings are often blocked | the sensors always see clean walls and you want sharper corrections |
 | `maxCorrectionRateInPerS` | 4 | corrections after a bump take too long to land | motions twitch while a correction eases in |
@@ -176,7 +176,9 @@ in `TUNE.CFG` on the SD card, no rebuild needed. The whole loop is
 
 A few are easy to get wrong: a `maxCorrectionRateInPerS` of 0 applies corrections in one step, which
 the motions see as a spike. Too few particles make the estimate noisy, and recovery can only search
-as far as `recovery.radiusIn`.
+as far as `recovery.radiusIn`. More particles barely change tracking error (sensor noise and the
+correction rate set that), but they find the robot faster after a bump or a global relocalization:
+the numbers, and what each costs on the brain, are in [`docs/TOOLS.md`](TOOLS.md#particle-count-what-it-costs-what-it-buys).
 
 ## Telemetry
 
@@ -186,14 +188,22 @@ While recording, 96671H's robot logs every localizer update from the localizer's
   the correction, the update's time in microseconds, and raw odometry.
 - `mcl.beams`: each sensor's reading next to what the map says it should read and its closing
   speed.
+- `mcl.state`: the particles' covariance, recovery's fit, particles recovered, whether it
+  resampled, why it didn't correct (`LocalizationStatus::blockedBy`), and the beams' heading.
+- `mcl.pts`: every 5th update, 24 particles picked by weight (`sampleParticles()`), as offsets from
+  the estimate.
 
-These sit next to `odom`, the corrected pose. The correction is how far raw odometry had drifted,
-so a match's log shows how much the localizer earned its keep. Every file's `#meta` lines record
+These sit next to `odom`, the corrected pose, which also carries raw odometry (`raw_x`, `raw_y`).
+The correction is how far raw odometry had drifted, so a match's log shows how much the localizer
+earned its keep. The analyzer's Replay draws all of it on the field: raw odometry, the estimate and
+its ellipse, the particles, and every beam against the map, with why it wasn't correcting when it
+wasn't ([`docs/TOOLS.md`](TOOLS.md#reading-the-localizer-in-a-log)). Every file's `#meta` lines record
 the settings it ran with and the sensor mounts. See [`docs/TELEMETRY_FORMAT.md`](TELEMETRY_FORMAT.md);
 the simulator calibrates from these channels ([`docs/TUNING.md`](TUNING.md)).
 
 `MonteCarloLocalizer::setUpdateCallback()` hands any code the same per-update data
-(`LocalizerUpdate`: the estimate, the status, raw odometry, and a `BeamSample` per sensor).
+(`LocalizerUpdate`: the estimate, the status, raw odometry, a `BeamSample` per sensor, the fit,
+whether it resampled, and the particles).
 
 Auto-Tune measures its translation axes from the raw pose (`odometry().snapshot().rawPose`), not
 `getPose()`, since a correction easing in during a characterization run would read as speed the
@@ -223,9 +233,11 @@ but real sensors, real walls and real wheel slip are what count. Before trusting
 |---|---|---|
 | `FieldMap`: walls, boxes, raycasting | `localization/field_map.hpp` | `tests/localization/field_map_test.cpp` |
 | `LocalizerConfig`, and every field by name and range (for `TUNE.CFG`) | `localization/localizer_config.hpp` | `tests/localization/localizer_config_test.cpp` |
-| The sensor model: mounts, the beam likelihood, reading conversion, latency | `localization/sensor_model.hpp` | `tests/localization/sensor_model_test.cpp` |
-| `ParticleFilter`: predict, weigh, resample, recovery | `localization/particle_filter.hpp` | `tests/localization/particle_filter_test.cpp`: unit checks, plus closed-loop runs on a simulated field against biased odometry, a blocked sensor and a bump |
-| `Rng`: seeded xoshiro128** | `util/random.hpp` | `tests/util/random_test.cpp` |
+| The sensor model: mounts, the beam likelihood, reading conversion, latency, and `ReadingScorer` (the likelihood by lookup table, within 1e-5) | `localization/sensor_model.hpp` | `tests/localization/sensor_model_test.cpp` |
+| `ParallelRayCaster`: one sensor's raycasts for every particle, no division | `localization/field_map.hpp` | `tests/localization/field_map_test.cpp` |
+| `ParticleFilter`: predict, weigh, resample, recovery, `sampleParticles()` | `localization/particle_filter.hpp` | `tests/localization/particle_filter_test.cpp`: unit checks, the exact model the tables replaced, plus closed-loop runs on a simulated field against biased odometry, a blocked sensor and a bump |
+| `Rng`: seeded xoshiro128**, and `fastGaussian()` (a ziggurat) | `util/random.hpp` | `tests/util/random_test.cpp` |
+| `LookupTable`: a function sampled and interpolated | `util/lookup_table.hpp` | `tests/util/lookup_table_test.cpp` |
 | `MonteCarloLocalizer`: sensors, gating, the correction | `localization/monte_carlo_localizer.hpp` | on the robot; its logic runs in the simulator |
 | Odometry's correction: `snapshot()`, `setPositionCorrection()`, the ease-in | `odom/odometry.hpp`, `odom/odometry_math.hpp` | `tests/odom/odometry_math_test.cpp` (`correctionStep()`) |
 
