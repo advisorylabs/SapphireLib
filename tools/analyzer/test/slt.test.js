@@ -15,8 +15,9 @@ const path = require('node:path');
 const slt = require('../js/slt.js');
 
 function goldenFile() {
+  // A Windows checkout (core.autocrlf) has CRLF line endings; the block is found by its LFs.
   const source = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'telemetry', 'slt_read.py'), 'utf8');
+    path.join(__dirname, '..', '..', 'telemetry', 'slt_read.py'), 'utf8').replace(/\r\n/g, '\n');
   const block = source.slice(source.indexOf('SELFTEST_FILE = ('));
   const body = block.slice(0, block.indexOf('\n)\n'));
   const literals = body.match(/"((?:[^"\\]|\\.)*)"/g);
@@ -62,7 +63,8 @@ test('golden file: events and health', () => {
   assert.equal(log.events.length, 9);
   assert.deepEqual(log.events[3], { t: 15.00339, tag: 'auton', msg: 'start,Turn Testing' });
   assert.deepEqual(log.health, [{ t: 3.104771, values: { rows: 4, bytes: 1034, writes: 1,
-    wmax_us: 21873, wavg_us: 21873, drops: 0, unlogged: 2, resyncs: 0, breaks: 0, faults: 0 } }]);
+    wmax_us: 21873, wavg_us: 21873, drops: 0, unlogged: 2, resyncs: 0, breaks: 0, faults: 0,
+    samp_us: 1840, fmt_us: 2615 } }]);
 });
 
 test('golden file: motions pair and cut short at the phase change', () => {

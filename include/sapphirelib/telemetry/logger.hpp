@@ -9,6 +9,7 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,7 @@
 #include "sapphirelib/telemetry/channel.hpp"
 #include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/telemetry/motor_row.hpp"
+#include "sapphirelib/telemetry/recording_policy.hpp"
 
 namespace sapphirelib::telemetry {
 
@@ -64,6 +66,25 @@ struct LoggerConfig {
      * default, so a robot sitting in the queue doesn't log for minutes
      */
     bool pollWhileDisabled = false;
+
+    /**
+     * record from start() on, in one file, until stopRecording(). true by default. false waits
+     * for startRecording(), e.g. a button on the Home page, or for competition control
+     */
+    bool recordAtStart = true;
+
+    /**
+     * record whenever competition control (a field, or a competition switch) is connected: a new
+     * file when it connects, closed once it has been disconnected for competitionStopDelayMs.
+     * true by default. A recording already running when it connects is left alone
+     */
+    bool recordUnderCompetition = true;
+
+    /**
+     * how long competition control must stay disconnected before a recording it started ends, in
+     * milliseconds, so a tether that drops for a moment doesn't split a match across two files
+     */
+    std::uint32_t competitionStopDelayMs = 5000;
 };
 
 /**
@@ -71,7 +92,8 @@ struct LoggerConfig {
  */
 enum class LoggerState : std::uint8_t {
     stopped,        // start() hasn't been called
-    waitingForCard, // no card, or no file could be opened yet. Retrying
+    idle,           // started, not recording. Any file is closed, so the card is safe to pull
+    waitingForCard, // recording, but no card, or no file could be opened yet. Retrying
     logging,        // writing to a file
     faulted,        // a write failed (card pulled or full). Rows are dropped until a new file opens
 };
@@ -92,14 +114,26 @@ struct LoggerStatus {
     std::uint32_t droppedRows = 0;
     /** slowest write to the card since start(), in microseconds */
     std::uint32_t slowestWriteUs = 0;
+
+    /** whether a recording is running (it may still be waiting for a card) */
+    bool recording = false;
+
+    /** why the running recording started. none when there isn't one */
+    RecordingReason reason = RecordingReason::none;
+
+    /** whether an SD card was in the brain, as of the last check (about once a second) */
+    bool cardInserted = false;
 };
 
 /**
  * @brief Records PIDs, the pose, motor health, your own values, and events to the SD card
  *
- * One file per program run (docs/TELEMETRY_FORMAT.md), for the telemetry analyzer. It never slows
- * the code it records: recording copies 64 bytes and moves on, and all SD work happens on the
- * logger's own low priority task. Recording is safe from any task and never blocks
+ * One file per recording (docs/TELEMETRY_FORMAT.md), for the telemetry analyzer. By default a
+ * recording runs from start() to the end of the program; LoggerConfig::recordAtStart = false waits
+ * for startRecording() (a button) or for competition control to connect. Between recordings the
+ * file is closed and nothing is recorded. It never slows the code it records: recording copies 64
+ * bytes and moves on, and all SD work happens on the logger's own low priority task. Recording is
+ * safe from any task and never blocks
  *
  * @note make exactly one, with static storage, and register channels in initialize(). Registering
  * from autonomous() or opcontrol() isn't safe
@@ -256,6 +290,44 @@ public:
     bool vevent(const char* tag, const char* format, std::va_list args);
 
     /**
+     * @brief Add a "#meta,<key>,<value>" line to the top of every file, e.g. the settings a
+     * localizer or a TUNE.CFG ran with, so each log says what produced it
+     *
+     * Call before start(); later calls are ignored. Keys keep letters, digits, '_', '.', and '-',
+     * at most 63 of them; values are cut to 63 characters. Both are copied
+     *
+     * @param key the key, e.g. "tune.rev"
+     * @param value the value, e.g. "7"
+     *
+     * @b Example
+     * @code {.cpp}
+     * logger().addMeta("mcl.particles", "300");
+     * @endcode
+     */
+    void addMeta(const char* key, const char* value);
+
+    /**
+     * @brief Start a recording, in a new file. Safe from any task, e.g. a GUI button
+     *
+     * Takes effect within samplePeriodMs. Does nothing if one is already running
+     */
+    void startRecording();
+
+    /**
+     * @brief End the recording, and close its file within writerPeriodMs. Safe from any task
+     *
+     * Everything recorded before the call is written first, so pulling the card once
+     * status().state is idle loses nothing. A recording competition control started can be
+     * stopped too; the next connection starts another
+     */
+    void stopRecording();
+
+    /**
+     * @brief Whether a recording is running. Safe from any task
+     */
+    bool recording() const;
+
+    /**
      * @brief Start the logger's tasks. Returns right away
      *
      * The card is checked and the file opened on the logger's own task, so a missing card never
@@ -300,6 +372,7 @@ private:
 
     void samplerLoop();
     void samplerTick();
+    void pollSources(std::uint32_t nowMs);
 
     // how one attempt to open a file in one folder went
     enum class OpenResult : std::uint8_t { opened, folderMissing, failed };
@@ -307,11 +380,13 @@ private:
     // writer task only, so these touch the writer state below without a lock
     void writerLoop();
     void writerPass();
-    void manageFile(std::uint32_t nowMs, std::size_t channelCount);
+    void manageFile(std::uint32_t nowMs, std::size_t channelCount, bool wanted);
+    void closeFile(std::size_t channelCount);
     void tryOpen(std::size_t channelCount);
     OpenResult openIn(const char* directory, std::size_t channelCount, const char* fallbackNote);
     void announceChannels(std::size_t channelCount);
-    void drain(std::size_t channelCount);
+    // true if it stopped at the per-pass row limit with rows still waiting
+    bool drain(std::size_t channelCount);
     void writeHealth(std::size_t channelCount);
     bool writeStaged();
     void fault(const char* reason);
@@ -329,6 +404,7 @@ private:
     std::array<std::unique_ptr<Polled>, kMaxPolled> polled_;
     std::atomic<std::size_t> polledCount_{0};
     std::vector<std::pair<PID*, std::unique_ptr<PidProbe>>> probes_; // under mutex
+    std::vector<std::pair<std::string, std::string>> meta_;          // fixed once started_
     std::unique_ptr<Channel> nullChannel_;
 
     Channel* systemEvents_ = nullptr; // id 0, phases. The sampler records into it
@@ -336,6 +412,20 @@ private:
 
     std::atomic<std::uint32_t> fileEpoch_{0};
     std::atomic<bool> flushRequested_{false};
+
+    // recording: every channel records only while recording_ is set. The sampler owns the policy
+    // and sets it, after counting a new session for every start, so the writer can tell a stop
+    // and a start apart from one recording. request_ carries startRecording()/stopRecording() to
+    // the sampler
+    RecordingPolicy policy_; // sampler only
+    std::atomic<bool> recording_{false};
+    std::atomic<std::uint32_t> session_{0};
+    std::atomic<RecordingRequest> request_{RecordingRequest::none};
+    std::atomic<RecordingReason> reason_{RecordingReason::none};
+    std::atomic<RecordingReason> stopReason_{RecordingReason::none};
+
+    // sampler time for the H row's samp_us: wall time, so an upper bound on its CPU
+    std::atomic<std::uint32_t> samplerBusyUs_{0};
 
     // the competition status the sampler last logged (sampler only). No real status has every bit
     // set, so the first tick always logs one
@@ -347,6 +437,7 @@ private:
     std::atomic<bool> inRootFolder_{false};
     std::atomic<std::uint32_t> bytesWritten_{0};
     std::atomic<std::uint32_t> slowestWriteUs_{0};
+    std::atomic<bool> cardInserted_{false};
 
     // writer task state. Allocated in start(), before the writer exists; only the writer touches
     // it after that
@@ -356,6 +447,7 @@ private:
     std::FILE* file_ = nullptr;           // null unless logging
     char fileName_[16] = {};              // current (or last) file's name
     std::size_t announced_ = 0;           // channels whose #chan is in file_
+    std::uint32_t fileSession_ = 0;       // the recording file_ belongs to
     std::array<std::pair<std::uint32_t, std::uint32_t>, kMaxChannels> lastDrops_{};
 
     std::uint32_t lastOpenAttemptMs_ = 0;
@@ -376,6 +468,9 @@ private:
     std::uint32_t unlogged_ = 0;
     std::uint32_t breaks_ = 0;
     std::uint32_t faults_ = 0;
+    // writer time outside SD writes since the last H row (fmt_us), and SD write time this pass
+    std::uint32_t writerBusyUs_ = 0;
+    std::uint32_t passWriteUs_ = 0;
     bool reopenPending_ = false; // the next file opened follows a fault
 
     std::unique_ptr<pros::Task> sampler_;
