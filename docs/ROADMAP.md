@@ -736,11 +736,11 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       axis model; the world adds tracking wheel error and slip, IMU drift, distance sensor noise,
       latency and dropouts, bumps, a defender, and field elements in the world, the map, both or
       neither. Visualizer toggles for particles (colored by fit, sized by weight), the uncertainty
-      ellipse, sensor beams, expected-vs-measured per sensor, raw and corrected poses; a step-through
-      of one update (predict, weigh, resample) with captions; a particle inspector; and a settings tab
-      that writes the `LocalizerConfig{...}` to paste. Its Node tests (in CI) check the claims it
-      makes: every routine finishes within an inch and closer on average than on odometry alone,
-      worn wheels and bumps are corrected, and unmapped elements are ignored.
+      ellipse, sensor beams, expected-vs-measured per sensor, raw and corrected poses, and a settings
+      tab that writes the `LocalizerConfig{...}` to paste. (Its Learn tab, a captioned step-through of
+      one update, was dropped for a short reference: [`docs/TOOLS.md`](TOOLS.md).) Its Node tests (in
+      CI) check the claims it makes: every routine finishes within an inch and closer on average than
+      on odometry alone, worn wheels and bumps are corrected, and unmapped elements are ignored.
 - [x] MCL auto-tuning: the simulator's Tune tab searches `LocalizerConfig` (coordinate pattern
       search, each candidate replaying the same recorded paths open loop so only the settings differ,
       changes kept only when better by more than a standard error, the winner checked on unseen
@@ -749,6 +749,18 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       noise, blocked and missing readings, mount biases and tracking wheel scale from them, while the
       sensor delay is matched by simulating the robot's own paths. Results go to `TUNE.CFG`. Tested
       against simulated logs of worlds the calibration isn't told about.
+- [x] A cheaper update: the filter's noise comes from a ziggurat (`Rng::fastGaussian()`), the
+      sensor model from a softplus table (`LookupTable`, `ReadingScorer`), the recovery fit from an
+      exp table, and each sensor's raycasts share one aimed `ParallelRayCaster` (no division per
+      cast). Estimated on the brain from a Cortex-A9 `-Os` build under QEMU: about 3× faster, so
+      1000 particles cost what 300 did (table in [`docs/TOOLS.md`](TOOLS.md)). No NEON: the A9's
+      has no double lanes, and float lanes would break the simulator's bit-for-bit match.
+- [x] Seeing what the localizer did: `mcl.state` (covariance, fit, recovery, resampled, why it
+      didn't correct) every update, `mcl.pts` (24 particles by weight) every 5th, and raw odometry
+      in `odom`, about 36 rows a second more. The analyzer's replay draws raw odometry, the estimate,
+      its ellipse, the particles and every beam against the map, with a Localizer panel and chart and
+      findings for long stretches without correcting, odometry jumps, and sensors that disagree with
+      the map or read nothing.
 
 **Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
 in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts
