@@ -472,6 +472,38 @@ table.data-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
 .inspector { display: grid; gap: 8px; font-size: 0.9rem; }
 .inspector .big { font-family: var(--font-display); font-size: 1.1rem; }
 
+/* --- Tune tab ------------------------------------------------------------------------------ */
+
+.segments button:disabled { color: var(--muted); cursor: not-allowed; }
+.tune-more summary { cursor: pointer; color: var(--ink-2); font-size: 0.9rem; }
+.tune-more .checks { margin-top: 8px; }
+.progress { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.progress span {
+  display: block;
+  height: 100%;
+  width: calc(var(--done, 0) * 100%);
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.tune-chart { width: 100%; height: 120px; display: block; }
+.verdict { padding: 8px 10px; border-radius: 6px; font-size: 0.9rem; border-left: 3px solid var(--axis); background: var(--surface-2); }
+.verdict.good { border-left-color: var(--good); background: var(--info-soft); }
+.verdict.bad { border-left-color: var(--critical); background: var(--critical-soft); }
+.result.warn { background: var(--warning-soft); }
+.drop {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 10px;
+  border: 1px dashed var(--axis);
+  border-radius: 6px;
+}
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.changelog { margin: 0; padding-left: 18px; font-size: 0.8rem; color: var(--ink-2); display: grid; gap: 2px; }
+.changelog li { font-family: var(--font-data); overflow-wrap: anywhere; }
+.data-table.wrap-names td:first-child { white-space: normal; font-family: var(--font-body); }
+.data-table.wrap-names td:last-child { white-space: normal; }
+
 /* --- Narrow screens ------------------------------------------------------------------------------ */
 
 @media (max-width: 900px) {

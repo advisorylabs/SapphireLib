@@ -186,8 +186,13 @@
           for (const d of this.dropRows) if (d.t <= r.t) drops = Math.max(drops, d.full + d.contended);
           const wmax = 14000 + Math.floor(rng() * 26000);
           const wavg = Math.floor(wmax * (0.45 + 0.2 * rng()));
+          // the logger's own time per second, from the numbers already drawn, so adding these
+          // keys didn't move the demo's random sequence
+          const samp = 1300 + (wmax % 700);
+          const fmt = 1900 + (wavg % 900);
           const line = `H,${r.t},rows=${rows},bytes=${out.length},writes=${writes},wmax_us=${wmax},` +
-            `wavg_us=${wavg},drops=${drops},unlogged=3,resyncs=0,breaks=0,faults=0`;
+            `wavg_us=${wavg},drops=${drops},unlogged=3,resyncs=0,breaks=0,faults=0,` +
+            `samp_us=${samp},fmt_us=${fmt}`;
           out += line + '\n';
           continue;
         }
@@ -1207,5 +1212,5 @@
     return robot.w.toString(robot.rng);
   }
 
-  return { pitSession, match, fmtNumber, fmtG9, mulberry32 };
+  return { pitSession, match, fmtNumber, fmtG9, mulberry32, Writer, LoggedPID };
 });
