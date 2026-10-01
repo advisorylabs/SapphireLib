@@ -589,12 +589,12 @@
       }
       this.uniformWeights = false;
 
-      // visualizer only: each particle's fit against the best, and the fit the readouts show
+      // visualizer only: each particle's fit against the best
       for (let i = 0; i < particles.length; ++i) {
         particles[i].score = Math.exp(this.logLikelihoods[i] - maxLogLikelihood);
         particles[i].recovered = false;
       }
-      this.lastFit = average;
+      this.latestFit = average;
 
       if (!this.averagesPrimed) {
         this.slowAverage = average;
@@ -614,6 +614,11 @@
       }
       const ratio = this.fastAverage / this.slowAverage;
       return Math.min(Math.max(1.0 - ratio / recovery.triggerRatio, 0.0), recovery.maxFraction);
+    }
+
+    /** RecoveryFit: the last weigh()'s fit, and recovery's fast and slow averages of it. */
+    recoveryFit() {
+      return { latest: this.latestFit || 0, fast: this.fastAverage, slow: this.slowAverage };
     }
 
     effectiveParticles() {
@@ -753,6 +758,26 @@
     }
   }
 
+  /** sampleParticles(): out.length picks, evenly spaced along the cumulative weights. */
+  function sampleParticles(particles, count) {
+    const out = [];
+    if (!particles.length || count <= 0) return out;
+    let total = 0.0;
+    for (const p of particles) total += p.weight;
+    const step = total / count;
+    let cumulative = particles[0].weight;
+    let source = 0;
+    for (let j = 0; j < count; ++j) {
+      const target = (j + 0.5) * step;
+      while (target > cumulative && source + 1 < particles.length) {
+        ++source;
+        cumulative += particles[source].weight;
+      }
+      out.push(particles[source]);
+    }
+    return out;
+  }
+
   function copyParticle(to, from) {
     to.xIn = from.xIn;
     to.yIn = from.yIn;
@@ -807,6 +832,7 @@
     compensateLatency,
     filterConfig,
     ParticleFilter,
+    sampleParticles,
     computeOdometryDelta,
     correctionStep,
   };

@@ -9,7 +9,9 @@
 
 #include "robot/telemetry.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -28,6 +30,7 @@ using sapphirelib::input::Axis;
 using sapphirelib::input::Controller;
 using sapphirelib::localization::BeamSample;
 using sapphirelib::localization::LocalizerUpdate;
+using sapphirelib::localization::Particle;
 using sapphirelib::telemetry::Channel;
 using sapphirelib::telemetry::Logger;
 
@@ -35,6 +38,12 @@ namespace {
 
 // The "driver" channel, once startTelemetry() has made it.
 Channel* driverLog = nullptr;
+
+// "mcl.pts": a sample of the particles every kParticleEvery updates (4 a
+// second at 50ms), kParticleRows rows of six particles each.
+constexpr std::uint32_t kParticleEvery = 5;
+constexpr std::size_t kParticleRows = 4;
+constexpr std::size_t kParticlesPerRow = 6;
 
 } // namespace
 
@@ -68,8 +77,19 @@ void startTelemetry() {
     log.pid("turn", chassis.turnPID());
     log.pid("hold", chassis.headingHoldPID());
 
-    // x, y, heading at 100Hz. The corrected pose, what every motion drives by.
-    log.pose(odometry(), "odom", 10);
+    // x, y, heading at 100Hz: the corrected pose, what every motion drives by.
+    // And raw_x, raw_y, the tracking wheels and IMU alone: fitting the chassis
+    // from a log needs those, since the localizer's correction easing in moves
+    // the corrected pose without the motors doing anything. Logger::pose(),
+    // plus the raw pose read in the same snapshot.
+    log.poll("odom", {"x", "y", "heading", "raw_x", "raw_y"}, 10, [](double* values) {
+        const sapphirelib::odom::Odometry::Snapshot snapshot = odometry().snapshot();
+        values[0] = snapshot.pose.xIn;
+        values[1] = snapshot.pose.yIn;
+        values[2] = snapshot.pose.headingDeg;
+        values[3] = snapshot.rawPose.xIn;
+        values[4] = snapshot.rawPose.yIn;
+    });
 
     // The localizer, one row per update (20Hz), recorded by the localizer's
     // own task as each update finishes:
@@ -84,9 +104,18 @@ void startTelemetry() {
     //    map says it should read from the estimate (e, inf if nothing in
     //    range), and how fast it was closing on what it points at (v, in/s).
     //    What the simulator's Tune tab fits the sensor model, the latency and
-    //    the tracking wheels' scale from (docs/TUNING.md).
-    // Like the poll() sources, nothing while disabled under competition
-    // control, when the robot sits still in the queue.
+    //    the tracking wheels' scale from (docs/TUNING.md);
+    //  - "mcl.state": what the analyzer's replay draws and explains: the
+    //    particles' covariance (in^2, for the uncertainty ellipse), recovery's
+    //    fit (1 is a perfect fit) and its fast average over its slow one,
+    //    how many particles recovery replaced, 1/0 for whether it resampled,
+    //    why it didn't correct (LocalizationStatus's k* flags, 0 when it
+    //    did), and the heading the beams were cast at;
+    //  - "mcl.pts": 24 particles picked by weight, as offsets from that
+    //    update's estimate, every 5th update, in four rows of six.
+    // The last two add about a tenth to what the logger writes. Like the
+    // poll() sources, nothing while disabled under competition control, when
+    // the robot sits still in the queue.
     Channel& mclLog = log.channel("mcl",
                                   {"x", "y", "spread", "neff", "used", "agree", "correcting",
                                    "corr_x", "corr_y", "us", "raw_x", "raw_y"},
@@ -95,7 +124,19 @@ void startTelemetry() {
                                    {"m0", "e0", "v0", "m1", "e1", "v1", "m2", "e2", "v2", "m3",
                                     "e3", "v3"},
                                    {.capacity = 64, .decimals = 2});
-    localizer().setUpdateCallback([mcl = &mclLog, beams = &beamLog](const LocalizerUpdate& update) {
+    Channel& stateLog = log.channel(
+        "mcl.state",
+        {"sxx", "syy", "sxy", "fit", "fit_ratio", "recovered", "resampled", "blocked", "hdg"},
+        {.capacity = 64, .decimals = 4});
+    Channel& pointLog = log.channel(
+        "mcl.pts",
+        {"dx0", "dy0", "dx1", "dy1", "dx2", "dy2", "dx3", "dy3", "dx4", "dy4", "dx5", "dy5"},
+        {.capacity = 32, .decimals = 2});
+    localizer().setUpdateCallback([mcl = &mclLog, beams = &beamLog, state = &stateLog,
+                                   points = &pointLog, updates = std::uint32_t{0},
+                                   sample =
+                                       std::array<Particle, kParticleRows * kParticlesPerRow>{}](
+                                      const LocalizerUpdate& update) mutable {
         const std::uint8_t competition = pros::competition::get_status();
         if ((competition & COMPETITION_DISABLED) != 0 &&
             (competition & COMPETITION_CONNECTED) != 0) {
@@ -119,6 +160,25 @@ void startTelemetry() {
             values[3 * i + 2] = present ? beam.closingSpeedInPerS : kNone;
         }
         beams->record(values, 12);
+
+        const sapphirelib::localization::Estimate& estimate = update.estimate;
+        const sapphirelib::localization::RecoveryFit& fit = update.fit;
+        state->record({estimate.varianceXIn2, estimate.varianceYIn2, estimate.covarianceXYIn2,
+                       fit.latest, fit.slow > 0.0 ? fit.fast / fit.slow : 1.0,
+                       static_cast<double>(update.recovered), update.resampled ? 1.0 : 0.0,
+                       static_cast<double>(status.blockedBy), update.beamHeadingDeg});
+
+        if (updates++ % kParticleEvery != 0) return;
+        sapphirelib::localization::sampleParticles(update.particles, sample);
+        for (std::size_t row = 0; row < kParticleRows; ++row) {
+            double offsets[2 * kParticlesPerRow];
+            for (std::size_t i = 0; i < kParticlesPerRow; ++i) {
+                const Particle& p = sample[row * kParticlesPerRow + i];
+                offsets[2 * i] = p.xIn - estimate.xIn;
+                offsets[2 * i + 1] = p.yIn - estimate.yIn;
+            }
+            points->record(offsets, 2 * kParticlesPerRow);
+        }
     });
 
     // What the drivetrain actually commanded on each axis (the PIDs' "out" is

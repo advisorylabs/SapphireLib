@@ -129,6 +129,7 @@ bool ParticleFilter::weigh(double headingDeg, std::span<const DistanceReading> r
         if (fit > fitExp.minX()) average += fitExp.at(fit);
     }
     average /= static_cast<double>(particles_.size());
+    latestFit_ = average;
 
     // normalized, and the logs kept to match for the next weigh()
     const double inverseSum = 1.0 / sum;
@@ -161,6 +162,10 @@ double ParticleFilter::recoveryFraction() const {
 }
 
 std::size_t ParticleFilter::lastRecovered() const { return lastRecovered_; }
+
+RecoveryFit ParticleFilter::recoveryFit() const {
+    return RecoveryFit{.latest = latestFit_, .fast = fastAverage_, .slow = slowAverage_};
+}
 
 bool ParticleFilter::resampleIfNeeded() {
     const std::size_t count = particles_.size();
@@ -269,5 +274,23 @@ const FieldMap& ParticleFilter::map() const { return map_; }
 const std::vector<DistanceSensorMount>& ParticleFilter::sensors() const { return sensors_; }
 
 const ParticleFilterConfig& ParticleFilter::config() const { return config_; }
+
+void sampleParticles(std::span<const Particle> particles, std::span<Particle> out) {
+    if (particles.empty() || out.empty()) return;
+    double total = 0.0;
+    for (const Particle& p : particles) total += p.weight;
+    // the middle of each of out.size() equal shares of the weight
+    const double step = total / static_cast<double>(out.size());
+    double cumulative = particles[0].weight;
+    std::size_t source = 0;
+    for (std::size_t j = 0; j < out.size(); ++j) {
+        const double target = (static_cast<double>(j) + 0.5) * step;
+        while (target > cumulative && source + 1 < particles.size()) {
+            ++source;
+            cumulative += particles[source].weight;
+        }
+        out[j] = particles[source];
+    }
+}
 
 } // namespace sapphirelib::localization

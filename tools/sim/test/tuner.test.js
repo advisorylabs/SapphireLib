@@ -163,3 +163,23 @@ test('paired comparisons cancel shared noise', () => {
   assert.ok(p.se < 1e-12);
   assert.equal(p.n, 5);
 });
+
+test('a recorded run logs mcl.state every update and mcl.pts every 5th, like telemetry.cpp', () => {
+  const log = T.recordedLog({ id: 'tour', routine: 'tour', world: {} }, T.defaultConfig(), 3, 900050);
+  const mcl = log.channels.find((c) => c.name === 'mcl');
+  const state = log.channels.find((c) => c.name === 'mcl.state');
+  const points = log.channels.find((c) => c.name === 'mcl.pts');
+  assert.ok(mcl && state && points);
+  assert.equal(state.length, mcl.length);
+  // four rows of six particles at every 5th update, starting with the first
+  assert.equal(points.length, 4 * Math.ceil(mcl.length / 5));
+  // offsets from the estimate: a converged cloud is within a few inches of it
+  let far = 0;
+  for (let i = 0; i < points.length; ++i) {
+    for (let k = 0; k < 6; ++k) if (Math.hypot(points.cols[`dx${k}`][i], points.cols[`dy${k}`][i]) > 6) far++;
+  }
+  assert.ok(far < 0.02 * 6 * points.length, `${far} particles more than 6in from the estimate`);
+  // correcting rows say nothing blocked them; the others say why
+  for (let i = 0; i < mcl.length; ++i) assert.equal(mcl.cols.correcting[i] === 1, state.cols.blocked[i] === 0);
+  assert.ok(state.cols.fit.some((v) => v > 0.2));
+});

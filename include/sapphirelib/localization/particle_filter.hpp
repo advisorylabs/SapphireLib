@@ -128,6 +128,26 @@ struct Estimate {
 };
 
 /**
+ * @brief How well the particles explain the readings, which recovery watches
+ */
+struct RecoveryFit {
+    /**
+     * the last weigh()'s fit: how well the particles explain its readings, as a fraction of a
+     * perfect fit per reading, averaged over the particles. 0 to 1, 1 for a perfect fit
+     */
+    double latest = 0.0;
+
+    /** latest's fast running average (RecoveryConfig::fastRate) */
+    double fast = 0.0;
+
+    /**
+     * latest's slow running average (RecoveryConfig::slowRate). Recovery starts once fast falls
+     * below RecoveryConfig::triggerRatio times this
+     */
+    double slow = 0.0;
+};
+
+/**
  * @brief How one sensor's reading compares with what the map says it should read from a pose
  */
 struct SensorCheck {
@@ -275,6 +295,11 @@ public:
     std::size_t lastRecovered() const;
 
     /**
+     * @brief Get how well the particles explained the last readings, and recovery's averages of it
+     */
+    RecoveryFit recoveryFit() const;
+
+    /**
      * @brief Get the particles
      */
     const std::vector<Particle>& particles() const;
@@ -315,11 +340,30 @@ private:
     std::vector<ReadingScorer> scorers_;
     std::vector<std::size_t> usedSensors_;
 
-    // recovery's running averages of how well particles explain one reading
+    // recovery's running averages of how well particles explain one reading, and the latest
+    double latestFit_ = 0.0;
     double slowAverage_ = 0.0;
     double fastAverage_ = 0.0;
     bool averagesPrimed_ = false;
     std::size_t lastRecovered_ = 0;
 };
+
+/**
+ * @brief Pick a few particles that stand for the whole cloud, for telemetry or drawing
+ *
+ * Systematic: out.size() evenly spaced picks along the cumulative weights, so a particle with
+ * twice the weight is about twice as likely to be picked. Draws no random numbers, so calling it
+ * leaves the filter's sequence alone
+ *
+ * @param particles the cloud, ParticleFilter::particles()
+ * @param out filled in with the picks. Left alone if particles is empty
+ *
+ * @b Example
+ * @code {.cpp}
+ * std::array<sapphirelib::localization::Particle, 24> sample;
+ * sapphirelib::localization::sampleParticles(filter.particles(), sample);
+ * @endcode
+ */
+void sampleParticles(std::span<const Particle> particles, std::span<Particle> out);
 
 } // namespace sapphirelib::localization

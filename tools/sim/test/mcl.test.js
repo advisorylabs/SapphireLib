@@ -242,3 +242,28 @@ test('ParticleFilter: checkSensors flags a blocked sensor', () => {
   near(checks[0].expectedIn, 63, 1e-9, 'front expected');
   assert.ok(!checks[3].used);
 });
+
+test('sampleParticles: picks by weight, like particle_filter_test.cpp', () => {
+  const particles = [];
+  for (let i = 0; i < 10; ++i) particles.push({ xIn: i, yIn: 0, weight: 0.5 / 9 });
+  particles[3].weight = 0.5;
+  const picks = L.sampleParticles(particles, 8);
+  assert.equal(picks.filter((p) => p.xIn === 3).length, 4);
+  for (const p of particles) p.weight = 0.1;
+  assert.deepEqual(L.sampleParticles(particles, 5).map((p) => p.xIn), [0, 2, 4, 6, 8]);
+  assert.deepEqual(L.sampleParticles([], 3), []);
+});
+
+test('ParticleFilter.recoveryFit: primed by the first weigh, and a bump drops it', () => {
+  const map = L.FieldMap.centered();
+  const filter = new L.ParticleFilter(map, fourSensors(), { seed: 4 });
+  filter.reset(0, 0, 0.5);
+  filter.weigh(0, exactReadings(map, fourSensors(), 0, 0, 0));
+  const first = filter.recoveryFit();
+  assert.ok(first.latest > 0.3 && first.latest <= 1);
+  assert.equal(first.fast, first.latest);
+  assert.equal(first.slow, first.latest);
+  filter.weigh(0, exactReadings(map, fourSensors(), 8, 0, 0));
+  const bumped = filter.recoveryFit();
+  assert.ok(bumped.latest < 0.5 * first.latest && bumped.fast < bumped.slow);
+});

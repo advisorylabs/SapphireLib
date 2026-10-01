@@ -190,6 +190,17 @@
     return config;
   }
 
+  /** LocalizationStatus's blockedBy flags: why an update didn't correct odometry. */
+  const BLOCKED = {
+    correctionOff: 1 << 0,
+    noSetPose: 1 << 1,
+    noReadings: 1 << 2,
+    tooSpread: 1 << 3,
+    tooFewAgree: 1 << 4,
+    refused: 1 << 5,
+    spinning: 1 << 6,
+  };
+
   class MonteCarloLocalizer {
     /**
      * `sensors` is one function per sensor returning { mm, confidence }, like
@@ -209,7 +220,7 @@
       this.lastUpdateMs = 0;
       this.status = {
         estimate: { xIn: 0, yIn: 0, headingDeg: 0 }, spreadIn: 0, effectiveParticles: 0, sensorsUsed: 0,
-        sensorsAgreeing: 0, correcting: false, correctionXIn: 0, correctionYIn: 0, updates: 0,
+        sensorsAgreeing: 0, correcting: false, blockedBy: 0, correctionXIn: 0, correctionYIn: 0, updates: 0,
       };
       // for the visualizer: the last update's working, and where it's up to
       this.phase = 'idle';
@@ -299,14 +310,23 @@
       const config = this.config;
       w.resampled = this.filter.resampleIfNeeded();
       const inFieldFrame = !config.waitForSetPose || w.snapshot.resetCount > 0;
-      let correcting = this.correctionEnabled && inFieldFrame && w.weighed &&
-        w.estimate.spreadIn <= config.maxCorrectionSpreadIn && w.agreeing >= config.minAgreeingSensors;
+      let blockedBy = 0;
+      if (!this.correctionEnabled) blockedBy |= BLOCKED.correctionOff;
+      if (!inFieldFrame) blockedBy |= BLOCKED.noSetPose;
+      if (!w.weighed) blockedBy |= BLOCKED.noReadings;
+      if (w.spinning) blockedBy |= BLOCKED.spinning;
+      if (!(w.estimate.spreadIn <= config.maxCorrectionSpreadIn)) blockedBy |= BLOCKED.tooSpread;
+      if (w.agreeing < config.minAgreeingSensors) blockedBy |= BLOCKED.tooFewAgree;
       const correctionXIn = w.estimate.xIn - w.raw.xIn;
       const correctionYIn = w.estimate.yIn - w.raw.yIn;
-      if (correcting) {
-        correcting = this.odometry.setPositionCorrection(correctionXIn, correctionYIn,
-          config.maxCorrectionRateInPerS, w.snapshot.resetCount);
+      if (blockedBy === 0 && !this.odometry.setPositionCorrection(correctionXIn, correctionYIn,
+        config.maxCorrectionRateInPerS, w.snapshot.resetCount)) {
+        blockedBy |= BLOCKED.refused;
       }
+      const correcting = blockedBy === 0;
+      w.blockedBy = blockedBy;
+      w.recovered = this.filter.lastRecovered;
+      w.fit = this.filter.recoveryFit();
       w.gate = {
         enabled: this.correctionEnabled,
         inFieldFrame,
@@ -321,6 +341,7 @@
       st.sensorsUsed = w.used;
       st.sensorsAgreeing = w.agreeing;
       st.correcting = correcting;
+      st.blockedBy = blockedBy;
       if (correcting) {
         st.correctionXIn = correctionXIn;
         st.correctionYIn = correctionYIn;
@@ -677,6 +698,7 @@
     Imu,
     Odometry,
     localizerConfig,
+    BLOCKED,
     MonteCarloLocalizer,
     ExitTracker,
     toLocalFrame,
