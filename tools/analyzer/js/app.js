@@ -295,6 +295,18 @@
       document.getElementById('run-select').addEventListener('change', (e) => {
         this.selectRun(Number(e.target.value));
       });
+      const help = document.getElementById('help');
+      const helpBtn = document.getElementById('help-btn');
+      const toggleHelp = (open = help.hidden) => {
+        help.hidden = !open;
+        helpBtn.setAttribute('aria-expanded', String(open));
+      };
+      helpBtn.addEventListener('click', () => toggleHelp());
+      window.addEventListener('keydown', (e) => {
+        if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+        if (e.key === '?') toggleHelp();
+        else if (e.key === 'Escape') toggleHelp(false);
+      });
       document.getElementById('theme-btn').addEventListener('click', () => {
         const rootEl = document.documentElement;
         const dark = rootEl.dataset.theme ? rootEl.dataset.theme === 'dark'
@@ -359,13 +371,16 @@
         SA.views.charts.focus(app, f.channels.filter((c) => app.run.get(c)), f.t, f.end);
       } }, 'Chart'));
     }
+    // the detail stays folded away until the title is clicked
+    const detail = h('div', { class: 'detail', hidden: true }, f.detail);
+    const title = h('button', { class: 'title', type: 'button', 'aria-expanded': 'false', onclick: () => {
+      detail.hidden = !detail.hidden;
+      title.setAttribute('aria-expanded', String(!detail.hidden));
+    } }, f.title);
     return h('article', { class: `finding ${f.severity}` },
       h('div', { class: 'when' }, severityBadge(f.severity), h('br'),
         f.t !== null ? app.shortLabel(f.t) : 'whole log'),
-      h('div', { class: 'body' },
-        h('div', { class: 'title' }, f.title),
-        h('div', { class: 'system' }, f.system, f.t !== null ? ` · ${app.label(f.t)}` : ''),
-        h('div', { class: 'detail' }, f.detail)),
+      h('div', { class: 'body' }, title, h('div', { class: 'system' }, f.system), detail),
       actions);
   }
 
@@ -461,8 +476,8 @@
     });
     return h('section', { class: 'panel' },
       h('header', null, h('h3', null, 'Motor temperatures'),
-        h('span', { class: 'hint' }, 'Across the selected range, hottest first. V5 motors report in 5°C ' +
-          'steps and cut their own power from 55°C. Click to replay that moment.')),
+        h('span', { class: 'hint', title: 'V5 motors report in 5°C steps and cut their own power from 55°C' },
+          'hottest first · click to replay')),
       h('div', { class: 'thermal' }, rows),
       SA.ui.heatLegend());
   }
@@ -488,8 +503,8 @@
     });
     return h('section', { class: 'panel' },
       h('header', null, h('h3', null, 'Motor health'),
-        h('span', { class: 'hint' }, 'Speed per volt early → late in the range: a big drop is a motor ' +
-          'derating (hot) or dragging (friction).')),
+        h('span', { class: 'hint', title: 'A big drop in speed per volt is a motor derating (hot) or dragging (friction)' },
+          'rpm/V early → late')),
       h('div', { class: 'table-wrap' }, h('table', { class: 'data-table' },
         h('thead', null, h('tr', null, h('th', null, 'Motor'), h('th', { class: 'num' }, 'Peak'),
           h('th', { class: 'num' }, '≥55°C'), h('th', { class: 'num' }, 'Stalled'),
@@ -503,10 +518,10 @@
       const r = app.report;
       if (app.demo) {
         section.append(h('div', { class: 'banner' },
-          h('strong', null, 'This is the demo.'),
-          h('span', null, 'A simulated pit session and match with problems planted in them. Open your ' +
-            'robot\'s logs (SLnnnnnn.CSV from the SD card\'s sl folder) to analyze your own.'),
-          h('label', { class: 'btn small', for: 'file-input' }, 'Open logs')));
+          h('strong', null, 'Demo.'),
+          h('span', null, 'A simulated pit session and match, faults planted.'),
+          h('label', { class: 'btn small', for: 'file-input', title: 'SLnnnnnn.CSV, from the sl folder on the SD card' },
+            'Open logs')));
       }
       if (app.errors && app.errors.length) {
         section.append(h('div', { class: 'banner' }, h('strong', null, 'Skipped:'),
@@ -547,7 +562,7 @@
       renderList();
       section.append(h('section', { class: 'panel' },
         h('header', null, h('h3', null, 'What went wrong'),
-          h('span', { class: 'hint' }, 'Most severe first. Replay jumps to two seconds before it.')),
+          h('span', { class: 'hint' }, 'worst first · click one for why')),
         filters, h('div', { style: { height: '10px' } }), list));
       section.append(h('div', { class: 'two-col' }, thermalStrip(app), motorTable(app)));
     },
@@ -653,8 +668,8 @@
       };
       section.append(h('section', { class: 'panel' },
         h('header', null, h('h3', null, 'Step responses'),
-          h('span', { class: 'hint' }, 'Each response starts where the PID was reset (a new motion). ' +
-            'Swings count zero crossings of the error; many that don\'t die out is oscillation.')),
+          h('span', { class: 'hint', title: 'Each response starts where the PID was reset (a new motion). Swings ' +
+            'count zero crossings of the error; many that don\'t die out is oscillation' }, 'one row per step response')),
         picker, h('div', { style: { height: '10px' } }), tableBox, gains));
       section.append(h('section', { class: 'panel' }, detail));
       pick(current);
@@ -688,7 +703,7 @@
         const stop = m.stop ?? m.start + 1;
         const field = h('canvas', { class: 'field-canvas', role: 'img', 'aria-label': 'Path during the motion' });
         detail.append(h('section', { class: 'panel' }, h('header', null, h('h3', null, 'Path'),
-          h('span', { class: 'hint' }, 'Odometry during the motion; the target where it has one.')), field));
+          h('span', { class: 'hint' }, 'corrected pose · inches')), field));
         requestAnimationFrame(() => SA.replay.drawField(field, app, stop, { from: m.start, motion: m }));
         const stack = h('div', { class: 'chart-stack' });
         detail.append(h('section', { class: 'panel' }, stack));
@@ -735,8 +750,7 @@
       });
       section.append(h('section', { class: 'panel' },
         h('header', null, h('h3', null, 'Drivetrain motions'),
-          h('span', { class: 'hint' }, 'Every blocking motion, from its start and end events. Final error is ' +
-            'inches, or degrees for turns.')),
+          h('span', { class: 'hint' }, 'final error: in, or ° for turns')),
         h('div', { class: 'table-wrap' }, h('table', { class: 'data-table' },
           h('thead', null, h('tr', null, h('th', null, 'Start'), h('th', null, 'Motion'), h('th', null, 'Target'),
             h('th', null, 'Result'), h('th', { class: 'num' }, 'Final error'), h('th', { class: 'num' }, 'Took'),

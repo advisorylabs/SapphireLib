@@ -48,6 +48,17 @@
     }
     if (has('driver')) out.push({ name: 'Driver sticks', pick: [{ channel: 'driver', columns: ['lx', 'ly', 'rx', 'ry'] }] });
     if (has('odom')) out.push({ name: 'Odometry', pick: [{ channel: 'odom', columns: ['x', 'y'] }, { channel: 'odom', columns: ['heading'] }] });
+    if (has('mcl')) {
+      const pick = [{ channel: 'mcl', columns: ['corr_x', 'corr_y'] }, { channel: 'mcl', columns: ['spread'] },
+        { channel: 'mcl', columns: ['used', 'agree', 'correcting'] }];
+      if (has('mcl.state')) pick.push({ channel: 'mcl.state', columns: ['fit', 'fit_ratio'] });
+      if (has('mcl').has('us')) pick.push({ channel: 'mcl', columns: ['us'] });
+      out.push({ name: 'Localizer', pick });
+    }
+    if (has('mcl.beams')) {
+      out.push({ name: 'Distance sensors', pick: [0, 1, 2, 3].filter((s) => has('mcl.beams').has(`m${s}`))
+        .map((s) => ({ channel: 'mcl.beams', columns: [`m${s}`, `e${s}`] })) });
+    }
     return out;
   }
 
@@ -237,7 +248,7 @@
               h('button', { class: 'btn small', type: 'button', onclick: () => group.zoom(0.5) }, 'Zoom in'),
               h('button', { class: 'btn small', type: 'button', onclick: () => group.zoom(2) }, 'Zoom out'),
               h('button', { class: 'btn small', type: 'button', onclick: () => group.reset() }, 'Whole range'),
-              h('span', { class: 'hint' }, 'Drag to zoom · Ctrl+wheel zooms · click sets the cursor')),
+              h('span', { class: 'hint' }, 'drag: zoom · Ctrl+wheel: zoom · click: cursor')),
             h('div', { style: { height: '12px' } }), stack),
           h('section', { class: 'panel' }, h('header', null, h('h3', null, 'Values at the cursor'), copyBtn),
             values, csvBox))));

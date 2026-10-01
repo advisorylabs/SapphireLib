@@ -28,9 +28,51 @@
     <label class="btn primary" for="file-input">Open logs</label>
     <input type="file" id="file-input" accept=".csv,.CSV,text/csv,.cfg,.CFG" multiple hidden>
     <button class="btn" id="demo-btn" type="button">Demo</button>
+    <button class="icon-btn" id="help-btn" type="button" aria-label="Controls and units" aria-expanded="false" title="Controls and units (?)">?</button>
     <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch light or dark theme" title="Theme">◐</button>
   </div>
 </header>
+<section class="help" id="help" hidden aria-label="Controls and units">
+  <div>
+    <h3>Replay</h3>
+    <dl>
+      <dt><kbd>Space</kbd></dt><dd>play, pause (timeline focused)</dd>
+      <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>0.5 s; with <kbd>Shift</kbd>, 5 s</dd>
+      <dt>Timeline</dt><dd>click or drag to seek; ▼ are findings</dd>
+      <dt>Follow ×4</dt><dd>zoom on the robot, 6 in scale bar</dd>
+    </dl>
+  </div>
+  <div>
+    <h3>Charts</h3>
+    <dl>
+      <dt>Click</dt><dd>set the cursor (every view follows)</dd>
+      <dt>Drag</dt><dd>zoom to that span</dd>
+      <dt>Ctrl+wheel</dt><dd>zoom in and out</dd>
+      <dt>Double-click</dt><dd>zoom out</dd>
+      <dt><kbd>?</kbd></dt><dd>this card</dd>
+    </dl>
+  </div>
+  <div>
+    <h3>Field</h3>
+    <dl>
+      <dt>Robot</dt><dd>the corrected pose (what motions drive by)</dd>
+      <dt>Dashed orange</dt><dd>raw odometry, arrow to the correction</dd>
+      <dt>× and ellipse</dt><dd>localizer estimate, 2σ</dd>
+      <dt>Blue dots</dt><dd>24 particles, picked by weight</dd>
+      <dt>Beams</dt><dd>dashed: the map; tick: the reading. Green agrees, red off, grey none</dd>
+    </dl>
+  </div>
+  <div>
+    <h3>Units</h3>
+    <dl>
+      <dt>Position</dt><dd>inches; heading in degrees clockwise from +y</dd>
+      <dt>Time</dt><dd>match time: A0:12 is autonomous, 1:03 driver</dd>
+      <dt>Motors</dt><dd>V, A, °C, rpm</dd>
+      <dt>CPU</dt><dd>µs of wall time, an upper bound</dd>
+    </dl>
+  </div>
+  <p class="hint help-foot">How to use it: <code>docs/TOOLS.md</code></p>
+</section>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
   <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
   <button role="tab" data-tab="replay">Replay</button>

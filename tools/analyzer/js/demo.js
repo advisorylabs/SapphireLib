@@ -26,7 +26,7 @@
  *                 times out in autonomous, the battery sags, the
  *                 controller drops for a moment, a hit lifts the tracking
  *                 wheels (the localizer pulls the pose back), and a robot
- *                 parks in front of the front distance sensor.
+ *                 parks mid-field where the distance sensors see it.
  *
  * Plain script: window.SA.demo in a browser, require('./demo.js') in Node.
  *
@@ -427,9 +427,10 @@
    * MonteCarloLocalizer on the demo's field (walls at 0 and 144in): tracking
    * wheels that read `scale` long, plus `slips` (a hit that lifts them, so they
    * miss some travel), corrected by the particle filter from four distance
-   * sensors with the V5's noise and a few dropouts. `defender` parks something
-   * in front of the front sensor. Odometry runs every 10ms (tick()), the
-   * filter every 50ms (task()); the corrected pose is what "odom" logs.
+   * sensors with the V5's noise and a few dropouts. `defender` parks a robot
+   * on the field for a while: the sensors see it, the localizer's map doesn't.
+   * Odometry runs every 10ms (tick()), the filter every 50ms (task()); the
+   * corrected pose is what "odom" logs.
    */
   class DemoLocalizer {
     constructor(robot, { scale = 1.02, slips = [], defender = null, seed = 1 } = {}) {
@@ -438,6 +439,9 @@
       this.slips = slips;
       this.defender = defender;
       this.map = new L.FieldMap(0, 0, 144, 144);
+      // what the sensors see: the walls, and the defender while it's there
+      this.world = this.map.clone();
+      if (defender) this.world.addBox(defender.minXIn, defender.minYIn, defender.maxXIn, defender.maxYIn);
       this.filter = new L.ParticleFilter(this.map, MCL_MOUNTS, { particleCount: MCL_SETTINGS.particles, seed });
       this.noise = new L.Rng(seed + 1000);
       this.raw = null;
@@ -496,11 +500,9 @@
     read(index, heading) {
       const c = this.robot.chassis;
       const ray = L.sensorRay(c.x, c.y, heading, MCL_MOUNTS[index]);
-      let d = this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
       const t = this.robot.t;
-      if (index === 0 && this.defender && t >= this.defender.fromS && t < this.defender.toS) {
-        d = Math.min(d, this.defender.distanceIn);
-      }
+      const defended = this.defender && t >= this.defender.fromS && t < this.defender.toS;
+      let d = (defended ? this.world : this.map).castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
       d += 0.5 * Math.max(0.6, 0.05 * d) * this.noise.gaussian();
       if (this.noise.uniform() < 0.03 || !(d > 0.8)) return NaN;
       return d;
@@ -1359,10 +1361,10 @@
     const robot = new Robot({ seed, file: 'SL000042.CSV', openUs: 2104502,
       build: 'Sep 29 2026 09:41:52', liftTemps: [45, 42], liftHeat: [0.34, 0.31], clawTemp: 38,
       batteryPct: 91 });
-    // driver 0:30, a hit lifts the tracking wheels and they miss 6in; driver 0:50 to 0:58, a robot
-    // parks 16in in front of the front distance sensor
+    // driver 0:30, a hit lifts the tracking wheels and they miss 6in; driver 0:40 to 1:00, a robot
+    // parks in the middle of the field
     robot.localizer = new DemoLocalizer(robot, { seed: 42, slips: [{ atS: 67.5, forS: 0.25, dxIn: -4.8, dyIn: 3.6 }],
-      defender: { fromS: 87.5, toS: 95.5, distanceIn: 16 } });
+      defender: { fromS: 77.5, toS: 97.5, minXIn: 63, minYIn: 63, maxXIn: 81, maxYIn: 81 } });
     robot.run(2.1);
     robot.event('file', 'open,SL000042.CSV');
     robot.setStatus('disabled', true, true);
