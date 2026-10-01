@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <utility>
 
 #include "pros/rtos.hpp"
@@ -25,9 +27,52 @@ constexpr std::int32_t kCalibrateColumnWidthPx = 480 - kCalibrateColumnX - 4;
 constexpr std::int32_t kCalibrateButtonY = 24;
 constexpr std::int32_t kCalibrateButtonHeightPx = 30;
 constexpr std::int32_t kCalibrateStatusY = kCalibrateButtonY + kCalibrateButtonHeightPx + 10;
+// with the sensor calibration too, the two buttons stack, a little shorter, leaving the status
+// line room for a row per two sensors
+constexpr std::int32_t kStackedButtonHeightPx = 28;
+constexpr std::int32_t kStackedSensorsButtonY = kCalibrateButtonY + kStackedButtonHeightPx + 4;
+constexpr std::int32_t kStackedStatusY = kStackedSensorsButtonY + kStackedButtonHeightPx + 6;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kCalibrationLoopDelayMs = 10;
+
+// a sensor's name on the status line, by which way it faces
+std::string sensorName(const localization::DistanceSensorMount& mount, std::size_t index) {
+    const double facing = std::fmod(std::fmod(mount.facingDeg, 360.0) + 360.0, 360.0);
+    const char* sides[] = {"Front", "Right", "Back", "Left"};
+    for (int side = 0; side < 4; ++side) {
+        const double gap = std::fabs(facing - 90.0 * side);
+        if (gap < 1.0 || gap > 359.0) return sides[side];
+    }
+    return "S" + std::to_string(index + 1);
+}
+
+// what the status line says after a sensor calibration: each sensor's forward and right offsets,
+// two to a row, "--" for one left as it was
+std::string sensorResultText(const localization::MountCalibrationResult& result) {
+    if (!result.ok) {
+        std::string text = std::string("Sensors not calibrated: ") + result.error;
+        if (std::strcmp(result.error, "no sensor saw two opposite walls") == 0) {
+            text += ". Start nearer the halfway line";
+        }
+        return text;
+    }
+    std::string text = "Sensors, fwd,right in (applied):";
+    for (std::size_t s = 0; s < result.sensors.size(); ++s) {
+        const localization::SensorMountFit& sensor = result.sensors[s];
+        char entry[48];
+        if (sensor.status == localization::MountFitStatus::calibrated) {
+            std::snprintf(entry, sizeof(entry), "%s %.2f,%.2f", sensorName(sensor.mount, s).c_str(),
+                          sensor.mount.forwardIn, sensor.mount.rightIn);
+        } else {
+            std::snprintf(entry, sizeof(entry), "%s --", sensorName(sensor.mount, s).c_str());
+        }
+        text += s % 2 == 0 ? "\n" : "  ";
+        text += entry;
+    }
+    text += "\nCopy into your code to keep";
+    return text;
+}
 
 } // namespace
 
@@ -47,7 +92,17 @@ void OdometryPage::enableOffsetCalibration(sensors::Imu& imu,
     calibTurns_ = turns;
 }
 
-bool OdometryPage::isCalibrating() const { return calibrating_.load(); }
+void OdometryPage::enableSensorCalibration(localization::MonteCarloLocalizer& localizer,
+                                           std::function<void(double)> setSpin,
+                                           localization::MountCalibrationConfig config) {
+    sensorLocalizer_ = &localizer;
+    sensorSetSpin_ = std::move(setSpin);
+    sensorConfig_ = config;
+}
+
+bool OdometryPage::isCalibrating() const {
+    return calibrating_.load() || sensorCalibrating_.load();
+}
 
 const char* OdometryPage::title() const { return "Odom"; }
 
@@ -88,20 +143,41 @@ void OdometryPage::build(lv_obj_t* container) {
     lv_obj_set_style_line_width(headingLine_, 2, 0);
     lv_obj_set_style_line_rounded(headingLine_, true, 0);
 
+    const bool sensorsToo = sensorLocalizer_ != nullptr && sensorSetSpin_;
     calibrateButton_ = lv_button_create(container);
     lv_obj_set_pos(calibrateButton_, kCalibrateColumnX, kCalibrateButtonY);
-    lv_obj_set_size(calibrateButton_, kCalibrateColumnWidthPx, kCalibrateButtonHeightPx);
+    lv_obj_set_size(calibrateButton_, kCalibrateColumnWidthPx,
+                    sensorsToo ? kStackedButtonHeightPx : kCalibrateButtonHeightPx);
     lv_obj_t* calibrateLabel = lv_label_create(calibrateButton_);
     lv_label_set_text(calibrateLabel, "Calibrate Offsets");
     lv_obj_center(calibrateLabel);
     lv_obj_add_event_cb(calibrateButton_, &OdometryPage::calibrateClicked, LV_EVENT_CLICKED, this);
 
+    if (sensorsToo) {
+        calibrateSensorsButton_ = lv_button_create(container);
+        lv_obj_set_pos(calibrateSensorsButton_, kCalibrateColumnX, kStackedSensorsButtonY);
+        lv_obj_set_size(calibrateSensorsButton_, kCalibrateColumnWidthPx, kStackedButtonHeightPx);
+        lv_obj_t* sensorsLabel = lv_label_create(calibrateSensorsButton_);
+        lv_label_set_text(sensorsLabel, "Calibrate Sensors");
+        lv_obj_center(sensorsLabel);
+        lv_obj_add_event_cb(calibrateSensorsButton_, &OdometryPage::calibrateSensorsClicked,
+                            LV_EVENT_CLICKED, this);
+    }
+
     calibStatusLabel_ = lv_label_create(container);
-    lv_obj_set_pos(calibStatusLabel_, kCalibrateColumnX, kCalibrateStatusY);
+    lv_obj_set_pos(calibStatusLabel_, kCalibrateColumnX,
+                   sensorsToo ? kStackedStatusY : kCalibrateStatusY);
     lv_obj_set_width(calibStatusLabel_, kCalibrateColumnWidthPx);
     lv_label_set_long_mode(calibStatusLabel_, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(calibStatusLabel_,
-                      calibSetSpin_ ? "Spin the bot free, then tap Calibrate" : "");
+    if (sensorsToo) {
+        lv_label_set_text(calibStatusLabel_,
+                          calibSetSpin_ ? "Offsets: room to spin free. Sensors: on the field's "
+                                          "halfway line, walls in view"
+                                        : "Sensors: on the field's halfway line, walls in view");
+    } else {
+        lv_label_set_text(calibStatusLabel_,
+                          calibSetSpin_ ? "Spin the bot free, then tap Calibrate" : "");
+    }
 
     update();
 }
@@ -146,6 +222,11 @@ void OdometryPage::update() {
 
     if (calibrating_.load()) {
         setLabelText(calibStatusLabel_, "Calibrating... keep the bot clear and spinning free");
+    } else if (sensorCalibrating_.load()) {
+        setLabelText(calibStatusLabel_, "Calibrating sensors... keep the walls in view");
+    } else if (sensorResultReady_.exchange(false)) {
+        // once: the label keeps it until the next calibration
+        setLabelText(calibStatusLabel_, sensorResultText(sensorResult_).c_str());
     } else if (calibResultsReady_.load()) {
         char calibBuf[64];
         if (calibVertical_ && calibHorizontal_) {
@@ -164,10 +245,12 @@ void OdometryPage::update() {
 }
 
 void OdometryPage::runCalibration() {
-    if (!calibSetSpin_ || (!calibVertical_ && !calibHorizontal_) || calibrating_.load()) return;
+    if (!calibSetSpin_ || (!calibVertical_ && !calibHorizontal_) || isCalibrating()) return;
 
     calibrating_.store(true);
     calibResultsReady_.store(false);
+    // a sensor result update() hasn't shown yet is old news now
+    sensorResultReady_.store(false);
 
     // runs on a background task so the spin doesn't freeze the screen. It only touches atomics,
     // never a widget, since LVGL isn't thread-safe; update() shows the result
@@ -213,8 +296,29 @@ void OdometryPage::runCalibration() {
     });
 }
 
+void OdometryPage::runSensorCalibration() {
+    if (sensorLocalizer_ == nullptr || !sensorSetSpin_ || isCalibrating()) return;
+
+    sensorCalibrating_.store(true);
+    sensorResultReady_.store(false);
+    // the status line shows this calibration's result from now on, not the wheel offsets'
+    calibResultsReady_.store(false);
+
+    // on a background task, like the offset calibration: the spin takes about 20s. The result is
+    // handed to update() through sensorResult_, never a widget, since LVGL isn't thread-safe
+    pros::Task([this] {
+        sensorResult_ = sensorLocalizer_->calibrateSensorMounts(sensorSetSpin_, sensorConfig_);
+        sensorResultReady_.store(true);
+        sensorCalibrating_.store(false);
+    });
+}
+
 void OdometryPage::calibrateClicked(lv_event_t* e) {
     static_cast<OdometryPage*>(lv_event_get_user_data(e))->runCalibration();
+}
+
+void OdometryPage::calibrateSensorsClicked(lv_event_t* e) {
+    static_cast<OdometryPage*>(lv_event_get_user_data(e))->runSensorCalibration();
 }
 
 } // namespace sapphirelib::gui
