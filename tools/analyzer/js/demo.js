@@ -10,6 +10,12 @@
  * a writer that formats every row the way the robot's encoder does
  * (csv_format.cpp: fixed-point per channel, floats rounded like Records).
  *
+ * The localizer is the real thing: the simulator's port of the robot's
+ * particle filter (tools/sim/js/mcl.js), fed by tracking wheels that read 2%
+ * long and four distance sensors seeing the walls, logged the way
+ * src/robot/telemetry.cpp logs it (mcl, mcl.beams, mcl.state, mcl.pts). Its
+ * randomness is its own, so the rest of the demo is the same with or without it.
+ *
  * Two logs, two program runs:
  *   SL000041.CSV  a pit session: Auto-Tune on the drivetrain and the lift,
  *                 then Run Tests with the new gains.
@@ -17,8 +23,10 @@
  *                 goes wrong the way matches do: the lift's motors overheat
  *                 and derate late in driver control, a drive motor's cable
  *                 drops out, the claw stalls holding pieces, a blocked turn
- *                 times out in autonomous, the battery sags, and the
- *                 controller drops for a moment.
+ *                 times out in autonomous, the battery sags, the
+ *                 controller drops for a moment, a hit lifts the tracking
+ *                 wheels (the localizer pulls the pose back), and a robot
+ *                 parks mid-field where the distance sensors see it.
  *
  * Plain script: window.SA.demo in a browser, require('./demo.js') in Node.
  *
@@ -26,13 +34,13 @@
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory(require('./model.js'));
+    module.exports = factory(require('./model.js'), require('../../sim/js/mcl.js'));
   } else {
     const root = typeof self !== 'undefined' ? self : this;
     root.SA = root.SA || {};
-    root.SA.demo = factory(root.SA.model);
+    root.SA.demo = factory(root.SA.model, root.SIM.mcl);
   }
-})(function (M) {
+})(function (M, L) {
   'use strict';
 
   // --- Deterministic randomness -------------------------------------------------
@@ -407,6 +415,173 @@
     }
   }
 
+  // --- The localizer --------------------------------------------------------------
+
+  const MCL_SETTINGS = { periodMs: 50, particles: 300, startSpreadIn: 2, maxTurnRateDegPerS: 200,
+    maxCorrectionSpreadIn: 3, minAgreeingSensors: 2, agreementSigmas: 3, maxCorrectionRateInPerS: 4 };
+  // front, right, back, left, 7in out from the tracking center (include/robot/config.hpp)
+  const MCL_MOUNTS = [L.mount(7, 0, 0), L.mount(0, 7, 90), L.mount(-7, 0, 180), L.mount(0, -7, 270)];
+  const BLOCKED = { noReadings: 4, tooSpread: 8, tooFewAgree: 16, spinning: 64 };
+
+  /**
+   * MonteCarloLocalizer on the demo's field (walls at 0 and 144in): tracking
+   * wheels that read `scale` long, plus `slips` (a hit that lifts them, so they
+   * miss some travel), corrected by the particle filter from four distance
+   * sensors with the V5's noise and a few dropouts. `defender` parks a robot
+   * on the field for a while: the sensors see it, the localizer's map doesn't.
+   * Odometry runs every 10ms (tick()), the filter every 50ms (task()); the
+   * corrected pose is what "odom" logs.
+   */
+  class DemoLocalizer {
+    constructor(robot, { scale = 1.02, slips = [], defender = null, seed = 1 } = {}) {
+      this.robot = robot;
+      this.scale = scale;
+      this.slips = slips;
+      this.defender = defender;
+      this.map = new L.FieldMap(0, 0, 144, 144);
+      // what the sensors see: the walls, and the defender while it's there
+      this.world = this.map.clone();
+      if (defender) this.world.addBox(defender.minXIn, defender.minYIn, defender.maxXIn, defender.maxYIn);
+      this.filter = new L.ParticleFilter(this.map, MCL_MOUNTS, { particleCount: MCL_SETTINGS.particles, seed });
+      this.noise = new L.Rng(seed + 1000);
+      this.raw = null;
+      this.lastTruth = null;
+      this.applied = { x: 0, y: 0 };
+      this.target = { x: 0, y: 0 };
+      this.started = false;
+      this.updates = 0;
+      const w = robot.w;
+      this.ids = {
+        mcl: w.chan('mcl', 'samples', 2, ['x', 'y', 'spread', 'neff', 'used', 'agree', 'correcting', 'corr_x',
+          'corr_y', 'us', 'raw_x', 'raw_y']),
+        beams: w.chan('mcl.beams', 'samples', 2, ['m0', 'e0', 'v0', 'm1', 'e1', 'v1', 'm2', 'e2', 'v2', 'm3',
+          'e3', 'v3']),
+        state: w.chan('mcl.state', 'samples', 4, ['sxx', 'syy', 'sxy', 'fit', 'fit_ratio', 'recovered',
+          'resampled', 'blocked', 'hdg']),
+        pts: w.chan('mcl.pts', 'samples', 2, ['dx0', 'dy0', 'dx1', 'dy1', 'dx2', 'dy2', 'dx3', 'dy3', 'dx4',
+          'dy4', 'dx5', 'dy5']),
+      };
+      w.meta.push(['mcl.filter.particleCount', String(MCL_SETTINGS.particles)],
+        ['mcl.maxCorrectionSpreadIn', '3'], ['mcl.minAgreeingSensors', '2'], ['mcl.periodMs', '50']);
+      MCL_MOUNTS.forEach((m, i) => w.meta.push([`mcl.sensor${i}`, `${m.forwardIn},${m.rightIn},${m.facingDeg}`]));
+    }
+
+    /** Odometry's 10ms task: raw odometry from the wheels, and the correction easing in. */
+    tick() {
+      const c = this.robot.chassis;
+      const truth = { x: c.x, y: c.y };
+      if (!this.raw) {
+        this.raw = { x: truth.x, y: truth.y };
+        this.lastTruth = truth;
+        return;
+      }
+      this.raw.x += (truth.x - this.lastTruth.x) * this.scale;
+      this.raw.y += (truth.y - this.lastTruth.y) * this.scale;
+      this.lastTruth = truth;
+      for (const slip of this.slips) {
+        if (this.robot.t >= slip.atS && this.robot.t < slip.atS + slip.forS) {
+          this.raw.x += slip.dxIn * (0.01 / slip.forS);
+          this.raw.y += slip.dyIn * (0.01 / slip.forS);
+        }
+      }
+      // Odometry::setPositionCorrection(): at most maxCorrectionRateInPerS
+      const step = L.correctionStep(this.target.x - this.applied.x, this.target.y - this.applied.y,
+        MCL_SETTINGS.maxCorrectionRateInPerS * 0.01);
+      this.applied.x += step.dxIn;
+      this.applied.y += step.dyIn;
+    }
+
+    /** The pose every motion drives by: raw odometry plus the correction so far. */
+    pose() {
+      return { x: this.raw.x + this.applied.x, y: this.raw.y + this.applied.y, heading: this.robot.chassis.heading };
+    }
+
+    /** What one distance sensor reads from the true pose, in inches; NaN for nothing. */
+    read(index, heading) {
+      const c = this.robot.chassis;
+      const ray = L.sensorRay(c.x, c.y, heading, MCL_MOUNTS[index]);
+      const t = this.robot.t;
+      const defended = this.defender && t >= this.defender.fromS && t < this.defender.toS;
+      let d = (defended ? this.world : this.map).castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+      d += 0.5 * Math.max(0.6, 0.05 * d) * this.noise.gaussian();
+      if (this.noise.uniform() < 0.03 || !(d > 0.8)) return NaN;
+      return d;
+    }
+
+    *task() {
+      let lastRaw = null;
+      let lastHeading = 0;
+      while (true) {
+        const robot = this.robot;
+        const heading = robot.chassis.heading;
+        if (this.raw && !this.started) {
+          const p = this.pose();
+          this.filter.reset(p.x, p.y, MCL_SETTINGS.startSpreadIn);
+          this.started = true;
+          lastRaw = { x: this.raw.x, y: this.raw.y };
+          lastHeading = heading;
+        }
+        if (this.started) this.update(lastRaw, lastHeading, heading);
+        if (this.raw) lastRaw = { x: this.raw.x, y: this.raw.y };
+        lastHeading = heading;
+        yield MCL_SETTINGS.periodMs / 1000;
+      }
+    }
+
+    update(lastRaw, lastHeading, heading) {
+      const robot = this.robot;
+      const dtS = MCL_SETTINGS.periodMs / 1000;
+      const dx = this.raw.x - lastRaw.x;
+      const dy = this.raw.y - lastRaw.y;
+      const turned = L.wrapDegrees180(heading - lastHeading);
+      this.filter.predict(dx, dy, turned);
+      const spinning = Math.abs(turned / dtS) > MCL_SETTINGS.maxTurnRateDegPerS;
+      const readings = MCL_MOUNTS.map((_, i) => {
+        const d = this.read(i, heading);
+        return L.reading(Number.isFinite(d) ? d : 0, Number.isFinite(d) && d <= 78 && !spinning);
+      });
+      const weighed = this.filter.weigh(heading, readings);
+      const est = this.filter.estimate();
+      const { agreeing, checks } = this.filter.checkSensors(est.xIn, est.yIn, heading, readings,
+        MCL_SETTINGS.agreementSigmas);
+      const resampled = this.filter.resampleIfNeeded();
+      let blocked = 0;
+      if (!weighed) blocked |= BLOCKED.noReadings;
+      if (spinning) blocked |= BLOCKED.spinning;
+      if (!(est.spreadIn <= MCL_SETTINGS.maxCorrectionSpreadIn)) blocked |= BLOCKED.tooSpread;
+      if (agreeing < MCL_SETTINGS.minAgreeingSensors) blocked |= BLOCKED.tooFewAgree;
+      if (blocked === 0) this.target = { x: est.xIn - this.raw.x, y: est.yIn - this.raw.y };
+
+      const disabledUnderControl = robot.status.mode === 'disabled' && robot.status.comp;
+      if (disabledUnderControl || robot.t * 1e6 < robot.openUs) return;
+      const w = robot.w;
+      const t = robot.us();
+      const used = readings.filter((r) => r.valid).length;
+      w.sample(this.ids.mcl, t, [est.xIn, est.yIn, est.spreadIn, est.effectiveParticles, used, agreeing,
+        blocked === 0 ? 1 : 0, this.target.x, this.target.y, 420 + Math.round(160 * this.noise.uniform()),
+        this.raw.x, this.raw.y]);
+      const beams = [];
+      MCL_MOUNTS.forEach((m, i) => {
+        const ray = L.sensorRay(est.xIn, est.yIn, heading, m);
+        const expected = checks[i].used ? checks[i].expectedIn : this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+        beams.push(readings[i].valid ? readings[i].distanceIn : NaN, expected,
+          (dx * ray.dirX + dy * ray.dirY) / dtS);
+      });
+      w.sample(this.ids.beams, t, beams);
+      const fit = this.filter.recoveryFit();
+      w.sample(this.ids.state, t, [est.varianceXIn2, est.varianceYIn2, est.covarianceXYIn2, fit.latest,
+        fit.slow > 0 ? fit.fast / fit.slow : 1, this.filter.lastRecovered, resampled ? 1 : 0, blocked, heading]);
+      if (this.updates++ % 5 === 0) {
+        const sample = L.sampleParticles(this.filter.particles, 24);
+        for (let row = 0; row < 4; ++row) {
+          const offsets = [];
+          for (let i = 0; i < 6; ++i) offsets.push(sample[row * 6 + i].xIn - est.xIn, sample[row * 6 + i].yIn - est.yIn);
+          w.sample(this.ids.pts, t, offsets);
+        }
+      }
+    }
+  }
+
   /** A two-motor elevator lift in degrees of its rotation sensor. */
   class Lift {
     constructor({ tempA, tempB, heatA, heatB }) {
@@ -534,7 +709,7 @@
       this.ids.drive = w.chan('drive', 'pid', 4, pidCols);
       this.ids.turn = w.chan('turn', 'pid', 4, pidCols);
       this.ids.hold = w.chan('hold', 'pid', 4, pidCols);
-      this.ids.odom = w.chan('odom', 'samples', 4, ['x', 'y', 'heading']);
+      this.ids.odom = w.chan('odom', 'samples', 4, ['x', 'y', 'heading', 'raw_x', 'raw_y']);
       this.ids.chassis = w.chan('chassis', 'samples', 3, ['fwd_v', 'strafe_v', 'turn_v']);
       this.ids.batt = w.chan('batt', 'samples', 2, ['volts', 'pct', 'amps', 'temp']);
       const motorCols = ['volts', 'amps', 'temp', 'rpm', 'eff', 'faults'];
@@ -642,11 +817,14 @@
       let lastMotors = -1;
       let lastBatt = -1;
       while (true) {
+        if (this.localizer) this.localizer.tick();
         const disabledUnderControl = this.status.mode === 'disabled' && this.status.comp;
         if (!disabledUnderControl && this.t * 1e6 >= this.openUs) {
           const noise = 0.004 * gaussian(this.rng);
-          const pose = this.chassis.pose(noise);
-          this.w.sample(this.ids.odom, this.us(), [pose.x, pose.y, pose.heading]);
+          const pose = this.localizer ? this.localizer.pose() : this.chassis.pose(0);
+          const raw = this.localizer ? this.localizer.raw : pose;
+          this.w.sample(this.ids.odom, this.us(), [pose.x + noise, pose.y + noise, pose.heading,
+            raw.x + noise, raw.y + noise]);
           const a = this.chassis.applied;
           this.w.sample(this.ids.chassis, this.us(), [a.forward, a.strafe, a.turn]);
           if (this.t - lastBatt >= 0.199) {
@@ -1166,10 +1344,12 @@
     const robot = new Robot({ seed, file: 'SL000041.CSV', openUs: 2103877,
       build: 'Sep 29 2026 09:41:52', liftTemps: [31, 30], liftHeat: [0.05, 0.04], clawTemp: 30,
       batteryPct: 96 });
+    robot.localizer = new DemoLocalizer(robot, { seed: 41 });
     robot.run(2.1);
     robot.event('file', 'open,SL000041.CSV');
     robot.setStatus('opcontrol', false, false);
     robot.spawn('sampler', robot.sampler());
+    robot.spawn('localizer', robot.localizer.task());
     robot.spawn('health', robot.healthTask());
     robot.spawn('opcontrol', robot.opcontrol(null));
     robot.spawn('pit', robot.pitSession());
@@ -1181,10 +1361,15 @@
     const robot = new Robot({ seed, file: 'SL000042.CSV', openUs: 2104502,
       build: 'Sep 29 2026 09:41:52', liftTemps: [45, 42], liftHeat: [0.34, 0.31], clawTemp: 38,
       batteryPct: 91 });
+    // driver 0:30, a hit lifts the tracking wheels and they miss 6in; driver 0:40 to 1:00, a robot
+    // parks in the middle of the field
+    robot.localizer = new DemoLocalizer(robot, { seed: 42, slips: [{ atS: 67.5, forS: 0.25, dxIn: -4.8, dyIn: 3.6 }],
+      defender: { fromS: 77.5, toS: 97.5, minXIn: 63, minYIn: 63, maxXIn: 81, maxYIn: 81 } });
     robot.run(2.1);
     robot.event('file', 'open,SL000042.CSV');
     robot.setStatus('disabled', true, true);
     robot.spawn('sampler', robot.sampler());
+    robot.spawn('localizer', robot.localizer.task());
     robot.spawn('health', robot.healthTask());
     robot.run(20);
     robot.setStatus('autonomous', true, true);

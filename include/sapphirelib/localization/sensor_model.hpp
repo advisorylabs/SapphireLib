@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "sapphirelib/util/lookup_table.hpp"
+
 namespace sapphirelib::localization {
 
 /**
@@ -124,6 +126,73 @@ double readingSigmaIn(const BeamModel& beam, const DistanceReading& reading);
  */
 double readingLogLikelihood(double measuredIn, double expectedIn, double sigmaIn,
                             const BeamModel& beam);
+
+/**
+ * @brief readingLogLikelihood() for one reading, scored against many expected distances
+ *
+ * The particle filter scores every particle against every reading. This works out what depends
+ * only on the reading once, and looks the rest up in a table instead of calling exp() and log():
+ * the log of the beam model's mixture is log(floor) + softplus(log(peak / floor) - z^2 / 2), and
+ * softplus(x) = log(1 + e^x) is the same curve for every reading. Within 1e-5 of
+ * readingLogLikelihood() (the table's interpolation), which stays the reference
+ *
+ * @b Example
+ * @code {.cpp}
+ * using namespace sapphirelib::localization;
+ * const BeamModel beam;
+ * const ReadingScorer scorer(40.0, readingSigmaIn(beam, {.distanceIn = 40.0, .valid = true}),
+ * beam); double score = scorer.logLikelihood(41.0); // as readingLogLikelihood(40, 41, sigma, beam)
+ * @endcode
+ */
+class ReadingScorer {
+public:
+    /**
+     * @brief Construct a scorer that gives every expected distance 0
+     */
+    ReadingScorer() = default;
+
+    /**
+     * @brief Construct a scorer for one reading
+     *
+     * @param measuredIn the reading, in inches
+     * @param sigmaIn the reading's noise, from readingSigmaIn()
+     * @param beam the sensor model
+     */
+    ReadingScorer(double measuredIn, double sigmaIn, const BeamModel& beam);
+
+    /**
+     * @brief Get how likely the reading is if the sensor should have read expectedIn, as a log
+     *
+     * @note always inlined: the particle filter calls it per particle per sensor, and -Os (the
+     * PROS build) would otherwise make each a call
+     *
+     * @param expectedIn what the map says the sensor should read, in inches. Infinity if it would
+     * see nothing
+     * @return double as readingLogLikelihood(), within 1e-5
+     */
+    [[gnu::always_inline]] double logLikelihood(double expectedIn) const {
+        // seeing nothing (infinity) leaves just the floor, as in readingLogLikelihood()
+        const double z = (measuredIn_ - expectedIn) * invSigma_;
+        const double x = logPeak_ - 0.5 * z * z;
+        if (noOutliers_) return x;
+        // softplus(x) = log(1 + e^x) is within 1.2e-7 of 0 below the table, and of x above it
+        if (!(x > softplus_->minX())) return logFloor_;
+        if (x >= softplus_->maxX()) return logFloor_ + x;
+        return logFloor_ + softplus_->at(x);
+    }
+
+private:
+    double measuredIn_ = 0.0;
+    double invSigma_ = 0.0;
+    // log(outlierProbability / maxRangeIn), the outlier floor. 0 with no outliers
+    double logFloor_ = 0.0;
+    // the hit part's peak over the floor, as a log. The peak itself with no outliers
+    double logPeak_ = 0.0;
+    bool noOutliers_ = true;
+    // softplus(x) from -16 to 16, 64 samples to the unit: within 7.6e-6. Shared by every scorer;
+    // unused with no outliers
+    const LookupTable* softplus_ = nullptr;
+};
 
 /**
  * @brief Turn a V5 Distance Sensor's raw values into a reading

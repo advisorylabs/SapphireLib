@@ -8,8 +8,9 @@
  *   node tools/analyzer/build.js            → tools/analyzer/dist/sapphire-telemetry.html
  *   node tools/analyzer/build.js out.html   → out.html
  *
- * It inlines css/app.css and every js/*.js that index.html loads, in the same
- * order, and nothing else changes: the page behaves exactly like index.html.
+ * It inlines css/app.css and every js/*.js that index.html loads (and the
+ * simulator's js/mcl.js, which the demo runs), in the same order, and nothing
+ * else changes: the page behaves exactly like index.html.
  * No dependencies. dist/ is ignored by git; index.html stays the source.
  *
  * Team 96671H: Hitmen
@@ -34,14 +35,15 @@ html = html.replace(/<link rel="stylesheet" href="(css\/[^"]+)">/g, (_, href) =>
   const css = fs.readFileSync(path.join(root, href), 'utf8');
   return `<style>\n${inlineSafe(css, 'style')}</style>`;
 });
-html = html.replace(/<script src="(js\/[^"]+)"><\/script>/g, (_, src) => {
+// js/, and the simulator's localization port the demo runs (../sim/js/mcl.js)
+html = html.replace(/<script src="((?:\.\.\/sim\/)?js\/[^"]+)"><\/script>/g, (_, src) => {
   inlined++;
   const js = fs.readFileSync(path.join(root, src), 'utf8');
   return `<script>\n${inlineSafe(js, 'script')}</script>`;
 });
 
 // Anything still pointing into the folder would break once the file moves.
-const leftover = html.match(/(?:src|href)="(?:css|js)\/[^"]+"/g);
+const leftover = html.match(/(?:src|href)="(?:\.\.\/sim\/)?(?:css|js)\/[^"]+"/g);
 if (leftover) {
   console.error(`build.js: not inlined: ${leftover.join(', ')}`);
   process.exit(1);

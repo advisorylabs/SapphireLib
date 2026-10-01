@@ -133,8 +133,12 @@ struct PursuitRun {
 using FinalApproachRule =
     std::function<bool(double distToFinalIn, std::size_t segmentIndex, std::size_t count)>;
 
+using LookaheadSearch = std::function<sapphirelib::motion::LookaheadResult(
+    double xIn, double yIn, const Path& path, double lookaheadIn, std::size_t fromIndex)>;
+
 PursuitRun pursue(const Path& path, double startX, double startY, double lookaheadIn,
-                  const FinalApproachRule& finished) {
+                  const FinalApproachRule& finished,
+                  const LookaheadSearch& search = findLookaheadPoint) {
     const std::vector<Waypoint>& points = path.waypoints();
     PursuitRun run{.xIn = startX, .yIn = startY};
     run.closestToWaypointIn.assign(points.size(), 1e9);
@@ -149,8 +153,7 @@ PursuitRun pursue(const Path& path, double startX, double startY, double lookahe
         const double distToFinalIn =
             std::hypot(points.back().xIn - run.xIn, points.back().yIn - run.yIn);
         if (finished(distToFinalIn, segmentIndex, points.size())) break;
-        const auto lookahead =
-            findLookaheadPoint(run.xIn, run.yIn, path, lookaheadIn, segmentIndex);
+        const auto lookahead = search(run.xIn, run.yIn, path, lookaheadIn, segmentIndex);
         segmentIndex = lookahead.segmentIndex;
         const double dx = lookahead.point.xIn - run.xIn;
         const double dy = lookahead.point.yIn - run.yIn;
@@ -219,6 +222,79 @@ void testClosedPathDrivesTheWholeLap() {
     expectTrue(middle.ticks > 500, "a lap from mid-side runs too");
 }
 
+// findLookaheadPoint() before it stopped at the end of the stretch the circle reaches: it kept
+// the last hit anywhere later in the path. Kept to check the new one against
+sapphirelib::motion::LookaheadResult oldFindLookaheadPoint(double xIn, double yIn, const Path& path,
+                                                           double lookaheadIn,
+                                                           std::size_t fromIndex) {
+    const std::vector<Waypoint>& points = path.waypoints();
+    bool found = false;
+    Waypoint bestPoint{};
+    std::size_t bestIndex = fromIndex;
+    const std::size_t startIndex = fromIndex < points.size() ? fromIndex : points.size() - 1;
+    for (std::size_t i = startIndex; i + 1 < points.size(); ++i) {
+        const double dx = points[i + 1].xIn - points[i].xIn;
+        const double dy = points[i + 1].yIn - points[i].yIn;
+        const double fx = points[i].xIn - xIn;
+        const double fy = points[i].yIn - yIn;
+        const double a = dx * dx + dy * dy;
+        if (a < 1e-9) continue;
+        const double b = 2.0 * (fx * dx + fy * dy);
+        const double c = fx * fx + fy * fy - lookaheadIn * lookaheadIn;
+        const double discriminant = b * b - 4.0 * a * c;
+        if (discriminant < 0.0) continue;
+        const double t2 = (-b + std::sqrt(discriminant)) / (2.0 * a);
+        if (t2 < 0.0 || t2 > 1.0) continue;
+        found = true;
+        bestPoint = Waypoint{points[i].xIn + dx * t2, points[i].yIn + dy * t2};
+        bestIndex = i;
+    }
+    if (!found) return {points.back(), points.size() - 1};
+    return {bestPoint, bestIndex};
+}
+
+void testLookaheadMatchesTheOldSearchOnOpenPaths() {
+    // a path that never comes back within reach of itself has its hits all in a row, so stopping at
+    // the end of the row changes nothing: the same 500 random open paths, run with both searches
+    Rng rng(7);
+    for (int trial = 0; trial < 500; ++trial) {
+        std::vector<Waypoint> points{{0.0, 0.0}};
+        const int count = 2 + static_cast<int>(rng.uniform() * 6);
+        for (int i = 1; i < count; ++i) {
+            points.push_back({points.back().xIn + (rng.uniform() - 0.5) * 40.0,
+                              points.back().yIn + 12.0 + rng.uniform() * 30.0});
+        }
+        const Path path(points);
+        const double lookaheadIn = 6.0 + rng.uniform() * 10.0;
+        const PursuitRun before =
+            pursue(path, 0.0, 0.0, lookaheadIn, newFinalApproach, oldFindLookaheadPoint);
+        const PursuitRun after = pursue(path, 0.0, 0.0, lookaheadIn, newFinalApproach);
+        if (before.ticks != after.ticks || before.xIn != after.xIn || before.yIn != after.yIn) {
+            std::printf("FAIL open path %d: %d ticks to (%.3f, %.3f), was %d to (%.3f, %.3f)\n",
+                        trial, after.ticks, after.xIn, after.yIn, before.ticks, before.xIn,
+                        before.yIn);
+            assert(false);
+        }
+    }
+}
+
+void testLookaheadDoesNotSkipToALapsLastSide() {
+    // 10in up the first side of a 60in square lap, 1.1in right of it: the lookahead circle just
+    // reaches the lap's last side, running back along y = -30 underneath. The old search jumped
+    // there and ended the lap; the new one stays on the first side
+    const Path lap({{-30, -30}, {-30, 30}, {30, 30}, {30, -30}, {-30, -30}});
+    const auto old = oldFindLookaheadPoint(-28.86, -20.05, lap, 10.0, 0);
+    expectTrue(old.segmentIndex == 3, "the old search skips to the last side");
+    const auto result = findLookaheadPoint(-28.86, -20.05, lap, 10.0, 0);
+    expectTrue(result.segmentIndex == 0, "stays on the first side");
+    expectNear(result.point.xIn, -30.0, "on the first side");
+    expectTrue(result.point.yIn > -11.0 && result.point.yIn < -9.0, "10in ahead");
+
+    // a lap driven 1.1in to the right of the path all the way round: every side, then hand over
+    const PursuitRun offset = pursue(lap, -28.9, -30, 10.0, newFinalApproach);
+    expectTrue(offset.ticks > 500, "a lap driven off to one side runs the whole lap");
+}
+
 } // namespace
 
 int main() {
@@ -231,6 +307,8 @@ int main() {
     testFinalApproachWaitsForTheLastSegment();
     testOpenPathsBehaveExactlyAsBefore();
     testClosedPathDrivesTheWholeLap();
+    testLookaheadMatchesTheOldSearchOnOpenPaths();
+    testLookaheadDoesNotSkipToALapsLastSide();
     std::puts("pure_pursuit_math_test: all assertions passed");
     return 0;
 }

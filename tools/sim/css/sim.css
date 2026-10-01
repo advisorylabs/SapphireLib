@@ -325,20 +325,39 @@ main.sim {
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.1);
 }
 
-.step-caption, .field-hint {
+.field-hint {
   position: absolute;
+  top: 52px;
   left: 12px;
   right: 12px;
   padding: 10px 12px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--accent-soft);
   border: 1px solid var(--border);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
   font-size: 0.92rem;
+  text-align: center;
 }
-.step-caption { bottom: 12px; }
-.step-caption strong { font-family: var(--font-display); font-size: 1rem; }
-.field-hint { top: 52px; text-align: center; background: var(--accent-soft); }
+
+/* the ? card: controls and units, under the top bar */
+.help {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 24px;
+  margin: 12px var(--gutter) 0;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+}
+.help[hidden] { display: none; }
+.help h3 { font-size: 0.95rem; margin-bottom: 4px; }
+.help dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; }
+.help dt { color: var(--ink-2); white-space: nowrap; }
+.help dd { margin: 0; }
+.help .hint { margin-top: 6px; }
+.help-foot { grid-column: 1 / -1; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--ink-2); justify-content: center; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -401,9 +420,10 @@ main.sim {
   z-index: 2;
 }
 .tabs button {
+  flex: 1 0 auto;
   border: 0;
   background: none;
-  padding: 9px 10px 8px;
+  padding: 9px 6px 8px;
   font-family: var(--font-display);
   font-size: 1rem;
   font-weight: 600;
@@ -448,7 +468,6 @@ main.sim {
 }
 .gains { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 0.88rem; color: var(--ink-2); }
 
-.steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
 .code {
   margin: 0;
   padding: 10px;
@@ -468,9 +487,6 @@ table.data-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
 .data-table td { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
 .data-table .yes { color: var(--good); }
 .data-table .no { color: var(--critical); }
-
-.inspector { display: grid; gap: 8px; font-size: 0.9rem; }
-.inspector .big { font-family: var(--font-display); font-size: 1.1rem; }
 
 /* --- Tune tab ------------------------------------------------------------------------------ */
 
