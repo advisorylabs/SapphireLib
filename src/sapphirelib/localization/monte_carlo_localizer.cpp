@@ -1,9 +1,14 @@
 #include "sapphirelib/localization/monte_carlo_localizer.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <mutex>
 #include <utility>
 
 #include "sapphirelib/util/angle.hpp"
+#include "sapphirelib/util/clock.hpp"
 
 namespace sapphirelib::localization {
 
@@ -28,9 +33,11 @@ MonteCarloLocalizer::MonteCarloLocalizer(odom::Odometry& odometry,
     for (const DistanceSensorConfig& sensor : sensors) sensors_.emplace_back(sensor.port);
     readings_.resize(sensors.size());
     checks_.resize(sensors.size());
+    beams_.resize(sensors.size());
 }
 
 void MonteCarloLocalizer::update() {
+    const std::uint64_t startUs = sapphirelib::micros();
     const std::uint32_t nowMs = pros::millis();
     const odom::Odometry::Snapshot snapshot = odometry_.snapshot();
     const odom::Pose& raw = snapshot.rawPose;
@@ -78,8 +85,10 @@ void MonteCarloLocalizer::update() {
                                   config_.minConfidence, config_.filter.beam);
         if (spinning) reading.valid = false;
         const SensorRay ray = sensorRay(0.0, 0.0, beamHeadingDeg, filter_.sensors()[s]);
-        reading = compensateLatency(reading, velocityX * ray.dirX + velocityY * ray.dirY, latencyS);
+        const double closingSpeed = velocityX * ray.dirX + velocityY * ray.dirY;
+        reading = compensateLatency(reading, closingSpeed, latencyS);
         readings_[s] = reading;
+        beams_[s].closingSpeedInPerS = closingSpeed;
         if (reading.valid) ++used;
     }
 
@@ -116,6 +125,34 @@ void MonteCarloLocalizer::update() {
         correctionYIn_.store(correctionYIn);
     }
     updates_.fetch_add(1);
+    // the callback's own cost isn't the localizer's, so the clock stops here
+    const auto updateUs = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(sapphirelib::micros() - startUs, UINT32_MAX));
+    updateUs_.store(updateUs);
+
+    // uncontended except the moment it's set, and this task is never deleted holding it
+    std::lock_guard<pros::Mutex> lock(callbackMutex_);
+    if (!callback_) return;
+    constexpr double kNoReading = std::numeric_limits<double>::quiet_NaN();
+    for (std::size_t s = 0; s < beams_.size(); ++s) {
+        BeamSample& beam = beams_[s];
+        beam.used = readings_[s].valid;
+        beam.measuredIn = beam.used ? readings_[s].distanceIn : kNoReading;
+        if (checks_[s].used) {
+            beam.expectedIn = checks_[s].expectedIn;
+        } else {
+            // checkSensors() skips unused readings, but a wall in range with no reading is worth
+            // knowing about too
+            const SensorRay ray =
+                sensorRay(estimate.xIn, estimate.yIn, beamHeadingDeg, filter_.sensors()[s]);
+            beam.expectedIn = filter_.map().castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+        }
+    }
+    callback_(LocalizerUpdate{.timeMs = nowMs,
+                              .rawPose = raw,
+                              .estimate = estimate,
+                              .status = status(),
+                              .beams = std::span<const BeamSample>(beams_)});
 }
 
 void MonteCarloLocalizer::startTask(std::uint32_t periodMs) {
@@ -143,6 +180,7 @@ LocalizationStatus MonteCarloLocalizer::status() const {
         .correctionXIn = correctionXIn_.load(),
         .correctionYIn = correctionYIn_.load(),
         .updates = updates_.load(),
+        .updateUs = updateUs_.load(),
     };
 }
 
@@ -151,5 +189,16 @@ void MonteCarloLocalizer::setCorrectionEnabled(bool enabled) { correctionEnabled
 bool MonteCarloLocalizer::correctionEnabled() const { return correctionEnabled_.load(); }
 
 void MonteCarloLocalizer::relocalizeGlobally() { relocalizeRequested_.store(true); }
+
+const LocalizerConfig& MonteCarloLocalizer::config() const { return config_; }
+
+const std::vector<DistanceSensorMount>& MonteCarloLocalizer::sensorMounts() const {
+    return filter_.sensors();
+}
+
+void MonteCarloLocalizer::setUpdateCallback(std::function<void(const LocalizerUpdate&)> callback) {
+    std::lock_guard<pros::Mutex> lock(callbackMutex_);
+    callback_ = std::move(callback);
+}
 
 } // namespace sapphirelib::localization

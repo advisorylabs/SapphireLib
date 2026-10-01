@@ -2,12 +2,15 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "pros/distance.hpp"
 #include "pros/rtos.hpp"
 #include "sapphirelib/localization/field_map.hpp"
+#include "sapphirelib/localization/localizer_config.hpp"
 #include "sapphirelib/localization/particle_filter.hpp"
 #include "sapphirelib/localization/sensor_model.hpp"
 #include "sapphirelib/odom/odometry.hpp"
@@ -24,68 +27,6 @@ struct DistanceSensorConfig {
 
     /** where it's mounted and which way it faces */
     DistanceSensorMount mount;
-};
-
-/**
- * @brief Settings for a MonteCarloLocalizer
- *
- * The defaults suit a V5 robot with good tracking wheels and four distance sensors. The simulator
- * (tools/sim) runs the same settings, so try changes there first
- */
-struct LocalizerConfig {
-    /** the particle filter: particle count, noise, the sensor model, recovery */
-    ParticleFilterConfig filter;
-
-    /**
-     * how far odometry's pose may be off, in inches (1 standard deviation), when particles are
-     * placed around it: at the first update and after every Odometry::setPose()
-     */
-    double startSpreadIn = 2.0;
-
-    /**
-     * how old a distance reading is by the time it's read, in milliseconds. The sensor measures
-     * at about 30Hz, so a reading is on average a few tens of milliseconds old; at 60in/s that's
-     * nearly 2in. Compensated for with odometry's velocity. 0 turns compensation off
-     */
-    double sensorLatencyMs = 30.0;
-
-    /** readings past 200mm with a lower confidence (0 to 63) are skipped */
-    std::int32_t minConfidence = 20;
-
-    /**
-     * skip the sensors while turning faster than this, in degrees per second. Mid-spin, a beam
-     * sweeps across whatever it's pointed at while the sensor measures. Prediction keeps running
-     */
-    double maxTurnRateDegPerS = 200.0;
-
-    /** whether to correct odometry's pose. See MonteCarloLocalizer::setCorrectionEnabled() */
-    bool correctOdometry = true;
-
-    /**
-     * don't correct odometry until Odometry::setPose() has run once. Until then the pose is
-     * relative to wherever the robot sat at startup, not the field the map describes, and the
-     * particles can only hunt for the robot. True by default; set it false if the Odometry is
-     * constructed with the robot's real field pose
-     */
-    bool waitForSetPose = true;
-
-    /** only correct while the particles' spread is below this, in inches */
-    double maxCorrectionSpreadIn = 3.0;
-
-    /**
-     * only correct when at least this many sensors agree with the estimate: a sensor blocked by
-     * another robot disagrees, the walls the others see still agree
-     */
-    std::size_t minAgreeingSensors = 2;
-
-    /** a sensor agrees when it's within this many sigmas of what the map says from the estimate */
-    double agreementSigmas = 3.0;
-
-    /**
-     * how fast a correction may move odometry's pose, in inches per second. A motion's derivative
-     * term sees this as extra speed, so keep it well under the drive's top speed. 0 or less jumps
-     */
-    double maxCorrectionRateInPerS = 4.0;
 };
 
 /**
@@ -118,6 +59,57 @@ struct LocalizationStatus {
 
     /** how many updates have run */
     std::uint32_t updates = 0;
+
+    /**
+     * how long the last update took, in microseconds: wall time, so time other tasks spent
+     * preempting it counts too, making it an upper bound on what it cost
+     */
+    std::uint32_t updateUs = 0;
+};
+
+/**
+ * @brief One distance sensor in one update, for telemetry: the reading against the map
+ */
+struct BeamSample {
+    /** whether the reading was usable. measuredIn is NaN when it wasn't */
+    bool used = false;
+
+    /** the reading, latency compensated, in inches */
+    double measuredIn = 0.0;
+
+    /**
+     * what the map says the sensor should read from the estimate, in inches. Worked out for every
+     * sensor, used or not, so a reading that went missing while a wall was in range shows up.
+     * Infinity when the beam would see nothing
+     */
+    double expectedIn = 0.0;
+
+    /**
+     * how fast the sensor was moving toward what it points at, in in/s, by odometry. What latency
+     * compensation scaled sensorLatencyMs by, so a reading that's still off in proportion to it
+     * says the latency is set wrong
+     */
+    double closingSpeedInPerS = 0.0;
+};
+
+/**
+ * @brief Everything one update worked out, handed to the update callback
+ */
+struct LocalizerUpdate {
+    /** when the update ran, in milliseconds since the program started */
+    std::uint32_t timeMs = 0;
+
+    /** odometry's pose before any correction, and the correction applied to it so far */
+    odom::Pose rawPose;
+
+    /** the estimate the particles settled on this update */
+    Estimate estimate;
+
+    /** the same fields status() returns, as of this update */
+    LocalizationStatus status;
+
+    /** one per sensor, in the order the localizer was given them. Valid during the call only */
+    std::span<const BeamSample> beams;
 };
 
 /**
@@ -238,6 +230,34 @@ public:
      */
     void relocalizeGlobally();
 
+    /**
+     * @brief Get the settings the localizer was built with
+     */
+    const LocalizerConfig& config() const;
+
+    /**
+     * @brief Get the sensors' mounts, in the order given to the constructor
+     */
+    const std::vector<DistanceSensorMount>& sensorMounts() const;
+
+    /**
+     * @brief Call a function at the end of every update, on the localizer's task
+     *
+     * For telemetry: it gets each sensor's reading next to what the map says it should read,
+     * which is what tuning the sensor model from a log needs. Safe to set from any task, before
+     * or after startTask(). Keep it quick: it runs on the localizer's task, after the update
+     *
+     * @param callback called with what the update worked out. nullptr removes it
+     *
+     * @b Example
+     * @code {.cpp}
+     * localizer().setUpdateCallback([](const LocalizerUpdate& update) {
+     *     beamLog.record({update.beams[0].measuredIn, update.beams[0].expectedIn});
+     * });
+     * @endcode
+     */
+    void setUpdateCallback(std::function<void(const LocalizerUpdate&)> callback);
+
 private:
     odom::Odometry& odometry_;
     std::vector<pros::Distance> sensors_;
@@ -247,6 +267,9 @@ private:
     // update() task only
     std::vector<DistanceReading> readings_;
     std::vector<SensorCheck> checks_;
+    std::vector<BeamSample> beams_;
+    pros::Mutex callbackMutex_;
+    std::function<void(const LocalizerUpdate&)> callback_; // under callbackMutex_
     bool started_ = false;
     std::uint32_t lastResetCount_ = 0;
     odom::Pose lastRawPose_;
@@ -267,6 +290,7 @@ private:
     std::atomic<double> correctionXIn_{0.0};
     std::atomic<double> correctionYIn_{0.0};
     std::atomic<std::uint32_t> updates_{0};
+    std::atomic<std::uint32_t> updateUs_{0};
 
     std::unique_ptr<pros::Task> task_;
 };
