@@ -118,6 +118,14 @@ test('reachedFinalApproach matches pure_pursuit_math_test.cpp', () => {
   assert.equal(R.reachedFinalApproach(3, 6, 0, 1), true);
 });
 
+test('findLookaheadPoint() stays on a lap\'s first side when its last passes beside it (pure_pursuit_math_test.cpp)', () => {
+  const lap = [{ xIn: -30, yIn: -30 }, { xIn: -30, yIn: 30 }, { xIn: 30, yIn: 30 }, { xIn: 30, yIn: -30 },
+    { xIn: -30, yIn: -30 }];
+  const result = R.findLookaheadPoint(-28.86, -20.05, lap, 10, 0);
+  assert.equal(result.segmentIndex, 0);
+  assert.ok(Math.abs(result.point.xIn + 30) < 1e-9 && result.point.yIn > -11 && result.point.yIn < -9);
+});
+
 test('followPath() drives a closed lap instead of finishing where it starts', () => {
   const laps = ROUTINES.find((r) => r.id === 'laps');
   const options = SIM.defaultOptions();

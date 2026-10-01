@@ -413,9 +413,12 @@
       const b = 2.0 * (f.x * d.x + f.y * d.y);
       const c = f.x * f.x + f.y * f.y - lookaheadIn * lookaheadIn;
       const discriminant = b * b - 4.0 * a * c;
-      if (discriminant < 0.0) continue;
-      const t2 = (-b + Math.sqrt(discriminant)) / (2.0 * a);
-      if (t2 < 0.0 || t2 > 1.0) continue;
+      const t2 = discriminant < 0.0 ? -1.0 : (-b + Math.sqrt(discriminant)) / (2.0 * a);
+      if (t2 < 0.0 || t2 > 1.0) {
+        // once the path has left the circle, a later segment back within reach is for later
+        if (found) break;
+        continue;
+      }
       found = true;
       bestPoint = { xIn: p1.xIn + d.x * t2, yIn: p1.yIn + d.y * t2 };
       bestIndex = i;
