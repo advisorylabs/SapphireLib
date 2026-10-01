@@ -222,8 +222,7 @@
         estimate: { xIn: 0, yIn: 0, headingDeg: 0 }, spreadIn: 0, effectiveParticles: 0, sensorsUsed: 0,
         sensorsAgreeing: 0, correcting: false, blockedBy: 0, correctionXIn: 0, correctionYIn: 0, updates: 0,
       };
-      // for the visualizer: the last update's working, and where it's up to
-      this.phase = 'idle';
+      // the last update's working, for the visualizer and the recorder
       this.work = null;
     }
 
@@ -258,10 +257,8 @@
       const dtS = (nowMs - this.lastUpdateMs) / 1000.0;
       this.lastRawPose = Object.assign({}, raw);
       this.lastUpdateMs = nowMs;
-      const before = this.filter.particles.map((p) => ({ xIn: p.xIn, yIn: p.yIn }));
       this.filter.predict(dxIn, dyIn, turnedDeg);
-      this.work = { snapshot, raw, dxIn, dyIn, turnedDeg, dtS, before, restarted };
-      this.phase = 'predicted';
+      this.work = { snapshot, raw, dxIn, dyIn, turnedDeg, dtS, restarted };
     }
 
     /** Step 2: read the sensors, weigh(), and check the estimate against the walls. */
@@ -301,7 +298,6 @@
       w.checks = check.checks;
       w.beamHeadingDeg = beamHeadingDeg;
       w.spinning = spinning;
-      this.phase = 'weighed';
     }
 
     /** Step 3: resample, and correct odometry if the estimate passes every check. */
@@ -327,13 +323,6 @@
       w.blockedBy = blockedBy;
       w.recovered = this.filter.lastRecovered;
       w.fit = this.filter.recoveryFit();
-      w.gate = {
-        enabled: this.correctionEnabled,
-        inFieldFrame,
-        weighed: w.weighed,
-        spreadOk: w.estimate.spreadIn <= config.maxCorrectionSpreadIn,
-        agreeingOk: w.agreeing >= config.minAgreeingSensors,
-      };
       const st = this.status;
       st.estimate = { xIn: w.estimate.xIn, yIn: w.estimate.yIn, headingDeg: w.raw.headingDeg };
       st.spreadIn = w.estimate.spreadIn;
@@ -347,7 +336,6 @@
         st.correctionYIn = correctionYIn;
       }
       st.updates++;
-      this.phase = 'idle';
     }
 
     /**

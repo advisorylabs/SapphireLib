@@ -22,8 +22,8 @@
  * side, change the other.
  *
  * On top of the ports, for the visualizer only: every particle carries the
- * score its last weigh() gave it, and resampling records which particles
- * survived. Neither changes a single number the filter produces.
+ * score its last weigh() gave it, and whether recovery just scattered it.
+ * Neither changes a single number the filter produces.
  *
  * Plain script: window.SIM.mcl in a browser, require('./mcl.js') in Node.
  *
@@ -483,8 +483,6 @@
       this.fastAverage = 0;
       this.averagesPrimed = false;
       this.lastRecovered = 0;
-      // visualizer only: which slots survived the last resample, and how often
-      this.lastSurvivors = null;
     }
 
     makeParticle(xIn, yIn, weight) {
@@ -642,7 +640,6 @@
         return false;
       }
 
-      const survivors = new Uint32Array(count);
       const kept = count - recovered;
       const out = this.resampled;
       if (kept > 0) {
@@ -657,7 +654,6 @@
             cumulative += particles[source].weight;
           }
           copyParticle(out[j], particles[source]);
-          survivors[source]++;
         }
       }
 
@@ -684,7 +680,6 @@
       this.particles = out;
       this.uniformWeights = true;
       this.lastRecovered = recovered;
-      this.lastSurvivors = survivors;
       return true;
     }
 
@@ -730,31 +725,6 @@
         checks.push(check);
       }
       return { agreeing, checks };
-    }
-
-    /**
-     * Visualizer only: one particle's view, sensor by sensor: where its beams
-     * would hit the map and how each reading scores there. Uses the rays and
-     * sigmas of the last weigh().
-     */
-    explainParticle(index, headingDeg, readings) {
-      const p = this.particles[index];
-      const rows = [];
-      let total = this.map.contains(p.xIn, p.yIn) ? 0 : kOutsideLogPenalty;
-      for (let s = 0; s < this.sensors.length; ++s) {
-        const r = readings[s];
-        const ray = sensorRay(p.xIn, p.yIn, headingDeg, this.sensors[s]);
-        const expectedIn = this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
-        const row = { ray, expectedIn, used: !!(r && r.valid), measuredIn: r ? r.distanceIn : NaN,
-          sigmaIn: NaN, logLikelihood: 0 };
-        if (row.used) {
-          row.sigmaIn = readingSigmaIn(this.config.beam, r);
-          row.logLikelihood = readingLogLikelihood(r.distanceIn, expectedIn, row.sigmaIn, this.config.beam);
-          total += row.logLikelihood;
-        }
-        rows.push(row);
-      }
-      return { particle: p, rows, logLikelihood: total };
     }
   }
 

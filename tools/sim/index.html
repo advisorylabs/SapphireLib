@@ -8,7 +8,7 @@
   SapphireLib localization simulator. Open this file in a browser: no install,
   no server, works offline. It runs the robot's own odometry, Monte Carlo
   localization, motions and Auto-Tune gain design (ported from the library)
-  against a simulated field. See README.md next to this file.
+  against a simulated field. How to use it: docs/TOOLS.md.
   Team 96671H: Hitmen
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -19,11 +19,11 @@
 <header class="topbar">
   <div class="brand">
     <h1><span class="mark" aria-hidden="true"></span> Sapphire Sim</h1>
-    <span class="sub">Odometry + Monte Carlo localization, no robot needed</span>
+    <span class="sub">Odometry + MCL</span>
   </div>
   <div class="transport" role="group" aria-label="Simulation">
-    <button class="btn primary" id="play-btn" type="button">Pause</button>
-    <button class="btn" id="reset-btn" type="button" title="Put the robot back at the start">Reset</button>
+    <button class="btn primary" id="play-btn" type="button" title="Space">Pause</button>
+    <button class="btn" id="reset-btn" type="button" title="Back to the routine's start">Reset</button>
     <label class="inline">Speed
       <select class="select" id="speed-select">
         <option value="0.1">0.1×</option>
@@ -34,10 +34,45 @@
         <option value="4">4×</option>
       </select>
     </label>
-    <span class="clock num" id="clock">0.0s</span>
+    <span class="clock num" id="clock" title="Simulated time">0.0s</span>
+    <button class="icon-btn" id="help-btn" type="button" aria-label="Controls and units" aria-expanded="false" title="Controls and units (?)">?</button>
     <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch light or dark theme" title="Theme">◐</button>
   </div>
 </header>
+
+<section class="help" id="help" hidden aria-label="Controls and units">
+  <div>
+    <h3>Drive</h3>
+    <dl>
+      <dt><kbd>W</kbd><kbd>S</kbd></dt><dd>forward, back</dd>
+      <dt><kbd>A</kbd><kbd>D</kbd></dt><dd>strafe</dd>
+      <dt><kbd>Q</kbd><kbd>E</kbd> <kbd>←</kbd><kbd>→</kbd></dt><dd>turn</dd>
+      <dt><kbd>Shift</kbd></dt><dd>slow (40%)</dd>
+      <dt><kbd>Space</kbd></dt><dd>pause, play</dd>
+      <dt><kbd>?</kbd></dt><dd>this card</dd>
+    </dl>
+    <p class="hint">Driving stops a running routine.</p>
+  </div>
+  <div>
+    <h3>Field</h3>
+    <dl>
+      <dt>Drag</dt><dd>the defender</dd>
+      <dt>Click</dt><dd>where to put the robot, after <em>Pick up</em></dd>
+      <dt>Follow</dt><dd>×4, ×12 zoom on the robot, with a scale bar</dd>
+    </dl>
+  </div>
+  <div>
+    <h3>Units</h3>
+    <dl>
+      <dt>Distance</dt><dd>inches</dd>
+      <dt>Angles</dt><dd>degrees, clockwise from +y</dd>
+      <dt>Origin</dt><dd>field center; +x right, +y downfield (up)</dd>
+      <dt>Field</dt><dd>140.5 in wall to wall, 24 in tiles</dd>
+      <dt>Ellipse</dt><dd>2σ of the particle cloud</dd>
+    </dl>
+  </div>
+  <p class="hint help-foot">How to use it: <code>docs/TOOLS.md</code></p>
+</section>
 
 <main class="sim">
   <section class="stage">
@@ -48,15 +83,14 @@
         <button type="button" data-value="4" aria-pressed="false">Follow ×4</button>
         <button type="button" data-value="12" aria-pressed="false">×12</button>
       </div>
-      <div class="step-caption" id="step-caption" hidden></div>
       <div class="field-hint" id="field-hint" hidden></div>
     </div>
     <div class="legend" id="legend"></div>
     <div class="tiles" id="tiles"></div>
     <div class="panel chart-panel">
       <header>
-        <h3>How far off is it?</h3>
-        <span class="hint">Distance from where the robot really is, in inches, over the last minute</span>
+        <h3>Error from the truth</h3>
+        <span class="hint">inches, last 60 s</span>
       </header>
       <canvas id="chart" aria-label="Position error over time"></canvas>
     </div>
@@ -66,7 +100,6 @@
     <nav class="tabs" id="tabs" role="tablist" aria-label="Controls">
       <button role="tab" data-tab="drive" aria-selected="true">Drive</button>
       <button role="tab" data-tab="show">Show</button>
-      <button role="tab" data-tab="learn">Learn</button>
       <button role="tab" data-tab="events">Events</button>
       <button role="tab" data-tab="robot">Robot</button>
       <button role="tab" data-tab="mcl">MCL</button>
@@ -86,11 +119,11 @@
         <p class="result" id="routine-result" hidden></p>
       </section>
       <section class="panel">
-        <header><h3>Drive it yourself</h3><span class="hint">Space pauses</span></header>
+        <header><h3>Drive it yourself</h3></header>
         <div class="keys">
-          <span><kbd>W</kbd><kbd>S</kbd> forward, back</span>
+          <span><kbd>W</kbd><kbd>S</kbd> drive</span>
           <span><kbd>A</kbd><kbd>D</kbd> strafe</span>
-          <span><kbd>Q</kbd><kbd>E</kbd> or <kbd>←</kbd><kbd>→</kbd> turn</span>
+          <span><kbd>Q</kbd><kbd>E</kbd> turn</span>
           <span><kbd>Shift</kbd> slow</span>
         </div>
         <label class="slider">Stick <output id="stick-out">70%</output>
@@ -98,18 +131,18 @@
         </label>
       </section>
       <section class="panel">
-        <header><h3>Pose the motions drive by</h3></header>
-        <div class="segments" id="correct-seg" role="group" aria-label="Pose source">
+        <header><h3>Motions drive by</h3></header>
+        <div class="segments" id="correct-seg" role="group" aria-label="Pose source"
+          title="setCorrectionEnabled(). MCL keeps running either way">
           <button type="button" data-value="on" aria-pressed="true">Odometry + MCL</button>
           <button type="button" data-value="off" aria-pressed="false">Odometry alone</button>
         </div>
-        <p class="hint">MCL keeps running either way; this is <code>setCorrectionEnabled()</code>. Run a routine each way and compare where it ends up.</p>
       </section>
       <section class="panel">
         <header><h3>PID gains</h3></header>
         <div class="segments" id="gains-seg" role="group" aria-label="Gains">
           <button type="button" data-value="auto" aria-pressed="true">Auto-Tuned</button>
-          <button type="button" data-value="hand" aria-pressed="false">Hand-set (devices.cpp)</button>
+          <button type="button" data-value="hand" aria-pressed="false" title="src/robot/devices.cpp">Hand-set</button>
         </div>
         <div class="gains num" id="gains-readout"></div>
       </section>
@@ -135,60 +168,26 @@
       </section>
     </div>
 
-    <!-- Learn -->
-    <div class="tab-body" data-body="learn" hidden>
-      <section class="panel">
-        <header><h3>How Monte Carlo localization works</h3></header>
-        <p>Odometry is good but it drifts: tracking wheels slip, get bumped, and read a little long or short, and every error stays in the pose for the rest of the match. MCL keeps a cloud of <em>particles</em>, each one a guess at where the robot is, and uses the distance sensors to keep the cloud honest. Every 50&nbsp;ms it runs three steps:</p>
-        <ol class="steps">
-          <li><strong>Predict.</strong> Move every particle by what odometry measured since last time, plus a little random noise, because odometry isn't perfect. The cloud follows the robot and spreads out a bit.</li>
-          <li><strong>Weigh.</strong> For each particle, work out what each distance sensor <em>would</em> read from there, and compare with what it <em>did</em> read. Particles that explain the readings get heavy; the rest get light. A reading nothing explains (another robot in the way) counts as an outlier, so it can't drag the cloud off.</li>
-          <li><strong>Resample.</strong> Copy heavy particles and drop light ones, so the cloud gathers where the robot really is.</li>
-        </ol>
-        <p>The cloud's average is the estimate. When the cloud is tight and enough sensors agree with the walls, the localizer eases odometry's pose toward it, at most 4&nbsp;in/s so the PIDs never see a jump. Heading always comes from the IMU.</p>
-      </section>
-      <section class="panel">
-        <header><h3>Step through one update</h3></header>
-        <p class="hint">Pauses the simulation. Each click runs the next step of the next update, and the field shows what it did.</p>
-        <div class="row">
-          <button class="btn primary" id="step-btn" type="button">Step: predict</button>
-          <button class="btn" id="step-full-btn" type="button">Whole update</button>
-        </div>
-      </section>
-      <section class="panel">
-        <header><h3>Inspect a particle</h3><span class="hint">Click one on the field</span></header>
-        <div id="inspector" class="inspector"><p class="hint">No particle selected.</p></div>
-      </section>
-      <section class="panel">
-        <header><h3>Sensors right now</h3><span class="hint">From the estimate</span></header>
-        <div class="table-wrap"><table class="data-table" id="sensor-table"></table></div>
-        <p class="hint" id="gate-line"></p>
-      </section>
-    </div>
-
     <!-- Events -->
     <div class="tab-body" data-body="events" hidden>
       <section class="panel">
         <header><h3>Things odometry never sees</h3></header>
         <div class="row wrap">
-          <button class="btn" id="bump-btn" type="button">Bump the robot</button>
-          <button class="btn" id="kidnap-btn" type="button">Pick it up and move it</button>
-          <button class="btn" id="relocalize-btn" type="button">Relocalize globally</button>
+          <button class="btn" id="bump-btn" type="button" title="Shoves the robot 6 in; the tracking wheels don't turn">Bump 6 in</button>
+          <button class="btn" id="kidnap-btn" type="button" title="Then click the field where it lands">Pick up</button>
+          <button class="btn" id="relocalize-btn" type="button" title="relocalizeGlobally(): every particle scattered over the field">Relocalize globally</button>
         </div>
-        <p class="hint">A bump shoves the robot 6&nbsp;in without its tracking wheels turning: odometry is now wrong, and only the sensors can tell. <em>Pick it up</em> drops it where you click next. Recovery reaches about 18&nbsp;in from the estimate (see MCL); farther than that, relocalize globally, which scatters every particle over the field (try 1500 particles).</p>
       </section>
       <section class="panel">
-        <header><h3>Defender robot</h3></header>
+        <header><h3>Defender</h3><span class="hint">not in the map</span></header>
         <div class="checks" id="defender-checks"></div>
-        <p class="hint">Another robot the map knows nothing about. Drag it on the field. Watch its sensor readings turn red (disagree) while the others carry the estimate.</p>
       </section>
       <section class="panel">
         <header><h3>Field elements</h3></header>
         <div class="checks" id="element-checks"></div>
-        <p class="hint">Generic boxes, not any season's game. A thing in the world but not the map is only outliers; a thing in the map that isn't there is worse. Try both.</p>
       </section>
       <section class="panel">
-        <header><h3>Scenarios</h3></header>
+        <header><h3>Scenarios</h3><span class="hint">reset the world, rerun</span></header>
         <div class="row wrap" id="scenario-buttons"></div>
       </section>
     </div>
@@ -196,27 +195,29 @@
     <!-- Robot -->
     <div class="tab-body" data-body="robot" hidden>
       <section class="panel">
-        <header><h3>What the robot program doesn't know</h3><span class="hint">The world's errors</span></header>
+        <header><h3>World errors</h3><span class="hint">the robot program doesn't know these</span></header>
         <div class="sliders" id="world-sliders"></div>
       </section>
       <section class="panel">
-        <header><h3>Chassis model</h3><span class="hint">What Auto-Tune measures: V = kS·sign(v) + kV·v + kA·a</span></header>
+        <header><h3>Chassis model</h3><span class="hint">V = kS·sign(v) + kV·v + kA·a</span></header>
         <div class="model-grid" id="model-grid"></div>
-        <div class="row"><button class="btn" id="autotune-btn" type="button">Auto-Tune (design gains)</button></div>
-        <p class="hint">The sim's chassis <em>is</em> these three axis models, the six motors and the center wheels folded in, the way Auto-Tune measures the whole chassis at once. Designing gains here runs the robot's own pole placement (same specs as <code>src/robot/tuning.cpp</code>). Edits change the running chassis at once. The gains follow when you Auto-Tune, and at every Reset or routine start while Auto-Tuned gains are selected (Drive tab).</p>
+        <div class="row"><button class="btn" id="autotune-btn" type="button"
+          title="Designs gains from this model with the robot's pole placement (src/robot/tuning.cpp)">Auto-Tune</button></div>
       </section>
     </div>
 
     <!-- MCL -->
     <div class="tab-body" data-body="mcl" hidden>
       <section class="panel">
-        <header><h3>LocalizerConfig</h3><span class="hint">The robot's defaults; changes restart the localizer</span></header>
+        <header><h3>LocalizerConfig</h3><span class="hint">changes restart the localizer</span></header>
         <div class="sliders" id="mcl-sliders"></div>
         <div class="checks" id="mcl-checks"></div>
-        <div class="row"><button class="btn" id="mcl-defaults-btn" type="button">Back to defaults</button></div>
-        <p class="hint">Everything here is a field of <code>LocalizerConfig</code> or <code>ParticleFilterConfig</code>. Find settings you like here (or let the Tune tab find them), then give them to the robot as <code>TUNE.CFG</code> lines on its SD card, no rebuild needed:</p>
+        <div class="row"><button class="btn" id="mcl-defaults-btn" type="button">Defaults</button></div>
+      </section>
+      <section class="panel">
+        <header><h3>TUNE.CFG</h3><span class="hint">loaded from the SD card at startup</span></header>
         <pre class="code" id="mcl-cfg"></pre>
-        <p class="hint">or as C++, for the <code>LocalizerConfig</code> in <code>localizerSettings()</code> in <code>src/robot/tune.cpp</code>:</p>
+        <header><h3>C++</h3><span class="hint"><code>localizerSettings()</code>, src/robot/tune.cpp</span></header>
         <pre class="code" id="mcl-code"></pre>
       </section>
     </div>
@@ -224,8 +225,7 @@
     <!-- Tune -->
     <div class="tab-body" data-body="tune" hidden>
       <section class="panel">
-        <header><h3>Auto-tune the localizer</h3></header>
-        <p class="hint">Searches <code>LocalizerConfig</code> for the settings that keep the corrected pose closest to where the robot really is, across simulated runs, starting from the MCL tab's settings. Every candidate replays the same paths with the same noise, so only the settings differ, and the winner is checked on runs it never saw.</p>
+        <header><h3>Auto-tune the localizer</h3><span class="hint">starts from the MCL tab</span></header>
         <div class="segments" id="tune-suite" role="group" aria-label="Suite">
           <button type="button" data-value="standard" aria-pressed="true">Standard suite</button>
           <button type="button" data-value="robot" aria-pressed="false">Your robot</button>
@@ -246,11 +246,10 @@
       </section>
 
       <section class="panel" id="tune-result" hidden>
-        <header><h3>What the search found</h3></header>
+        <header><h3>Result</h3><span class="hint">error in inches; "New seeds" never seen by the search</span></header>
         <p class="verdict" id="tune-verdict"></p>
         <div class="table-wrap"><table class="data-table" id="tune-changes"></table></div>
         <div class="table-wrap"><table class="data-table wrap-names" id="tune-percase"></table></div>
-        <p class="hint">Errors are the corrected pose's distance from the truth, in inches, averaged over the search's seeds; "New seeds" are the holdout runs.</p>
         <div class="row wrap">
           <button class="btn" id="tune-use-btn" type="button">Use in the simulator</button>
           <button class="btn primary" id="tune-save-btn" type="button">Save TUNE.CFG</button>
@@ -259,14 +258,13 @@
       </section>
 
       <section class="panel">
-        <header><h3>Calibrate from the robot's logs</h3></header>
-        <p class="hint">Copy the <code>sl</code> folder off the robot's SD card and open its logs (and its <code>TUNE.CFG</code>, if it has one). The robot's own readings say how noisy its sensors really are, how often they're blocked or read nothing, how old a reading is, whether a sensor's mount is off, and how far off the tracking wheels' scale is. The simulated robot gets those errors, its real paths become cases, and the search runs on that: "Your robot".</p>
+        <header><h3>Calibrate from logs</h3><span class="hint">SL*.CSV and TUNE.CFG from the SD card</span></header>
         <div class="drop" id="tune-drop">
           <div class="row wrap">
             <button class="btn" id="tune-open-btn" type="button">Open logs…</button>
-            <button class="btn" id="tune-demo-btn" type="button">Demo: a simulated robot's logs</button>
+            <button class="btn" id="tune-demo-btn" type="button" title="Logs from a simulated robot with errors only this page knows">Demo logs</button>
           </div>
-          <span class="hint">or drop <code>SL*.CSV</code> files here</span>
+          <span class="hint">or drop files here</span>
           <input type="file" id="tune-files" multiple accept=".csv,.CSV,.cfg,.CFG" hidden>
         </div>
         <p class="result warn" id="tune-cal-problems" hidden></p>
@@ -278,13 +276,11 @@
       </section>
 
       <section class="panel">
-        <header><h3>TUNE.CFG</h3><span class="hint">What the robot loads at startup</span></header>
-        <p class="hint" id="tune-file-name"></p>
+        <header><h3>TUNE.CFG</h3><span class="hint" id="tune-file-name"></span></header>
         <pre class="code" id="tune-file-mcl"></pre>
         <ul class="changelog" id="tune-file-log" hidden></ul>
-        <div class="row"><button class="btn" id="tune-from-file-btn" type="button">Start from its settings</button></div>
+        <div class="row"><button class="btn" id="tune-from-file-btn" type="button" title="Copy its mcl.* lines to the MCL tab">Start from its settings</button></div>
         <p class="result" id="tune-file-status" hidden></p>
-        <p class="hint">Saving keeps every other line (the analyzer's PID gains), adds one to the revision, and notes what changed at the bottom. The robot's Home page shows the revision it loaded, and every log records it.</p>
       </section>
     </div>
   </aside>

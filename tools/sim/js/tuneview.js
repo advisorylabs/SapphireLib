@@ -74,7 +74,7 @@
         : p.key === 'filter.particleCount' || p.key === 'periodMs' ? 'Costs CPU on the brain; the score charges for it'
           : p.key === 'maxCorrectionRateInPerS' ? 'Faster corrections are a harder push on the motions, which the score can\'t see'
             : '';
-      params.append(el('label', {}, [input, el('span', {}, [p.label, el('small', { text: why || p.key })])]));
+      params.append(el('label', { title: why ? `${p.key}. ${why}` : p.key }, [input, el('span', { text: p.label })]));
     }
 
     const budget = $('tune-budget');
@@ -135,8 +135,8 @@
       box.append(el('label', {}, [input, el('span', { text: c.name })]));
     }
     $('tune-suite-hint').textContent = state.suite === 'robot'
-      ? 'The world calibrated from your logs: two routines, and the paths your robot really drove, replayed.'
-      : 'The simulator\'s scenarios. Settings that hold up across all of them are a sound start for any robot.';
+      ? 'Your calibrated world: two routines and your robot\'s own paths.'
+      : 'The simulator\'s scenarios.';
   }
 
   function checkedCases() {
