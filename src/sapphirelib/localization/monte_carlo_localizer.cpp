@@ -1,14 +1,17 @@
 #include "sapphirelib/localization/monte_carlo_localizer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <mutex>
 #include <utility>
 
+#include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/util/angle.hpp"
 #include "sapphirelib/util/clock.hpp"
+#include "sapphirelib/util/log.hpp"
 
 namespace sapphirelib::localization {
 
@@ -19,6 +22,89 @@ std::vector<DistanceSensorMount> mountsOf(const std::vector<DistanceSensorConfig
     mounts.reserve(sensors.size());
     for (const DistanceSensorConfig& sensor : sensors) mounts.push_back(sensor.mount);
     return mounts;
+}
+
+// calibrateSensorMounts()'s spin: its loop, and how often it reads the sensors (about their rate)
+constexpr std::uint32_t kSpinLoopMs = 10;
+constexpr std::uint32_t kSpinReadMs = 30;
+// the turn rate is measured over this long
+constexpr std::uint32_t kSpinRateWindowMs = 50;
+// the turn command starts here, and grows or shrinks by this much a second per deg/s off the rate:
+// a robot that turns 450 deg/s flat out settles on its rate in about half a second
+constexpr double kSpinStartPower = 0.1;
+constexpr double kSpinPowerGain = 0.004;
+// how long to let the robot stop before turning back
+constexpr std::uint32_t kSpinStopMs = 500;
+// a turn that takes this many times as long as it should, plus the margin, is stuck
+constexpr double kSpinTimeoutFactor = 3.0;
+constexpr std::uint32_t kSpinTimeoutMarginMs = 3000;
+
+// odometry's raw pose over the last 640 ms, with the heading unwrapped, so each reading can be
+// paired with where the robot was when the sensor measured it, sensorLatencyMs before it's read
+class PoseHistory {
+public:
+    struct Entry {
+        std::uint32_t timeMs = 0;
+        double xIn = 0.0;
+        double yIn = 0.0;
+        double headingDeg = 0.0;
+    };
+
+    void add(std::uint32_t timeMs, const odom::Pose& pose) {
+        heading_ = count_ == 0 ? pose.headingDeg
+                               : heading_ + wrapDegrees180(pose.headingDeg - lastWrappedDeg_);
+        lastWrappedDeg_ = pose.headingDeg;
+        entries_[next_] = Entry{timeMs, pose.xIn, pose.yIn, heading_};
+        next_ = (next_ + 1) % kSize;
+        count_ = std::min(count_ + 1, kSize);
+    }
+
+    const Entry& latest() const { return entries_[(next_ + kSize - 1) % kSize]; }
+
+    // the pose at a moment, interpolated between the two it falls between. The oldest one kept
+    // for a moment before it
+    Entry at(std::uint32_t timeMs) const {
+        Entry newer = latest();
+        if (timeMs >= newer.timeMs) return newer;
+        for (std::size_t back = 1; back < count_; ++back) {
+            const Entry& older = entries_[(next_ + kSize - 1 - back) % kSize];
+            if (older.timeMs <= timeMs) {
+                const double span = static_cast<double>(newer.timeMs - older.timeMs);
+                const double t = span > 0.0 ? (timeMs - older.timeMs) / span : 0.0;
+                return Entry{timeMs, older.xIn + t * (newer.xIn - older.xIn),
+                             older.yIn + t * (newer.yIn - older.yIn),
+                             older.headingDeg + t * (newer.headingDeg - older.headingDeg)};
+            }
+            newer = older;
+        }
+        return newer;
+    }
+
+    // degrees per second, clockwise positive, over the last windowMs
+    double turnRateDegPerS(std::uint32_t windowMs) const {
+        const Entry& now = latest();
+        const Entry then = at(now.timeMs > windowMs ? now.timeMs - windowMs : 0);
+        const std::uint32_t elapsedMs = now.timeMs - then.timeMs;
+        return elapsedMs > 0 ? 1000.0 * (now.headingDeg - then.headingDeg) / elapsedMs : 0.0;
+    }
+
+private:
+    static constexpr std::size_t kSize = 64;
+    std::array<Entry, kSize> entries_{};
+    std::size_t next_ = 0;
+    std::size_t count_ = 0;
+    double heading_ = 0.0;
+    double lastWrappedDeg_ = 0.0;
+};
+
+// a word for a sensor by which way it faces, for the log
+const char* sideOf(const DistanceSensorMount& mount) {
+    const double facing = std::fmod(std::fmod(mount.facingDeg, 360.0) + 360.0, 360.0);
+    const char* sides[] = {"front", "right", "back", "left"};
+    for (int side = 0; side < 4; ++side) {
+        if (std::fabs(wrapDegrees180(facing - 90.0 * side)) < 1.0) return sides[side];
+    }
+    return "angled";
 }
 
 } // namespace
@@ -34,11 +120,19 @@ MonteCarloLocalizer::MonteCarloLocalizer(odom::Odometry& odometry,
     readings_.resize(sensors.size());
     checks_.resize(sensors.size());
     beams_.resize(sensors.size());
+    mounts_ = filter_.sensors();
 }
 
 void MonteCarloLocalizer::update() {
     const std::uint64_t startUs = sapphirelib::micros();
     const std::uint32_t nowMs = pros::millis();
+
+    // mounts from setSensorMounts(), handed over here since only this task touches the filter.
+    // Locked only when there's something new, so a task deleted holding the lock can't stall it
+    if (mountsChanged_.exchange(false)) {
+        std::lock_guard<pros::Mutex> lock(mountsMutex_);
+        filter_.setSensors(mounts_);
+    }
     const odom::Odometry::Snapshot snapshot = odometry_.snapshot();
     const odom::Pose& raw = snapshot.rawPose;
 
@@ -207,8 +301,149 @@ void MonteCarloLocalizer::relocalizeGlobally() { relocalizeRequested_.store(true
 
 const LocalizerConfig& MonteCarloLocalizer::config() const { return config_; }
 
-const std::vector<DistanceSensorMount>& MonteCarloLocalizer::sensorMounts() const {
-    return filter_.sensors();
+std::vector<DistanceSensorMount> MonteCarloLocalizer::sensorMounts() const {
+    std::lock_guard<pros::Mutex> lock(mountsMutex_);
+    return mounts_;
+}
+
+bool MonteCarloLocalizer::setSensorMounts(std::vector<DistanceSensorMount> mounts) {
+    if (mounts.size() != sensors_.size()) return false;
+    {
+        std::lock_guard<pros::Mutex> lock(mountsMutex_);
+        mounts_ = std::move(mounts);
+    }
+    mountsChanged_.store(true);
+    return true;
+}
+
+MountCalibrationResult
+MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
+                                           const MountCalibrationConfig& config) {
+    const std::vector<DistanceSensorMount> mounts = sensorMounts();
+    MountCalibrationResult result;
+    result.sensors.resize(mounts.size());
+    for (std::size_t s = 0; s < mounts.size(); ++s) result.sensors[s].mount = mounts[s];
+    if (!setSpin) {
+        result.error = "nothing to spin the robot with";
+        return result;
+    }
+    if (calibratingMounts_.exchange(true)) {
+        result.error = "already calibrating";
+        return result;
+    }
+    SAPPHIRELIB_LOG_INFO("mcl", "calibrating sensor mounts: spinning %.1f turns each way",
+                         std::fabs(config.turns));
+    telemetry::event("mcl", "mount_calibration,start");
+
+    // one turn (or config.turns) each way: the sensors' leftover delay reads one way turning
+    // clockwise and the other way back, and cancels
+    const double turnDeg = std::fabs(config.turns) * 360.0;
+    const double rateDegPerS = std::max(config.turnRateDegPerS, 1.0);
+    const double maxPower = std::clamp(config.maxSpinPower, 0.0, 1.0);
+    const auto latencyMs =
+        static_cast<std::uint32_t>(std::lround(std::max(config_.sensorLatencyMs, 0.0)));
+    const auto timeoutMs =
+        static_cast<std::uint32_t>(kSpinTimeoutFactor * 1000.0 * turnDeg / rateDegPerS) +
+        kSpinTimeoutMarginMs;
+    std::vector<MountSample> samples;
+    samples.reserve(static_cast<std::size_t>(2.0 * 1000.0 * turnDeg / rateDegPerS / kSpinReadMs) *
+                    sensors_.size());
+
+    PoseHistory history;
+    // the raw pose: a correction easing in mid-spin isn't the robot moving
+    const auto record = [&] { history.add(pros::millis(), odometry_.snapshot().rawPose); };
+    record();
+    bool stuck = false;
+    for (const double direction : {1.0, -1.0}) {
+        const double startDeg = history.latest().headingDeg;
+        const std::uint32_t startMs = pros::millis();
+        std::uint32_t lastMs = startMs;
+        std::uint32_t lastReadMs = 0;
+        double power = std::min(kSpinStartPower, maxPower);
+        while (std::fabs(history.latest().headingDeg - startDeg) < turnDeg) {
+            if (pros::millis() - startMs > timeoutMs) {
+                stuck = true;
+                break;
+            }
+            setSpin(direction * power);
+            pros::delay(kSpinLoopMs);
+            record();
+            const PoseHistory::Entry& now = history.latest();
+
+            // hold the turn rate: more power while it's slow, less while it's fast
+            const double dtS = (now.timeMs - lastMs) / 1000.0;
+            lastMs = now.timeMs;
+            const double rate = std::fabs(history.turnRateDegPerS(kSpinRateWindowMs));
+            power = std::clamp(power + kSpinPowerGain * (rateDegPerS - rate) * dtS, 0.0, maxPower);
+
+            if (now.timeMs - lastReadMs < kSpinReadMs) continue;
+            lastReadMs = now.timeMs;
+            // a reading describes the robot as it was about sensorLatencyMs ago
+            const PoseHistory::Entry then =
+                history.at(now.timeMs > latencyMs ? now.timeMs - latencyMs : 0);
+            for (std::size_t s = 0; s < sensors_.size(); ++s) {
+                const DistanceReading reading =
+                    distanceReadingFromMm(sensors_[s].get_distance(), sensors_[s].get_confidence(),
+                                          config_.minConfidence, config_.filter.beam);
+                if (!reading.valid) continue;
+                samples.push_back(MountSample{.sensor = s,
+                                              .xIn = then.xIn,
+                                              .yIn = then.yIn,
+                                              .headingDeg = then.headingDeg,
+                                              .distanceIn = reading.distanceIn});
+            }
+        }
+        setSpin(0.0);
+        // let it stop before turning back, still watching it
+        const std::uint32_t stopMs = pros::millis();
+        while (pros::millis() - stopMs < kSpinStopMs) {
+            pros::delay(kSpinLoopMs);
+            record();
+        }
+        if (stuck) break;
+    }
+    setSpin(0.0);
+
+    if (stuck) {
+        result.error = "the spin didn't finish: blocked?";
+        SAPPHIRELIB_LOG_ERROR("mcl", "sensor mount calibration: %s", result.error);
+        telemetry::event("mcl", "mount_calibration,failed,%s", result.error);
+        calibratingMounts_.store(false);
+        return result;
+    }
+
+    // the map never changes after construction, so reading it from this task is safe
+    result = fitSensorMounts(samples, mounts, filter_.map(), config_.filter.beam, config);
+    if (result.ok) {
+        std::vector<DistanceSensorMount> fitted;
+        fitted.reserve(result.sensors.size());
+        for (const SensorMountFit& sensor : result.sensors) fitted.push_back(sensor.mount);
+        setSensorMounts(std::move(fitted));
+    }
+
+    // what it found, ready to copy into the code that builds the localizer
+    SAPPHIRELIB_LOG_INFO(
+        "mcl", "sensor mounts: %u readings, %u used%s%s", static_cast<unsigned>(result.readings),
+        static_cast<unsigned>(result.readingsUsed), result.ok ? "" : ": ", result.error);
+    for (std::size_t s = 0; s < result.sensors.size(); ++s) {
+        const SensorMountFit& sensor = result.sensors[s];
+        const bool calibrated = sensor.status == MountFitStatus::calibrated;
+        SAPPHIRELIB_LOG_INFO("mcl",
+                             "  sensor %u (%s, port %d): %s, {.forwardIn = %.2f, .rightIn = %.2f, "
+                             ".facingDeg = %.0f}, %+.2f in along the beam (+-%.2f), sideways %s",
+                             static_cast<unsigned>(s), sideOf(sensor.mount),
+                             static_cast<int>(sensors_[s].get_port()),
+                             mountFitStatusText(sensor.status), sensor.mount.forwardIn,
+                             sensor.mount.rightIn, sensor.mount.facingDeg,
+                             calibrated ? sensor.alongChangeIn : 0.0, sensor.alongStderrIn,
+                             sensor.lateralFitted ? "fitted" : "kept");
+        telemetry::event("mcl", "mount,%u,%s,forward=%.3f,right=%.3f,facing=%.1f,stderr=%.3f",
+                         static_cast<unsigned>(s), calibrated ? "calibrated" : "kept",
+                         sensor.mount.forwardIn, sensor.mount.rightIn, sensor.mount.facingDeg,
+                         sensor.alongStderrIn);
+    }
+    calibratingMounts_.store(false);
+    return result;
 }
 
 void MonteCarloLocalizer::setUpdateCallback(std::function<void(const LocalizerUpdate&)> callback) {

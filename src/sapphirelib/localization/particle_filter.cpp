@@ -273,6 +273,13 @@ const FieldMap& ParticleFilter::map() const { return map_; }
 
 const std::vector<DistanceSensorMount>& ParticleFilter::sensors() const { return sensors_; }
 
+bool ParticleFilter::setSensors(std::span<const DistanceSensorMount> sensors) {
+    // the same count, so the scratch space sized for them still fits and nothing allocates
+    if (sensors.size() != sensors_.size()) return false;
+    std::copy(sensors.begin(), sensors.end(), sensors_.begin());
+    return true;
+}
+
 const ParticleFilterConfig& ParticleFilter::config() const { return config_; }
 
 void sampleParticles(std::span<const Particle> particles, std::span<Particle> out) {

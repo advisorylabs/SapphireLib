@@ -177,6 +177,28 @@ void testCheckSensors() {
     assert(!checks[3].used);
 }
 
+void testSetSensorsMovesTheBeams() {
+    const FieldMap map = FieldMap::centered(140);
+    ParticleFilter filter(map, fourSensors());
+    const auto readings = readingsFrom(map, fourSensors(), 0, 0, 0, nullptr);
+    std::array<SensorCheck, 4> before{};
+    std::array<SensorCheck, 4> after{};
+    filter.checkSensors(0, 0, 0, readings, 3.0, before);
+
+    // the front sensor really sits an inch further out, as a calibration found
+    std::vector<DistanceSensorMount> calibrated = fourSensors();
+    calibrated[0].forwardIn = 8.0;
+    assert(filter.setSensors(calibrated));
+    filter.checkSensors(0, 0, 0, readings, 3.0, after);
+    expectNear(after[0].expectedIn, before[0].expectedIn - 1.0, 1e-9, "setSensors: front reads 1in less");
+    expectNear(after[1].expectedIn, before[1].expectedIn, 0.0, "setSensors: the rest as they were");
+
+    // a different number of sensors changes nothing
+    const std::vector<DistanceSensorMount> tooFew(3);
+    assert(!filter.setSensors(tooFew));
+    expectNear(filter.sensors()[0].forwardIn, 8.0, 0.0, "setSensors: refused");
+}
+
 void testClosedLoopBeatsBiasedOdometry() {
     // odometry over-reads distance by 4%, the IMU is 1.5 degrees off, and a slipping wheel creeps
     // the pose 0.3in/s in +x; the sensors are noisy and drop 5% of readings. Drive laps of a 90in
@@ -478,6 +500,7 @@ int main() {
     testNoValidReadingsChangesNothing();
     testResamplingFollowsTheWeights();
     testCheckSensors();
+    testSetSensorsMovesTheBeams();
     testClosedLoopBeatsBiasedOdometry();
     testBlockedSensorDoesNotDragTheEstimate();
     testRecoveryAfterABump();
