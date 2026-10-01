@@ -69,7 +69,6 @@
       this.program = null;
       this.programName = null;
       this.programResult = null;
-      this.pendingStep = null;
       this.driverInput = { throttle: 0, strafe: 0, turn: 0 };
       this.history = [];
       this.trails = { truth: [], raw: [], corrected: [], estimate: [] };
@@ -132,44 +131,8 @@
 
     /** One 10ms tick: physics, then odometry and the localizer, then the program. */
     tick() {
-      if (this.pendingStep) this.finishLocalizerStep();
       this.world.step(kTickMs);
       this.robot.tick();
-      this.endTick();
-    }
-
-    /**
-     * Step mode, part 1: run ticks up to the localizer's next update, and stop
-     * inside it, just after predict(). The page shows each part, then calls
-     * weighLocalizerStep() and finishLocalizerStep().
-     */
-    beginLocalizerStep() {
-      if (this.pendingStep) this.finishLocalizerStep();
-      for (;;) {
-        this.world.step(kTickMs);
-        this.robot.odometry.update();
-        if (this.world.timeMs % this.robot.localizerPeriodMs === 0) {
-          this.robot.localizer.beginUpdate();
-          this.pendingStep = 'predicted';
-          return;
-        }
-        this.endTick();
-      }
-    }
-
-    /** Step mode, part 2: read the sensors and weigh the particles. */
-    weighLocalizerStep() {
-      if (this.pendingStep !== 'predicted') return;
-      this.robot.localizer.weighPhase();
-      this.pendingStep = 'weighed';
-    }
-
-    /** Step mode, part 3: resample, correct odometry, and finish the tick. */
-    finishLocalizerStep() {
-      if (!this.pendingStep) return;
-      if (this.pendingStep === 'predicted') this.robot.localizer.weighPhase();
-      this.robot.localizer.finishUpdate();
-      this.pendingStep = null;
       this.endTick();
     }
 

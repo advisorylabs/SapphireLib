@@ -92,22 +92,6 @@ test('no corrections before setPose(), unless waitForSetPose is off', () => {
   }
 });
 
-test('stepping through updates by hand gives the same run as ticking', () => {
-  const a = new SIM.Simulation(SIM.defaultOptions());
-  const b = new SIM.Simulation(SIM.defaultOptions());
-  a.runRoutine(ROUTINES[2]);
-  b.runRoutine(ROUTINES[2]);
-  for (let i = 0; i < 20; ++i) {
-    b.beginLocalizerStep();
-    b.weighLocalizerStep();
-    b.finishLocalizerStep();
-  }
-  while (a.world.timeMs < b.world.timeMs) a.tick();
-  assert.equal(a.world.timeMs, b.world.timeMs);
-  assert.deepEqual(a.robot.odometry.getPose(), b.robot.odometry.getPose());
-  assert.deepEqual(a.robot.localizer.status.estimate, b.robot.localizer.status.estimate);
-});
-
 test('reachedFinalApproach matches pure_pursuit_math_test.cpp', () => {
   assert.equal(R.reachedFinalApproach(0, 6, 0, 4), false);
   assert.equal(R.reachedFinalApproach(0, 6, 1, 4), false);
