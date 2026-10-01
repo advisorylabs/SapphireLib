@@ -56,9 +56,9 @@ Record sampleRecord(const PidStep& step) {
 // Channel
 
 Channel::Channel(ChannelSchema schema, std::size_t capacity,
-                 const std::atomic<std::uint32_t>* fileEpoch)
+                 const std::atomic<std::uint32_t>* fileEpoch, const std::atomic<bool>* recording)
     : schema_(std::move(schema)), valueCount_(valueCountFor(schema_)), ring_(capacity),
-      fileEpoch_(fileEpoch) {
+      fileEpoch_(fileEpoch), recording_(recording) {
     // a samples channel can't carry more columns than a Record has values, so trim the schema too
     if (schema_.kind == ChannelKind::samples && schema_.columns.size() > kMaxColumns) {
         schema_.columns.resize(kMaxColumns);
@@ -113,6 +113,9 @@ bool Channel::recordEvent(const char* tag, const char* message) {
 bool Channel::commit(Record record) { return commitAll(&record, 1); }
 
 bool Channel::commitAll(Record* records, std::size_t count) {
+    // between recordings every row is turned away here, before the gate, so it costs one load
+    // and counts as nothing lost
+    if (recording_ != nullptr && !recording_->load(std::memory_order_relaxed)) return false;
     std::uint32_t token;
     if (!gate_.tryEnter(token)) return false; // counted by the gate
     // stamped inside the gate, so rows on one channel are always in time order

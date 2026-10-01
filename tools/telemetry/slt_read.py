@@ -295,7 +295,7 @@ SELFTEST_FILE = (
     "E,2104502,file,open,SL000042.CSV\n"
     "E,2104502,phase,disabled,comp=1,field=1\n"
     "H,3104771,rows=4,bytes=1034,writes=1,wmax_us=21873,wavg_us=21873,drops=0,unlogged=2,"
-    "resyncs=0,breaks=0,faults=0\n"
+    "resyncs=0,breaks=0,faults=0,samp_us=1840,fmt_us=2615\n"
     "E,15003114,phase,autonomous,comp=1,field=1\n"
     "S,5,15003201,0,0,0\n"
     "S,6,15003201,12.61,87\n"
@@ -366,7 +366,8 @@ def _selftest():
     _check(log.events[3] == (15003390, "auton", "start,Turn Testing"), "event message keeps commas")
     _check(log.health == [(3104771, {"rows": 4, "bytes": 1034, "writes": 1, "wmax_us": 21873,
                                      "wavg_us": 21873, "drops": 0, "unlogged": 2, "resyncs": 0,
-                                     "breaks": 0, "faults": 0})], "H row")
+                                     "breaks": 0, "faults": 0, "samp_us": 1840,
+                                     "fmt_us": 2615})], "H row")
 
     found = motions(log)
     _check(len(found) == 2, "two motions")
