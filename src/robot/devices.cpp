@@ -11,6 +11,7 @@
 
 #include "robot/config.hpp"
 #include "robot/macros.hpp"
+#include "robot/tune.hpp"
 #include "sapphirelib/util/log.hpp"
 
 namespace robot {
@@ -22,7 +23,6 @@ using sapphirelib::chassis::Gearset;
 using sapphirelib::chassis::HolonomicDrivetrain;
 using sapphirelib::localization::DistanceSensorConfig;
 using sapphirelib::localization::FieldMap;
-using sapphirelib::localization::LocalizerConfig;
 using sapphirelib::localization::MonteCarloLocalizer;
 using sapphirelib::odom::Odometry;
 using sapphirelib::odom::OdometryConfig;
@@ -130,6 +130,10 @@ MonteCarloLocalizer& localizer() {
     // is does more harm than one missing from it: a reading off something
     // that isn't in the map is treated as an outlier, and the other sensors
     // carry on. Try a change in the simulator (tools/sim) before the robot.
+    //
+    // The settings are LocalizerConfig's defaults with TUNE.CFG's mcl.* lines
+    // on top (see tune.hpp): what the simulator's tuner found, and what the
+    // telemetry analyzer refined from real matches, without a rebuild.
     static MonteCarloLocalizer instance(
         odometry(),
         {
@@ -150,7 +154,7 @@ MonteCarloLocalizer& localizer() {
                                            .rightIn = kLeftSensorRightIn,
                                            .facingDeg = 270.0}},
         },
-        FieldMap::centered(), LocalizerConfig{});
+        FieldMap::centered(), localizerSettings());
     return instance;
 }
 
@@ -178,7 +182,7 @@ void initDevices() {
     // waitForSetPose): before that, the pose is relative to wherever the robot
     // sat at startup, and the particles can only hunt for the robot, which in
     // the simulator briefly latched onto the wrong spot on the way.
-    localizer().startTask();
+    localizer().startTask(localizerPeriodMs());
     SAPPHIRELIB_LOG_INFO("init", "localizer task started");
 
     // Center wheels read the same vertical tracking wheel Odometry uses to
@@ -197,6 +201,11 @@ void initDevices() {
     // Intake/claw/lift driver macros, see macros.hpp. Zeroes the lift here,
     // so start the program with the lift all the way down.
     macros::initialize();
+
+    // TUNE.CFG's gains, axis models and lift gravity, over the values above
+    // and in macros.cpp, now that everything it sets exists and before any
+    // task runs a PID. A missing or rejected file changes nothing.
+    applyTuneProfile();
 }
 
 } // namespace robot
