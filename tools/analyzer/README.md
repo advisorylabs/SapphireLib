@@ -45,6 +45,8 @@ To hand the analyzer to someone as one file: `node tools/analyzer/build.js` writ
 - **Motions**: every drivetrain motion with its target, result, final error and time; select one
   to see its path on the field and its PIDs' error against the exit threshold.
 - **Tune**: tuning from the log, below.
+- **Refine**: fine-tuning the drive and turn PIDs from every logged motion across all the loaded
+  logs, and the run-by-run history of what each run ran and what changed it. Below.
 
 ## Tuning from a log
 
@@ -74,6 +76,22 @@ For a fresh measurement, select the controller on the robot's PID page and tap A
 SD card in (the lift's measures only the lift). The robot applies its own result too; the analyzer
 is for checking it, comparing runs, and trying other specs without the robot.
 
+## Refining from real motions
+
+Every motion the robot logs is a step response with known gains. The Refine tab replays each one
+through the axis model with the gains it ran, finds the model (inertia, damping, delay) that
+reproduces what the robot really did, designs each controller again from it the way the robot
+does, and proposes new gains with its reasons and the predicted effect on the same steps. It leaves
+alone gains that are doing what they were designed to, and says so when the steps are something the
+model can't describe (a blocked turn, say). Tick what you accept and **Save TUNE.CFG**: open the
+card's current `TUNE.CFG` with the logs first (or drop it on the page), so its other lines (the
+simulator's MCL settings) and its history are kept. The robot loads it at startup.
+
+**Run by run** lists every loaded run with each controller's gains and how its steps went, the
+localizer's drift correction and CPU, and what changed the gains since the run before: a `TUNE.CFG`
+revision, Auto-Tune on the robot, the PID page, a restart that lost them, or a rebuild. The whole
+loop is [`docs/TUNING.md`](../../docs/TUNING.md).
+
 ## What it reads
 
 The [SLT v1 format](../../docs/TELEMETRY_FORMAT.md). Channels are recognized by name and columns,
@@ -100,9 +118,12 @@ loads under Node where it can, for the tests):
 | `slt.js` | The SLT parser, run merging, and slicing: phases, matches, motions, Auto-Tune runs |
 | `analysis.js` | The findings and per-system summaries |
 | `tuning.js` | Offline tuning: fits from logs, designs, what-if replays, C++ snippets |
+| `refine.js` | Refining PIDs from logged step responses (closed-loop identification), and the run-by-run history |
+| `tunefile.js` | Reading and writing `TUNE.CFG`, by the robot's rules, with a changelog |
+| `mclcal.js` | Measuring the localizer's world from `mcl`/`mcl.beams` (the simulator's Tune tab uses it) |
 | `demo.js` | The demo: a simulated robot writing SLT logs |
 | `charts.js`, `ui.js` | Canvas time charts (shared cursor and zoom), DOM helpers |
-| `app.js`, `replay.js`, `explorer.js`, `tuneview.js` | The page and its tabs |
+| `app.js`, `replay.js`, `explorer.js`, `tuneview.js`, `refineview.js` | The page and its tabs |
 
 ```
 node --test tools/analyzer/test/*.test.js

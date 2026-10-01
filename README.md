@@ -44,15 +44,20 @@ PID tuning is still per-robot work you'll do after pulling it in. See
   or its own task), `Piston`, `Roller` with anti-jam, `PresetLadder`, `Sequence`, and `waitUntil()`.
   See the guide, [`docs/MACROS.md`](docs/MACROS.md).
 - **Telemetry**: `telemetry::Logger` records PID steps, pose, motor health (temperature, current,
-  derating, disconnects), your own channels, and events to the SD card, one file per program run,
-  without ever blocking the code it records. Format:
+  derating, disconnects), the localizer, your own channels, and events to the SD card, without ever
+  blocking the code it records: from power-on, or on a Home page button and on its own in matches.
+  It measures its own CPU cost in every file. Format:
   [`docs/TELEMETRY_FORMAT.md`](docs/TELEMETRY_FORMAT.md); reader: `tools/telemetry/slt_read.py`.
 - **Telemetry analyzer** ([`tools/analyzer/`](tools/analyzer/)): open `index.html` in a browser (no
   install, works offline) and drop the SD card's logs on it. It lists what went wrong in a match
   (overheating, derating, disconnects, stalls, battery sag, timed-out motions), replays the match on a
   small field-and-lift view next to synced charts, and tunes controllers from the log: it refits
   Auto-Tune runs or ordinary driving, designs gains, shows how they'd have done against the match's
-  real targets, and writes the C++ to paste.
+  real targets, and writes the C++ to paste. Its Refine tab fine-tunes the drive and turn PIDs from
+  every logged motion and shows, run by run, what changed and what it did.
+- **Tuning loop** ([`docs/TUNING.md`](docs/TUNING.md)): the simulator auto-tunes the localizer (on a
+  world calibrated from the robot's own logs), the analyzer refines the PIDs, and both write
+  `TUNE.CFG`, which the robot loads from its SD card at startup: no rebuild between rounds.
 - **Simulator** ([`tools/sim/`](tools/sim/)): open `index.html` in a browser (no install) to drive a
   simulated 96671H around a field running the library's own odometry, localizer, motions and
   Auto-Tune gain design. Bump the robot, add a defender, wear out its tracking wheels, and watch MCL

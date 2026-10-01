@@ -158,8 +158,12 @@ running; drive the same route both ways.
 ## Tuning
 
 The defaults were chosen in the simulator across clean, worn-wheel, noisy-sensor, bumped and
-crowded-field runs. Change them there first: its MCL tab has every setting, and writes the
-`LocalizerConfig{...}` to paste. The ones that matter most:
+crowded-field runs. Change them there first: its MCL tab has every setting, and its **Tune** tab
+searches them for you, on the simulator's scenarios or on a simulated robot calibrated from your
+robot's own logs (sensor noise, blocked and missing readings, sensor delay, mount errors, tracking
+wheel scale), replaying the paths it really drove. What it finds goes to the robot as `mcl.*` lines
+in `TUNE.CFG` on the SD card, no rebuild needed. The whole loop is
+[`docs/TUNING.md`](TUNING.md). The ones that matter most:
 
 | Setting | Default | Raise it when | Lower it when |
 |---|---|---|---|
@@ -176,11 +180,20 @@ as far as `recovery.radiusIn`.
 
 ## Telemetry
 
-With the SD logger running, 96671H's robot records the localizer in an `mcl` channel at 20 Hz
-(estimate, spread, effective particles, sensors used and agreeing, whether it corrected, and the
-correction), next to `odom`, the corrected pose. The correction is how far raw odometry had drifted,
-so a match's log shows how much the localizer earned its keep. See
-[`docs/TELEMETRY_FORMAT.md`](TELEMETRY_FORMAT.md).
+While recording, 96671H's robot logs every localizer update from the localizer's own task:
+
+- `mcl`: estimate, spread, effective particles, sensors used and agreeing, whether it corrected,
+  the correction, the update's time in microseconds, and raw odometry.
+- `mcl.beams`: each sensor's reading next to what the map says it should read and its closing
+  speed.
+
+These sit next to `odom`, the corrected pose. The correction is how far raw odometry had drifted,
+so a match's log shows how much the localizer earned its keep. Every file's `#meta` lines record
+the settings it ran with and the sensor mounts. See [`docs/TELEMETRY_FORMAT.md`](TELEMETRY_FORMAT.md);
+the simulator calibrates from these channels ([`docs/TUNING.md`](TUNING.md)).
+
+`MonteCarloLocalizer::setUpdateCallback()` hands any code the same per-update data
+(`LocalizerUpdate`: the estimate, the status, raw odometry, and a `BeamSample` per sensor).
 
 Auto-Tune measures its translation axes from the raw pose (`odometry().snapshot().rawPose`), not
 `getPose()`, since a correction easing in during a characterization run would read as speed the
@@ -209,6 +222,7 @@ but real sensors, real walls and real wheel slip are what count. Before trusting
 | Piece | Where | Tested by |
 |---|---|---|
 | `FieldMap`: walls, boxes, raycasting | `localization/field_map.hpp` | `tests/localization/field_map_test.cpp` |
+| `LocalizerConfig`, and every field by name and range (for `TUNE.CFG`) | `localization/localizer_config.hpp` | `tests/localization/localizer_config_test.cpp` |
 | The sensor model: mounts, the beam likelihood, reading conversion, latency | `localization/sensor_model.hpp` | `tests/localization/sensor_model_test.cpp` |
 | `ParticleFilter`: predict, weigh, resample, recovery | `localization/particle_filter.hpp` | `tests/localization/particle_filter_test.cpp`: unit checks, plus closed-loop runs on a simulated field against biased odometry, a blocked sensor and a bump |
 | `Rng`: seeded xoshiro128** | `util/random.hpp` | `tests/util/random_test.cpp` |
