@@ -26,7 +26,7 @@
   </div>
   <div class="actions-bar">
     <label class="btn primary" for="file-input">Open logs</label>
-    <input type="file" id="file-input" accept=".csv,.CSV,text/csv" multiple hidden>
+    <input type="file" id="file-input" accept=".csv,.CSV,text/csv,.cfg,.CFG" multiple hidden>
     <button class="btn" id="demo-btn" type="button">Demo</button>
     <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch light or dark theme" title="Theme">◐</button>
   </div>
@@ -38,6 +38,7 @@
   <button role="tab" data-tab="responses">PID responses</button>
   <button role="tab" data-tab="motions">Motions</button>
   <button role="tab" data-tab="tune">Tune</button>
+  <button role="tab" data-tab="refine">Refine</button>
 </nav>
 <main id="main">
   <section class="drop" id="loading">
@@ -48,6 +49,8 @@
 <script src="js/slt.js"></script>
 <script src="js/analysis.js"></script>
 <script src="js/tuning.js"></script>
+<script src="js/tunefile.js"></script>
+<script src="js/refine.js"></script>
 <script src="js/demo.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/ui.js"></script>
@@ -55,6 +58,7 @@
 <script src="js/replay.js"></script>
 <script src="js/explorer.js"></script>
 <script src="js/tuneview.js"></script>
+<script src="js/refineview.js"></script>
 <script>SA.app.start();</script>
 </body>
 </html>

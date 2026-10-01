@@ -96,8 +96,34 @@
 
     async loadFiles(files) {
       const texts = [];
-      for (const file of files) texts.push({ name: file.name, text: await file.text() });
-      this.loadTexts(texts, false);
+      let profiles = 0;
+      for (const file of files) {
+        const text = await file.text();
+        // the robot's TUNE.CFG, from the same sl folder: the Refine tab builds on it
+        if (/\.cfg$/i.test(file.name)) {
+          this.setTuneProfile(file.name, text);
+          profiles++;
+        } else {
+          texts.push({ name: file.name, text });
+        }
+      }
+      if (texts.length) {
+        this.loadTexts(texts, false);
+      } else if (profiles && this.run) {
+        this.show('refine', true);
+      }
+    },
+
+    /** Reads a TUNE.CFG for the Refine tab; a bad one is shown, with the robot's own reason. */
+    setTuneProfile(name, text) {
+      const parsed = SA.tunefile.parse(text);
+      if (parsed.ok) {
+        this.tuneProfile = { name, profile: parsed.profile };
+        this.tuneProfileError = null;
+      } else {
+        this.tuneProfileError = `${name}, line ${parsed.errorLine}: ${parsed.error}. The robot rejects this file too, ` +
+          'and runs the code\'s values instead.';
+      }
     },
 
     loadTexts(items, demo) {
