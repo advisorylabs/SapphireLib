@@ -5,6 +5,7 @@
  * exactly what the robot runs:
  *
  *   the random numbers     include/sapphirelib/util/random.hpp
+ *   lookup tables          include/sapphirelib/util/lookup_table.hpp
  *   the field map          src/sapphirelib/localization/field_map.cpp
  *   the sensor model       src/sapphirelib/localization/sensor_model.cpp
  *   the particle filter    src/sapphirelib/localization/particle_filter.cpp
@@ -12,14 +13,17 @@
  *   angle wrapping         src/sapphirelib/util/angle.cpp, sensors/imu_scale_math.cpp
  *
  * Each port keeps the C++'s order of operations, so the same seed and inputs
- * give the same particles (only libm's log, sin and cos may differ in their
- * last bit). test/mcl.test.js holds it to the golden values in
+ * give the same particles (only libm's exp, log, sin and cos may differ in
+ * their last bit). That includes the C++'s speedups: predict() draws its noise
+ * from the ziggurat (Rng.fastGaussian()), and weigh() casts with a
+ * ParallelRayCaster and scores with a ReadingScorer's lookup table.
+ * test/mcl.test.js holds it to the golden values in
  * tests/util/random_test.cpp and tests/localization/*_test.cpp. Change one
  * side, change the other.
  *
  * On top of the ports, for the visualizer only: every particle carries the
- * score its last weigh() gave it, and resampling records which particles
- * survived. Neither changes a single number the filter produces.
+ * score its last weigh() gave it, and whether recovery just scattered it.
+ * Neither changes a single number the filter produces.
  *
  * Plain script: window.SIM.mcl in a browser, require('./mcl.js') in Node.
  *
@@ -59,6 +63,39 @@
   }
 
   // --- Random numbers (util/random.hpp) ---------------------------------------
+
+  // the ziggurat behind fastGaussian(): ZigguratTables
+  const kZigTailStart = 3.442619855899;
+  const kZigLayerArea = 9.91256303526217e-3;
+  const kZigScale = 16777216.0;
+  let ziggurat = null;
+
+  /** ZigguratTables: built once, on the first call. */
+  function zigguratTables() {
+    if (ziggurat) return ziggurat;
+    const k = new Uint32Array(128);
+    const w = new Float64Array(128);
+    const f = new Float64Array(128);
+    let outer = kZigTailStart;
+    let previous = outer;
+    const q = kZigLayerArea / Math.exp(-0.5 * outer * outer);
+    // static_cast<std::uint32_t> truncates
+    k[0] = Math.trunc((outer / q) * kZigScale);
+    k[1] = 0;
+    w[0] = q / kZigScale;
+    w[127] = outer / kZigScale;
+    f[0] = 1.0;
+    f[127] = Math.exp(-0.5 * outer * outer);
+    for (let i = 126; i >= 1; --i) {
+      outer = Math.sqrt(-2.0 * Math.log(kZigLayerArea / outer + Math.exp(-0.5 * outer * outer)));
+      k[i + 1] = Math.trunc((outer / previous) * kZigScale);
+      previous = outer;
+      f[i] = Math.exp(-0.5 * outer * outer);
+      w[i] = outer / kZigScale;
+    }
+    ziggurat = { k, w, f };
+    return ziggurat;
+  }
 
   /** xoshiro128**, seeded through splitmix32. All arithmetic is uint32. */
   class Rng {
@@ -105,6 +142,56 @@
         s = u * u + v * v;
       } while (s >= 1.0 || s === 0.0);
       return u * Math.sqrt((-2.0 * Math.log(s)) / s);
+    }
+
+    /** The ziggurat: gaussian()'s distribution, a different sequence, no log() or sqrt() 99% of the time. */
+    fastGaussian() {
+      const z = zigguratTables();
+      for (;;) {
+        // independent bits for the layer (7), the sign (1) and the position across it (24)
+        const bits = this.next();
+        const layer = bits & 127;
+        const negative = (bits & 128) !== 0;
+        const across = bits >>> 8;
+        let x = across * z.w[layer];
+        if (across < z.k[layer]) return negative ? -x : x;
+        if (layer === 0) {
+          let tailX = 0.0;
+          let tailY = 0.0;
+          do {
+            tailX = -Math.log(1.0 - this.uniform()) / kZigTailStart;
+            tailY = -Math.log(1.0 - this.uniform());
+          } while (tailY + tailY < tailX * tailX);
+          x = kZigTailStart + tailX;
+          return negative ? -x : x;
+        }
+        if (z.f[layer] + this.uniform() * (z.f[layer - 1] - z.f[layer]) < Math.exp(-0.5 * x * x)) {
+          return negative ? -x : x;
+        }
+      }
+    }
+  }
+
+  // --- Lookup tables (util/lookup_table.hpp) -----------------------------------
+
+  /** A function sampled at even steps, read back along a straight line between samples. */
+  class LookupTable {
+    constructor(minX, maxX, stepsPerUnit, fn) {
+      this.minX = minX;
+      this.maxX = maxX;
+      this.stepsPerUnit = stepsPerUnit;
+      this.steps = Math.trunc((maxX - minX) * stepsPerUnit);
+      this.values = new Float64Array(this.steps + 1);
+      for (let i = 0; i <= this.steps; ++i) this.values[i] = fn(minX + i / stepsPerUnit);
+    }
+
+    at(x) {
+      const position = (x - this.minX) * this.stepsPerUnit;
+      if (!(position > 0.0)) return this.values[0];
+      if (position >= this.steps) return this.values[this.steps];
+      const i = Math.trunc(position);
+      const fraction = position - i;
+      return this.values[i] + fraction * (this.values[i + 1] - this.values[i]);
     }
   }
 
@@ -180,6 +267,63 @@
     }
   }
 
+  /** castRayIn() for many rays pointing one way: no division per ray, two multiplies for the walls. */
+  class ParallelRayCaster {
+    constructor() {
+      this.edges = [];
+      this.perimeterEdges = 0;
+      this.dirX = 0;
+      this.dirY = 0;
+    }
+
+    aim(map, dirX, dirY) {
+      this.dirX = dirX;
+      this.dirY = dirY;
+      this.minXIn = map.minXIn;
+      this.minYIn = map.minYIn;
+      this.maxXIn = map.maxXIn;
+      this.maxYIn = map.maxYIn;
+      const reachesX = Math.abs(dirX * (this.maxYIn - this.minYIn)) >= kParallelEpsilon;
+      const reachesY = Math.abs(dirY * (this.maxXIn - this.minXIn)) >= kParallelEpsilon;
+      this.wallXIn = dirX > 0.0 ? this.maxXIn : this.minXIn;
+      this.wallYIn = dirY > 0.0 ? this.maxYIn : this.minYIn;
+      this.inverseDirX = reachesX ? 1.0 / dirX : 0.0;
+      this.inverseDirY = reachesY ? 1.0 / dirY : 0.0;
+      this.edges.length = 0;
+      this.perimeterEdges = 0;
+      const segments = map.segments;
+      for (let i = 0; i < segments.length; ++i) {
+        const s = segments[i];
+        const ex = s.x2In - s.x1In;
+        const ey = s.y2In - s.y1In;
+        const denom = dirX * ey - dirY * ex;
+        if (Math.abs(denom) < kParallelEpsilon) continue;
+        this.edges.push({ ex, ey, inverseDenominator: 1.0 / denom, crossT: s.x1In * ey - s.y1In * ex,
+          crossU: s.x1In * dirY - s.y1In * dirX });
+        if (i < 4) ++this.perimeterEdges;
+      }
+    }
+
+    castIn(xIn, yIn) {
+      let nearest = Infinity;
+      let first = 0;
+      if (xIn >= this.minXIn && xIn <= this.maxXIn && yIn >= this.minYIn && yIn <= this.maxYIn) {
+        if (this.inverseDirX !== 0.0) nearest = (this.wallXIn - xIn) * this.inverseDirX;
+        if (this.inverseDirY !== 0.0) nearest = Math.min(nearest, (this.wallYIn - yIn) * this.inverseDirY);
+        first = this.perimeterEdges;
+      }
+      const startCrossDir = xIn * this.dirY - yIn * this.dirX;
+      const edges = this.edges;
+      for (let i = first; i < edges.length; ++i) {
+        const e = edges[i];
+        const t = (e.crossT - (xIn * e.ey - yIn * e.ex)) * e.inverseDenominator;
+        const u = (e.crossU - startCrossDir) * e.inverseDenominator;
+        if (t >= 0.0 && u >= 0.0 && u <= 1.0 && t < nearest) nearest = t;
+      }
+      return nearest;
+    }
+  }
+
   // --- The sensor model (sensor_model.cpp) ------------------------------------
 
   const kNoObjectMm = 9999;
@@ -227,6 +371,42 @@
     return Math.log(density);
   }
 
+  // softplus(x) = log(1 + e^x) from -16 to 16, 64 samples to the unit: built by the first ReadingScorer
+  let softplus = null;
+
+  function softplusTable() {
+    if (!softplus) softplus = new LookupTable(-16.0, 16.0, 64, (x) => Math.log1p(Math.exp(x)));
+    return softplus;
+  }
+
+  /** readingLogLikelihood() for one reading against many expected distances, by lookup table; within 1e-5. */
+  class ReadingScorer {
+    constructor(measuredIn = 0, sigmaIn = Infinity, beam = null) {
+      this.measuredIn = measuredIn;
+      this.invSigma = beam ? 1.0 / sigmaIn : 0.0;
+      this.logFloor = 0.0;
+      this.logPeak = 0.0;
+      this.noOutliers = true;
+      this.softplus = null;
+      if (!beam) return; // like the C++ default: everything scores 0
+      this.softplus = softplusTable();
+      const peak = ((1.0 - beam.outlierProbability) * kInvSqrtTwoPi) / sigmaIn;
+      const floor = beam.outlierProbability / beam.maxRangeIn;
+      this.noOutliers = !(floor > 0.0);
+      this.logFloor = this.noOutliers ? 0.0 : Math.log(floor);
+      this.logPeak = this.noOutliers ? Math.log(peak) : Math.log(peak) - this.logFloor;
+    }
+
+    logLikelihood(expectedIn) {
+      const z = (this.measuredIn - expectedIn) * this.invSigma;
+      const x = this.logPeak - 0.5 * z * z;
+      if (this.noOutliers) return x;
+      if (!(x > this.softplus.minX)) return this.logFloor;
+      if (x >= this.softplus.maxX) return this.logFloor + x;
+      return this.logFloor + this.softplus.at(x);
+    }
+  }
+
   function distanceReadingFromMm(millimeters, confidence, minConfidence, beam) {
     const r = reading();
     if (millimeters < kMinRangeMm || millimeters >= kNoObjectMm) return r;
@@ -249,6 +429,14 @@
   // --- The particle filter (particle_filter.cpp) ------------------------------
 
   const kOutsideLogPenalty = -30.0;
+
+  // e^x for recovery's fit, which only takes x <= 0: below -32 a particle counts as 0
+  let fitExp = null;
+
+  function fitExpTable() {
+    if (!fitExp) fitExp = new LookupTable(-32.0, 0.0, 64, (x) => Math.exp(x));
+    return fitExp;
+  }
 
   /** ParticleFilterConfig defaults; nested objects merge. */
   function filterConfig(overrides = {}) {
@@ -283,16 +471,18 @@
       for (let i = 0; i < count; ++i) this.particles.push(this.makeParticle(0, 0, 1.0 / count));
       this.resampled = [];
       for (let i = 0; i < count; ++i) this.resampled.push(this.makeParticle(0, 0, 0));
+      // each weight as a log, kept between updates; unused while uniformWeights
       this.logWeights = new Float64Array(count);
+      this.uniformWeights = true;
       this.logLikelihoods = new Float64Array(count);
       this.rays = this.sensors.map(() => ({ xIn: 0, yIn: 0, dirX: 0, dirY: 0 }));
-      this.sigmas = new Float64Array(this.sensors.length);
+      this.casters = this.sensors.map(() => new ParallelRayCaster());
+      this.scorers = this.sensors.map(() => new ReadingScorer());
+      this.usedSensors = [];
       this.slowAverage = 0;
       this.fastAverage = 0;
       this.averagesPrimed = false;
       this.lastRecovered = 0;
-      // visualizer only: which slots survived the last resample, and how often
-      this.lastSurvivors = null;
     }
 
     makeParticle(xIn, yIn, weight) {
@@ -310,9 +500,9 @@
         p.score = 1;
         p.recovered = false;
       }
+      this.uniformWeights = true;
       this.averagesPrimed = false;
       this.lastRecovered = 0;
-      this.lastSurvivors = null;
     }
 
     resetUniform() {
@@ -326,9 +516,9 @@
         p.score = 1;
         p.recovered = false;
       }
+      this.uniformWeights = true;
       this.averagesPrimed = false;
       this.lastRecovered = 0;
-      this.lastSurvivors = null;
     }
 
     predict(dxIn, dyIn, turnedDeg) {
@@ -336,65 +526,74 @@
       const sigmaIn = noise.baseIn + noise.perInch * Math.hypot(dxIn, dyIn) +
         noise.perDegreeIn * Math.abs(turnedDeg);
       for (const p of this.particles) {
-        p.xIn += dxIn + sigmaIn * this.rng.gaussian();
-        p.yIn += dyIn + sigmaIn * this.rng.gaussian();
+        p.xIn += dxIn + sigmaIn * this.rng.fastGaussian();
+        p.yIn += dyIn + sigmaIn * this.rng.fastGaussian();
       }
     }
 
     weigh(headingDeg, readings) {
       const sensorCount = Math.min(readings.length, this.sensors.length);
-      let validCount = 0;
+      const beam = this.config.beam;
+      const used = this.usedSensors;
+      used.length = 0;
       let logPerfectFit = 0.0;
       for (let s = 0; s < sensorCount; ++s) {
         if (!readings[s].valid) continue;
         this.rays[s] = sensorRay(0.0, 0.0, headingDeg, this.sensors[s]);
-        this.sigmas[s] = readingSigmaIn(this.config.beam, readings[s]);
-        logPerfectFit += readingLogLikelihood(readings[s].distanceIn, readings[s].distanceIn, this.sigmas[s],
-          this.config.beam);
-        ++validCount;
+        this.casters[s].aim(this.map, this.rays[s].dirX, this.rays[s].dirY);
+        this.scorers[s] = new ReadingScorer(readings[s].distanceIn, readingSigmaIn(beam, readings[s]), beam);
+        logPerfectFit += this.scorers[s].logLikelihood(readings[s].distanceIn);
+        used.push(s);
       }
+      const validCount = used.length;
       if (validCount === 0) return false;
 
       const particles = this.particles;
       const map = this.map;
-      const beam = this.config.beam;
+      const uniformLogWeight = -Math.log(particles.length);
       let maxLogWeight = -Infinity;
       let maxLogLikelihood = -Infinity;
       for (let i = 0; i < particles.length; ++i) {
         const p = particles[i];
         let logLikelihood = map.contains(p.xIn, p.yIn) ? 0.0 : kOutsideLogPenalty;
-        for (let s = 0; s < sensorCount; ++s) {
-          if (!readings[s].valid) continue;
+        for (let k = 0; k < validCount; ++k) {
+          const s = used[k];
           const ray = this.rays[s];
-          const expectedIn = map.castRayIn(p.xIn + ray.xIn, p.yIn + ray.yIn, ray.dirX, ray.dirY);
-          logLikelihood += readingLogLikelihood(readings[s].distanceIn, expectedIn, this.sigmas[s], beam);
+          logLikelihood += this.scorers[s].logLikelihood(this.casters[s].castIn(p.xIn + ray.xIn, p.yIn + ray.yIn));
         }
         this.logLikelihoods[i] = logLikelihood;
-        this.logWeights[i] = Math.log(p.weight) + logLikelihood;
+        this.logWeights[i] = (this.uniformWeights ? uniformLogWeight : this.logWeights[i]) + logLikelihood;
         maxLogWeight = Math.max(maxLogWeight, this.logWeights[i]);
         maxLogLikelihood = Math.max(maxLogLikelihood, logLikelihood);
       }
 
+      const fitExpLookup = fitExpTable();
+      const inverseValid = 1.0 / validCount;
       let sum = 0.0;
+      let average = 0.0;
       for (let i = 0; i < particles.length; ++i) {
         particles[i].weight = Math.exp(this.logWeights[i] - maxLogWeight);
         sum += particles[i].weight;
+        const fit = (this.logLikelihoods[i] - logPerfectFit) * inverseValid;
+        if (fit > fitExpLookup.minX) average += fitExpLookup.at(fit);
       }
-      for (const p of particles) p.weight /= sum;
+      average /= particles.length;
 
-      // visualizer only
+      const inverseSum = 1.0 / sum;
+      const logSum = Math.log(sum);
+      for (let i = 0; i < particles.length; ++i) {
+        particles[i].weight *= inverseSum;
+        this.logWeights[i] = this.logWeights[i] - maxLogWeight - logSum;
+      }
+      this.uniformWeights = false;
+
+      // visualizer only: each particle's fit against the best
       for (let i = 0; i < particles.length; ++i) {
         particles[i].score = Math.exp(this.logLikelihoods[i] - maxLogLikelihood);
         particles[i].recovered = false;
       }
+      this.latestFit = average;
 
-      let average = 0.0;
-      for (let i = 0; i < particles.length; ++i) {
-        average += Math.exp((this.logLikelihoods[i] - logPerfectFit) / validCount);
-      }
-      // visualizer only: the same fit, for the readouts
-      this.lastFit = average / particles.length;
-      average /= particles.length;
       if (!this.averagesPrimed) {
         this.slowAverage = average;
         this.fastAverage = average;
@@ -413,6 +612,11 @@
       }
       const ratio = this.fastAverage / this.slowAverage;
       return Math.min(Math.max(1.0 - ratio / recovery.triggerRatio, 0.0), recovery.maxFraction);
+    }
+
+    /** RecoveryFit: the last weigh()'s fit, and recovery's fast and slow averages of it. */
+    recoveryFit() {
+      return { latest: this.latestFit || 0, fast: this.fastAverage, slow: this.slowAverage };
     }
 
     effectiveParticles() {
@@ -436,7 +640,6 @@
         return false;
       }
 
-      const survivors = new Uint32Array(count);
       const kept = count - recovered;
       const out = this.resampled;
       if (kept > 0) {
@@ -451,7 +654,6 @@
             cumulative += particles[source].weight;
           }
           copyParticle(out[j], particles[source]);
-          survivors[source]++;
         }
       }
 
@@ -476,8 +678,8 @@
       for (const p of out) p.weight = weight;
       this.resampled = particles;
       this.particles = out;
+      this.uniformWeights = true;
       this.lastRecovered = recovered;
-      this.lastSurvivors = survivors;
       return true;
     }
 
@@ -524,31 +726,26 @@
       }
       return { agreeing, checks };
     }
+  }
 
-    /**
-     * Visualizer only: one particle's view, sensor by sensor: where its beams
-     * would hit the map and how each reading scores there. Uses the rays and
-     * sigmas of the last weigh().
-     */
-    explainParticle(index, headingDeg, readings) {
-      const p = this.particles[index];
-      const rows = [];
-      let total = this.map.contains(p.xIn, p.yIn) ? 0 : kOutsideLogPenalty;
-      for (let s = 0; s < this.sensors.length; ++s) {
-        const r = readings[s];
-        const ray = sensorRay(p.xIn, p.yIn, headingDeg, this.sensors[s]);
-        const expectedIn = this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
-        const row = { ray, expectedIn, used: !!(r && r.valid), measuredIn: r ? r.distanceIn : NaN,
-          sigmaIn: NaN, logLikelihood: 0 };
-        if (row.used) {
-          row.sigmaIn = readingSigmaIn(this.config.beam, r);
-          row.logLikelihood = readingLogLikelihood(r.distanceIn, expectedIn, row.sigmaIn, this.config.beam);
-          total += row.logLikelihood;
-        }
-        rows.push(row);
+  /** sampleParticles(): out.length picks, evenly spaced along the cumulative weights. */
+  function sampleParticles(particles, count) {
+    const out = [];
+    if (!particles.length || count <= 0) return out;
+    let total = 0.0;
+    for (const p of particles) total += p.weight;
+    const step = total / count;
+    let cumulative = particles[0].weight;
+    let source = 0;
+    for (let j = 0; j < count; ++j) {
+      const target = (j + 0.5) * step;
+      while (target > cumulative && source + 1 < particles.length) {
+        ++source;
+        cumulative += particles[source].weight;
       }
-      return { particle: p, rows, logLikelihood: total };
+      out.push(particles[source]);
     }
+    return out;
   }
 
   function copyParticle(to, from) {
@@ -590,17 +787,22 @@
     wrapDegrees180,
     wrapDegrees360,
     Rng,
+    zigguratTables,
+    LookupTable,
     FieldMap,
+    ParallelRayCaster,
     beamModel,
     mount,
     reading,
     sensorRay,
     readingSigmaIn,
     readingLogLikelihood,
+    ReadingScorer,
     distanceReadingFromMm,
     compensateLatency,
     filterConfig,
     ParticleFilter,
+    sampleParticles,
     computeOdometryDelta,
     correctionStep,
   };

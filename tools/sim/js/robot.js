@@ -190,6 +190,17 @@
     return config;
   }
 
+  /** LocalizationStatus's blockedBy flags: why an update didn't correct odometry. */
+  const BLOCKED = {
+    correctionOff: 1 << 0,
+    noSetPose: 1 << 1,
+    noReadings: 1 << 2,
+    tooSpread: 1 << 3,
+    tooFewAgree: 1 << 4,
+    refused: 1 << 5,
+    spinning: 1 << 6,
+  };
+
   class MonteCarloLocalizer {
     /**
      * `sensors` is one function per sensor returning { mm, confidence }, like
@@ -209,10 +220,9 @@
       this.lastUpdateMs = 0;
       this.status = {
         estimate: { xIn: 0, yIn: 0, headingDeg: 0 }, spreadIn: 0, effectiveParticles: 0, sensorsUsed: 0,
-        sensorsAgreeing: 0, correcting: false, correctionXIn: 0, correctionYIn: 0, updates: 0,
+        sensorsAgreeing: 0, correcting: false, blockedBy: 0, correctionXIn: 0, correctionYIn: 0, updates: 0,
       };
-      // for the visualizer: the last update's working, and where it's up to
-      this.phase = 'idle';
+      // the last update's working, for the visualizer and the recorder
       this.work = null;
     }
 
@@ -247,10 +257,8 @@
       const dtS = (nowMs - this.lastUpdateMs) / 1000.0;
       this.lastRawPose = Object.assign({}, raw);
       this.lastUpdateMs = nowMs;
-      const before = this.filter.particles.map((p) => ({ xIn: p.xIn, yIn: p.yIn }));
       this.filter.predict(dxIn, dyIn, turnedDeg);
-      this.work = { snapshot, raw, dxIn, dyIn, turnedDeg, dtS, before, restarted };
-      this.phase = 'predicted';
+      this.work = { snapshot, raw, dxIn, dyIn, turnedDeg, dtS, restarted };
     }
 
     /** Step 2: read the sensors, weigh(), and check the estimate against the walls. */
@@ -290,7 +298,6 @@
       w.checks = check.checks;
       w.beamHeadingDeg = beamHeadingDeg;
       w.spinning = spinning;
-      this.phase = 'weighed';
     }
 
     /** Step 3: resample, and correct odometry if the estimate passes every check. */
@@ -299,21 +306,23 @@
       const config = this.config;
       w.resampled = this.filter.resampleIfNeeded();
       const inFieldFrame = !config.waitForSetPose || w.snapshot.resetCount > 0;
-      let correcting = this.correctionEnabled && inFieldFrame && w.weighed &&
-        w.estimate.spreadIn <= config.maxCorrectionSpreadIn && w.agreeing >= config.minAgreeingSensors;
+      let blockedBy = 0;
+      if (!this.correctionEnabled) blockedBy |= BLOCKED.correctionOff;
+      if (!inFieldFrame) blockedBy |= BLOCKED.noSetPose;
+      if (!w.weighed) blockedBy |= BLOCKED.noReadings;
+      if (w.spinning) blockedBy |= BLOCKED.spinning;
+      if (!(w.estimate.spreadIn <= config.maxCorrectionSpreadIn)) blockedBy |= BLOCKED.tooSpread;
+      if (w.agreeing < config.minAgreeingSensors) blockedBy |= BLOCKED.tooFewAgree;
       const correctionXIn = w.estimate.xIn - w.raw.xIn;
       const correctionYIn = w.estimate.yIn - w.raw.yIn;
-      if (correcting) {
-        correcting = this.odometry.setPositionCorrection(correctionXIn, correctionYIn,
-          config.maxCorrectionRateInPerS, w.snapshot.resetCount);
+      if (blockedBy === 0 && !this.odometry.setPositionCorrection(correctionXIn, correctionYIn,
+        config.maxCorrectionRateInPerS, w.snapshot.resetCount)) {
+        blockedBy |= BLOCKED.refused;
       }
-      w.gate = {
-        enabled: this.correctionEnabled,
-        inFieldFrame,
-        weighed: w.weighed,
-        spreadOk: w.estimate.spreadIn <= config.maxCorrectionSpreadIn,
-        agreeingOk: w.agreeing >= config.minAgreeingSensors,
-      };
+      const correcting = blockedBy === 0;
+      w.blockedBy = blockedBy;
+      w.recovered = this.filter.lastRecovered;
+      w.fit = this.filter.recoveryFit();
       const st = this.status;
       st.estimate = { xIn: w.estimate.xIn, yIn: w.estimate.yIn, headingDeg: w.raw.headingDeg };
       st.spreadIn = w.estimate.spreadIn;
@@ -321,12 +330,12 @@
       st.sensorsUsed = w.used;
       st.sensorsAgreeing = w.agreeing;
       st.correcting = correcting;
+      st.blockedBy = blockedBy;
       if (correcting) {
         st.correctionXIn = correctionXIn;
         st.correctionYIn = correctionYIn;
       }
       st.updates++;
-      this.phase = 'idle';
     }
 
     /**
@@ -413,9 +422,12 @@
       const b = 2.0 * (f.x * d.x + f.y * d.y);
       const c = f.x * f.x + f.y * f.y - lookaheadIn * lookaheadIn;
       const discriminant = b * b - 4.0 * a * c;
-      if (discriminant < 0.0) continue;
-      const t2 = (-b + Math.sqrt(discriminant)) / (2.0 * a);
-      if (t2 < 0.0 || t2 > 1.0) continue;
+      const t2 = discriminant < 0.0 ? -1.0 : (-b + Math.sqrt(discriminant)) / (2.0 * a);
+      if (t2 < 0.0 || t2 > 1.0) {
+        // once the path has left the circle, a later segment back within reach is for later
+        if (found) break;
+        continue;
+      }
       found = true;
       bestPoint = { xIn: p1.xIn + d.x * t2, yIn: p1.yIn + d.y * t2 };
       bestIndex = i;
@@ -674,6 +686,7 @@
     Imu,
     Odometry,
     localizerConfig,
+    BLOCKED,
     MonteCarloLocalizer,
     ExitTracker,
     toLocalFrame,

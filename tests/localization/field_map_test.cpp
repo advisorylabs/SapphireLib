@@ -5,6 +5,7 @@
 // Build & run:
 //   g++ -std=c++20 -Iinclude tests/localization/field_map_test.cpp src/sapphirelib/localization/field_map.cpp -o field_map_test && ./field_map_test
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -13,6 +14,7 @@
 
 using sapphirelib::localization::FieldMap;
 using sapphirelib::localization::kVrcFieldSizeIn;
+using sapphirelib::localization::ParallelRayCaster;
 
 namespace {
 
@@ -86,6 +88,52 @@ void testCastRayMatchesHeadingVersion() {
 
 } // namespace
 
+void testParallelRayCasterMatchesCastRay() {
+    // starts inside and outside the walls, every direction including exactly along the axes, and
+    // a map with boxes in it (one straddling a wall). A ray through the very end of a segment is
+    // a hit or a miss by rounding, in either version, so the grid stays off every segment's ends
+    FieldMap map = FieldMap::centered();
+    map.addBox(-5, 20, 5, 30);
+    map.addBox(60, -10, 80, 10);
+    map.addSegment({-40, -40, -20, -50});
+    ParallelRayCaster caster;
+    double worst = 0.0;
+    int hits = 0;
+    for (int heading = 0; heading < 360; heading += 15) {
+        const double rad = heading * 3.14159265358979323846 / 180.0;
+        // headings 0 and 90 also exactly along the axes, as sin and cos don't give
+        for (int exact = 0; exact < 2; ++exact) {
+            double dirX = std::sin(rad);
+            double dirY = std::cos(rad);
+            if (exact == 1) {
+                if (heading % 90 != 0) continue;
+                dirX = heading == 90 ? 1.0 : heading == 270 ? -1.0 : 0.0;
+                dirY = heading == 0 ? 1.0 : heading == 180 ? -1.0 : 0.0;
+            }
+            caster.aim(map, dirX, dirY);
+            for (double x = -90.3; x < 90.0; x += 7.7) {
+                for (double y = -90.13; y < 90.0; y += 9.1) {
+                    const double expected = map.castRayIn(x, y, dirX, dirY);
+                    const double got = caster.castIn(x, y);
+                    if (std::isinf(expected)) {
+                        if (!std::isinf(got)) {
+                            std::printf("FAIL caster at (%.1f, %.1f) heading %d: got %.9f, "
+                                        "expected nothing\n",
+                                        x, y, heading, got);
+                            assert(false);
+                        }
+                        continue;
+                    }
+                    ++hits;
+                    worst = std::max(worst, std::fabs(got - expected));
+                }
+            }
+        }
+    }
+    std::printf("  parallel caster within %.1e of castRayIn() over %d hits\n", worst, hits);
+    assert(worst < 1e-9);
+}
+
 int main() {
     testCenteredFieldWalls();
     testDiagonalRay();
@@ -93,6 +141,7 @@ int main() {
     testRayFromOutsidePointingAway();
     testContains();
     testCastRayMatchesHeadingVersion();
+    testParallelRayCasterMatchesCastRay();
     std::printf("field_map_test: all tests passed\n");
     return 0;
 }

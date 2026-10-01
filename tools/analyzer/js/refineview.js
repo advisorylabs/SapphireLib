@@ -35,15 +35,10 @@
     render(section, app) {
       const runs = app.runs.slice();
       section.append(h('section', { class: 'panel' },
-        h('h3', null, 'Fine-tuning from real motions'),
-        h('div', { class: 'note' },
-          h('p', null, 'Auto-Tune designs gains from a few seconds of ramps and steps. Every motion the robot logs ' +
-            'after that is a step response with known gains, so here they\'re replayed through the axis model, ' +
-            'the model is adjusted (inertia, damping, delay) until the replays match what the robot really did, ' +
-            'and each controller is designed again from it, the way the robot designs it.'),
-          h('p', null, `It uses every loaded log (${runs.length} run${runs.length === 1 ? '' : 's'}). Nothing changes ` +
-            'on the robot until you accept a proposal and save TUNE.CFG to its SD card; the history below then shows ' +
-            'what the next run did with it.'))));
+        h('header', null, h('h3', null, 'Refine from real motions'),
+          h('span', { class: 'hint', title: 'Every logged motion replayed through the axis model; the model is fitted to ' +
+            'what the robot did, and each controller designed again from it' },
+          `${runs.length} run${runs.length === 1 ? '' : 's'} loaded · nothing changes until you save TUNE.CFG`))));
 
       const profile = app.tuneProfile ? app.tuneProfile.profile : TF.emptyProfile();
       const results = RF.CONTROLLERS.map((c) => RF.refine(runs, c, { profile }));
@@ -191,7 +186,7 @@
       rerender();
     });
     panel.append(h('header', null, h('h3', null, 'TUNE.CFG'),
-      h('span', { class: 'hint' }, 'What the robot loads from its SD card at startup')));
+      h('span', { class: 'hint' }, 'loaded from the SD card at startup')));
     panel.append(h('p', { class: 'note' }, loaded
       ? `${loaded.name}: revision ${profile.revision}${profile.note ? `, "${profile.note}"` : ''}. Saving keeps its other ` +
         'lines (the simulator\'s MCL settings), adds one to the revision and notes the change at the bottom.'
@@ -223,9 +218,7 @@
       panel.append(h('details', null, h('summary', null, 'Its history'),
         h('ul', { class: 'note changelog' }, profile.changelog.slice(0, 12).map((line) => h('li', { class: 'data' }, line)))));
     }
-    panel.append(h('p', { class: 'muted' }, 'Copy the saved file into the sl folder on the robot\'s SD card. Its Home ' +
-      'page shows the revision it loaded ("Tune: TUNE.CFG r8"), and every log records it, so the history below ' +
-      'can tell which run used which.'));
+    panel.append(h('p', { class: 'muted' }, 'Copy it to the sl folder on the SD card; the Home page shows the revision loaded.'));
   }
 
   // --- History --------------------------------------------------------------------------------------
@@ -233,7 +226,7 @@
   function historyPanel(runs) {
     const rows = RF.history(runs);
     const panel = h('section', { class: 'panel' },
-      h('header', null, h('h3', null, 'Run by run'), h('span', { class: 'hint' }, 'What each run ran, how it went, and what changed it')));
+      h('header', null, h('h3', null, 'Run by run'), h('span', { class: 'hint' }, 'gains, results, and what changed them')));
     if (!rows.length) {
       panel.append(h('p', { class: 'muted' }, 'No runs loaded.'));
       return panel;
@@ -270,9 +263,8 @@
       h('thead', null, h('tr', null, ['Run', 'TUNE.CFG', 'Turn kP / kD', 'Drive kP / kD', 'Localizer', 'Logger CPU']
         .map((t, i) => h('th', { class: i === 5 ? 'num' : null }, t)))),
       h('tbody', null, body))));
-    panel.append(h('p', { class: 'muted' }, 'Steps: the run\'s step responses with their median overshoot and settle ' +
-      'time. Localizer: the mean correction it held odometry at (how far odometry had drifted), how often it was ' +
-      'correcting, and its update time. Logger CPU: the logger\'s own share of the brain, at most.'));
+    panel.append(h('p', { class: 'muted' }, 'Steps: median overshoot and settle time. Localizer: mean drift corrected, ' +
+      'share of updates correcting, update time. Logger CPU: an upper bound.'));
     return panel;
   }
 

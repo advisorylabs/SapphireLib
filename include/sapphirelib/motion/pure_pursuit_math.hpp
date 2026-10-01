@@ -40,7 +40,9 @@ struct LookaheadResult {
  * @brief Find the pure pursuit lookahead point
  *
  * Intersects a circle of radius lookaheadIn around the robot with each path segment from
- * fromIndex on, and keeps the furthest along. Once the robot is within lookaheadIn of every
+ * fromIndex on, and keeps the furthest along the stretch of path the circle reaches: once the
+ * path has left the circle, a later segment that comes back within reach (a closed lap's last
+ * side, beside its first) isn't skipped ahead to. Once the robot is within lookaheadIn of every
  * remaining segment, returns the last waypoint
  *
  * @param xIn robot x, in inches

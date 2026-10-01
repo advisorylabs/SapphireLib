@@ -48,17 +48,11 @@
     render(section, app) {
       const systems = T.systems(app.run);
       section.append(h('section', { class: 'panel' },
-        h('h3', null, 'Tuning from a log'),
-        h('p', null, 'The analyzer can\'t drive the robot, and doesn\'t need to: a log already holds what ' +
-          'Auto-Tune measures. Its characterization runs (the PID page\'s Auto-Tune, logged as char.*) are ' +
-          'refit here with the robot\'s own math, and ordinary match driving works too: the volts every ' +
-          'system was sent, next to where it went. From the model, each controller is designed the way the ' +
-          'robot designs it, then judged by replaying this log\'s real targets through the model: with the ' +
-          'gains the robot had, and with the new ones. Copy the C++, flash, and the next log shows whether ' +
-          'it worked.'),
-        h('p', { class: 'muted' }, 'For fresh data: select a controller on the robot\'s PID page and tap ' +
-          'Auto-Tune (Lift measures only the lift) with the SD card in, then open that log here.')));
-      section.lastChild.querySelectorAll('p').forEach((p) => p.classList.add('note'));
+        h('header', null, h('h3', null, 'Tune from a log'),
+          h('span', { class: 'hint', title: 'Refits Auto-Tune runs (char.*) or match driving with the robot\'s own math, ' +
+            'designs each controller the way the robot does, and replays this log\'s targets with the old and new gains. ' +
+            'For fresh data: Auto-Tune on the robot\'s PID page with the SD card in' },
+          'model → design → what if → C++'))));
       if (!systems.length) {
         section.append(h('p', { class: 'muted' }, 'Nothing tunable in this log: it needs chassis + odom channels, ' +
           'char.* Auto-Tune runs, or a mechanism\'s X.act channel.'));
@@ -200,7 +194,7 @@
     const box = h('div');
     const panel = h('section', { class: 'panel' },
       h('header', null, h('h3', null, 'Does the model match?'),
-        h('span', { class: 'hint' }, 'The recorded volts played through the model, against where it really went.')),
+        h('span', { class: 'hint' }, 'the logged volts through the model, against what happened')),
       box);
     let samples;
     if (source.autotune) {

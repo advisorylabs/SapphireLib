@@ -10,13 +10,22 @@
 // checked against the same numbers in tools/sim/test/mcl.test.js. Change one
 // side, change the other.
 //
+// weigh() scores particles with lookup tables (ReadingScorer,
+// ParallelRayCaster) instead of readingLogLikelihood() and castRayIn().
+// testWeighMatchesTheExactModel keeps the exact version it replaced and checks
+// the weights and the recovery fit against it.
+//
 // Build & run:
 //   g++ -std=c++20 -Iinclude tests/localization/particle_filter_test.cpp src/sapphirelib/localization/particle_filter.cpp src/sapphirelib/localization/field_map.cpp src/sapphirelib/localization/sensor_model.cpp -o particle_filter_test && ./particle_filter_test
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <limits>
+#include <span>
 #include <vector>
 
 #include "sapphirelib/localization/particle_filter.hpp"
@@ -251,37 +260,180 @@ void testBlockedSensorDoesNotDragTheEstimate() {
     expectBelow(distance(e.xIn, e.yIn, 10, 20), 1.0, "estimate with a blocked sensor");
 }
 
-void testRecoveryAfterABump() {
+// updates until the estimate is within 1in of where a bump left the robot, 200 if never
+int updatesToRecover(bool recovery, std::uint32_t seed) {
     // a hard hit shoves the robot 8in sideways and the tracking wheels miss it
     const FieldMap world = FieldMap::centered();
     const auto mounts = fourSensors();
+    ParticleFilter filter(world, mounts, {.recovery = {.enabled = recovery}, .seed = seed});
+    Rng noise(seed * 7 + 2);
+    filter.reset(0, 0, 1.0);
+    for (int step = 0; step < 20; ++step) {
+        filter.predict(0, 0, 0);
+        filter.weigh(0, readingsFrom(world, mounts, 0, 0, 0, &noise));
+        filter.resampleIfNeeded();
+    }
+    for (int step = 0; step < 200; ++step) {
+        filter.predict(0, 0, 0);
+        filter.weigh(0, readingsFrom(world, mounts, 8, 0, 0, &noise));
+        const Estimate e = filter.estimate();
+        filter.resampleIfNeeded();
+        if (distance(e.xIn, e.yIn, 8, 0) < 1.0) return step;
+    }
+    return 200;
+}
+
+void testRecoveryAfterABump() {
+    // how long recovery takes depends a lot on where the fresh particles happen to land, so judge
+    // it by the median over several seeds rather than one draw
     for (const bool recovery : {true, false}) {
-        ParticleFilter filter(world, mounts, {.recovery = {.enabled = recovery}, .seed = 5});
-        Rng noise(9);
-        filter.reset(0, 0, 1.0);
-        for (int step = 0; step < 20; ++step) {
-            filter.predict(0, 0, 0);
-            filter.weigh(0, readingsFrom(world, mounts, 0, 0, 0, &noise));
-            filter.resampleIfNeeded();
+        std::vector<int> updates;
+        for (std::uint32_t seed = 1; seed <= 15; ++seed) {
+            updates.push_back(updatesToRecover(recovery, seed));
         }
-        int stepsToRecover = -1;
-        for (int step = 0; step < 200; ++step) {
-            filter.predict(0, 0, 0);
-            filter.weigh(0, readingsFrom(world, mounts, 8, 0, 0, &noise));
-            const Estimate e = filter.estimate();
-            filter.resampleIfNeeded();
-            if (distance(e.xIn, e.yIn, 8, 0) < 1.0) {
-                stepsToRecover = step;
-                break;
+        std::sort(updates.begin(), updates.end());
+        std::printf("  bump: median %d updates to recover with recovery %s\n", updates[7],
+                    recovery ? "on" : "off");
+        if (recovery) expectBelow(updates[7], 20, "median updates to recover with recovery on");
+    }
+}
+
+// weigh() as it was before the lookup tables: castRayIn() and readingLogLikelihood() per particle
+// per sensor, and log(weight). Returns the normalized weights, and the fit recovery averages
+struct ExactWeigh {
+    std::vector<double> weights;
+    double fit = 0.0;
+};
+
+ExactWeigh exactWeigh(const ParticleFilter& filter, double headingDeg,
+                      std::span<const DistanceReading> readings) {
+    const BeamModel& beam = filter.config().beam;
+    const std::vector<Particle>& particles = filter.particles();
+    ExactWeigh out;
+    std::vector<double> logWeights(particles.size());
+    std::vector<double> logLikelihoods(particles.size());
+    double logPerfectFit = 0.0;
+    int validCount = 0;
+    for (std::size_t s = 0; s < readings.size(); ++s) {
+        if (!readings[s].valid) continue;
+        const double sigma = readingSigmaIn(beam, readings[s]);
+        logPerfectFit +=
+            readingLogLikelihood(readings[s].distanceIn, readings[s].distanceIn, sigma, beam);
+        ++validCount;
+    }
+    double maxLogWeight = -std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        const Particle& p = particles[i];
+        double logLikelihood = filter.map().contains(p.xIn, p.yIn) ? 0.0 : -30.0;
+        for (std::size_t s = 0; s < readings.size(); ++s) {
+            if (!readings[s].valid) continue;
+            const SensorRay ray = sensorRay(p.xIn, p.yIn, headingDeg, filter.sensors()[s]);
+            const double expected = filter.map().castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+            logLikelihood += readingLogLikelihood(readings[s].distanceIn, expected,
+                                                  readingSigmaIn(beam, readings[s]), beam);
+        }
+        logLikelihoods[i] = logLikelihood;
+        logWeights[i] = std::log(p.weight) + logLikelihood;
+        maxLogWeight = std::max(maxLogWeight, logWeights[i]);
+    }
+    double sum = 0.0;
+    for (const double logWeight : logWeights) {
+        out.weights.push_back(std::exp(logWeight - maxLogWeight));
+        sum += out.weights.back();
+    }
+    for (double& w : out.weights) w /= sum;
+    for (const double logLikelihood : logLikelihoods) {
+        out.fit += std::exp((logLikelihood - logPerfectFit) / validCount);
+    }
+    out.fit /= static_cast<double>(particles.size());
+    return out;
+}
+
+void testWeighMatchesTheExactModel() {
+    // a map with a box in it, a wide cloud with some particles outside the walls, and two weighs in
+    // a row without resampling, so the second starts from the first's weights. The second has a
+    // blocked sensor, so the fit drops. A slow average that never moves and a fast one that jumps
+    // to each update's fit make the recovery fraction 1 - (second fit / first fit)
+    FieldMap map = FieldMap::centered();
+    map.addBox(-10, 25, 10, 35);
+    ParticleFilter filter(
+        map, fourSensors(),
+        {.recovery = {.slowRate = 0.0, .fastRate = 1.0, .triggerRatio = 1.0, .maxFraction = 1.0},
+         .seed = 21});
+    filter.reset(55, 40, 12.0);
+    double firstFit = 0.0;
+    for (int step = 0; step < 2; ++step) {
+        const double heading = 30 + 5 * step;
+        auto readings = readingsFrom(map, fourSensors(), 50 + step, 40, heading, nullptr);
+        if (step == 1) readings[1].distanceIn *= 0.5;
+        const ExactWeigh exact = exactWeigh(filter, heading, readings);
+        assert(filter.weigh(heading, readings));
+        double worst = 0.0;
+        for (std::size_t i = 0; i < exact.weights.size(); ++i) {
+            const double w = filter.particles()[i].weight;
+            if (exact.weights[i] > 1e-300) {
+                worst = std::max(worst, std::fabs(w - exact.weights[i]) / exact.weights[i]);
             }
         }
-        std::printf("  bump: recovered in %d updates with recovery %s\n", stepsToRecover,
-                    recovery ? "on" : "off");
-        if (recovery) {
-            assert(stepsToRecover >= 0);
-            expectBelow(stepsToRecover, 20, "updates to recover with recovery on");
+        std::printf("  weigh %d: weights within %.1e of the exact model, relatively\n", step,
+                    worst);
+        expectBelow(worst, 1e-4, "weights against the exact model");
+        if (step == 0) {
+            firstFit = exact.fit;
+        } else {
+            expectNear(filter.recoveryFraction(), 1.0 - exact.fit / firstFit, 1e-4,
+                       "recovery fraction against the exact model");
+            assert(filter.recoveryFraction() > 0.1);
         }
     }
+}
+
+void testSampleParticlesFollowsTheWeights() {
+    // ten particles, one carrying half the weight: half the picks land on it, and the rest are
+    // spread evenly over the others in order
+    std::vector<Particle> particles;
+    for (int i = 0; i < 10; ++i) {
+        particles.push_back({.xIn = static_cast<double>(i), .yIn = 0, .weight = 0.5 / 9});
+    }
+    particles[3].weight = 0.5;
+    std::array<Particle, 8> picks{};
+    sampleParticles(particles, picks);
+    int heavy = 0;
+    for (std::size_t j = 0; j < picks.size(); ++j) {
+        if (picks[j].xIn == 3.0) ++heavy;
+        if (j > 0) assert(picks[j].xIn >= picks[j - 1].xIn);
+    }
+    assert(heavy == 4);
+
+    // equal weights: evenly spaced through the cloud
+    for (Particle& p : particles) p.weight = 0.1;
+    std::array<Particle, 5> even{};
+    sampleParticles(particles, even);
+    for (std::size_t j = 0; j < even.size(); ++j) {
+        expectNear(even[j].xIn, 2.0 * static_cast<double>(j), 0, "evenly spaced picks");
+    }
+
+    // nothing to pick from leaves the output alone
+    std::array<Particle, 2> untouched{Particle{.xIn = 7}, Particle{.xIn = 8}};
+    sampleParticles(std::span<const Particle>(), untouched);
+    expectNear(untouched[0].xIn, 7, 0, "empty input leaves the output alone");
+}
+
+void testRecoveryFitReportsTheLatestFit() {
+    // the first weigh primes both averages to its fit; the cloud sits on the truth, so the fit is
+    // high. Then a bump: the next fit drops, the fast average follows it and the slow one doesn't
+    const FieldMap map = FieldMap::centered();
+    ParticleFilter filter(map, fourSensors(), {.seed = 4});
+    filter.reset(0, 0, 0.5);
+    filter.weigh(0, readingsFrom(map, fourSensors(), 0, 0, 0, nullptr));
+    const RecoveryFit first = filter.recoveryFit();
+    assert(first.latest > 0.3 && first.latest <= 1.0);
+    expectNear(first.fast, first.latest, 1e-15, "fast primed to the first fit");
+    expectNear(first.slow, first.latest, 1e-15, "slow primed to the first fit");
+    filter.weigh(0, readingsFrom(map, fourSensors(), 8, 0, 0, nullptr));
+    const RecoveryFit bumped = filter.recoveryFit();
+    assert(bumped.latest < 0.5 * first.latest);
+    assert(bumped.fast < first.fast && bumped.slow < first.slow && bumped.fast < bumped.slow);
 }
 
 void testGoldenRun() {
@@ -303,12 +455,18 @@ void testGoldenRun() {
     std::printf("  golden: x=%.12f y=%.12f spread=%.12f neff=%.12f p0=(%.12f, %.12f)\n", e.xIn,
                 e.yIn, e.spreadIn, e.effectiveParticles, filter.particles()[0].xIn,
                 filter.particles()[0].yIn);
-    expectNear(e.xIn, -16.074287648507, 1e-9, "golden x");
-    expectNear(e.yIn, 14.950802327907, 1e-9, "golden y");
-    expectNear(e.spreadIn, 1.064527667393, 1e-9, "golden spread");
-    expectNear(e.effectiveParticles, 62.107761325610, 1e-9, "golden effective particles");
-    expectNear(filter.particles()[0].xIn, -16.682482235779, 1e-9, "golden particle 0 x");
-    expectNear(filter.particles()[0].yIn, 17.062945229742, 1e-9, "golden particle 0 y");
+    expectNear(e.xIn, -16.107423809228, 1e-9, "golden x");
+    expectNear(e.yIn, 14.987853574406, 1e-9, "golden y");
+    expectNear(e.spreadIn, 1.075714917576, 1e-9, "golden spread");
+    expectNear(e.effectiveParticles, 62.293936038009, 1e-9, "golden effective particles");
+    expectNear(filter.particles()[0].xIn, -16.741012233836, 1e-9, "golden particle 0 x");
+    expectNear(filter.particles()[0].yIn, 16.985146738946, 1e-9, "golden particle 0 y");
+    // before predict() drew its noise from fastGaussian() and weigh() used lookup tables, the same
+    // run ended at (-16.0743, 14.9508) with a spread of 1.0645in: a different draw of the noise,
+    // the same answer
+    expectNear(e.xIn, -16.074287648507, 0.1, "within 0.1in of the run before the lookup tables");
+    expectNear(e.yIn, 14.950802327907, 0.1, "within 0.1in of the run before the lookup tables");
+    expectNear(e.spreadIn, 1.064527667393, 0.05, "the same spread as before the lookup tables");
 }
 
 } // namespace
@@ -323,6 +481,9 @@ int main() {
     testClosedLoopBeatsBiasedOdometry();
     testBlockedSensorDoesNotDragTheEstimate();
     testRecoveryAfterABump();
+    testWeighMatchesTheExactModel();
+    testSampleParticlesFollowsTheWeights();
+    testRecoveryFitReportsTheLatestFit();
     testGoldenRun();
     std::printf("particle_filter_test: all tests passed\n");
     return 0;

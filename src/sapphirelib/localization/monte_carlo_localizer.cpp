@@ -96,21 +96,29 @@ void MonteCarloLocalizer::update() {
     const Estimate estimate = filter_.estimate();
     const std::size_t agreeing = filter_.checkSensors(estimate.xIn, estimate.yIn, beamHeadingDeg,
                                                       readings_, config_.agreementSigmas, checks_);
-    filter_.resampleIfNeeded();
+    const bool resampled = filter_.resampleIfNeeded();
 
     // only correct odometry in the field frame, from an estimate that's sure of itself and
     // matches the walls
     const bool inFieldFrame = !config_.waitForSetPose || snapshot.resetCount > 0;
-    bool correcting = correctionEnabled_.load() && inFieldFrame && weighed &&
-                      estimate.spreadIn <= config_.maxCorrectionSpreadIn &&
-                      agreeing >= config_.minAgreeingSensors;
+    std::uint32_t blockedBy = 0;
+    if (!correctionEnabled_.load()) blockedBy |= LocalizationStatus::kCorrectionOff;
+    if (!inFieldFrame) blockedBy |= LocalizationStatus::kNoSetPose;
+    if (!weighed) blockedBy |= LocalizationStatus::kNoReadings;
+    if (spinning) blockedBy |= LocalizationStatus::kSpinning;
+    if (!(estimate.spreadIn <= config_.maxCorrectionSpreadIn)) {
+        blockedBy |= LocalizationStatus::kTooSpread;
+    }
+    if (agreeing < config_.minAgreeingSensors) blockedBy |= LocalizationStatus::kTooFewAgree;
     const double correctionXIn = estimate.xIn - raw.xIn;
     const double correctionYIn = estimate.yIn - raw.yIn;
-    if (correcting) {
-        // refused if a setPose() landed since the snapshot; the next update starts over
-        correcting = odometry_.setPositionCorrection(
-            correctionXIn, correctionYIn, config_.maxCorrectionRateInPerS, snapshot.resetCount);
+    // refused if a setPose() landed since the snapshot; the next update starts over
+    if (blockedBy == 0 &&
+        !odometry_.setPositionCorrection(correctionXIn, correctionYIn,
+                                         config_.maxCorrectionRateInPerS, snapshot.resetCount)) {
+        blockedBy |= LocalizationStatus::kRefused;
     }
+    const bool correcting = blockedBy == 0;
 
     estimateXIn_.store(estimate.xIn);
     estimateYIn_.store(estimate.yIn);
@@ -120,6 +128,7 @@ void MonteCarloLocalizer::update() {
     sensorsUsed_.store(used);
     sensorsAgreeing_.store(static_cast<std::uint32_t>(agreeing));
     correcting_.store(correcting);
+    blockedBy_.store(blockedBy);
     if (correcting) {
         correctionXIn_.store(correctionXIn);
         correctionYIn_.store(correctionYIn);
@@ -152,7 +161,12 @@ void MonteCarloLocalizer::update() {
                               .rawPose = raw,
                               .estimate = estimate,
                               .status = status(),
-                              .beams = std::span<const BeamSample>(beams_)});
+                              .beamHeadingDeg = beamHeadingDeg,
+                              .resampled = resampled,
+                              .recovered = static_cast<std::uint32_t>(filter_.lastRecovered()),
+                              .fit = filter_.recoveryFit(),
+                              .beams = std::span<const BeamSample>(beams_),
+                              .particles = std::span<const Particle>(filter_.particles())});
 }
 
 void MonteCarloLocalizer::startTask(std::uint32_t periodMs) {
@@ -177,6 +191,7 @@ LocalizationStatus MonteCarloLocalizer::status() const {
         .sensorsUsed = sensorsUsed_.load(),
         .sensorsAgreeing = sensorsAgreeing_.load(),
         .correcting = correcting_.load(),
+        .blockedBy = blockedBy_.load(),
         .correctionXIn = correctionXIn_.load(),
         .correctionYIn = correctionYIn_.load(),
         .updates = updates_.load(),

@@ -41,7 +41,8 @@ every file's `H` rows carry `samp_us` and `fmt_us`, the microseconds its two tas
 second, and the `mcl` channel carries `us`, each localizer update's time. Both are wall time, so an
 upper bound. The analyzer's Refine tab and the simulator's calibration show them as a share of the
 brain. Check the first real match's numbers before trusting the estimate here: expect the logger
-under a few percent and the localizer around a percent at 300 particles and 20 Hz.
+under a few percent and the localizer around a percent at 300 particles and 20 Hz (0.3 to 0.8 ms an
+update, estimated from the filter's instruction counts; [`docs/TOOLS.md`](TOOLS.md) has the table).
 
 Other robots: `LoggerConfig::recordAtStart` (true by default, one file per program run) and
 `recordUnderCompetition` choose the policy; `Logger::startRecording()`/`stopRecording()` are safe
