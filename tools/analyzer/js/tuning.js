@@ -157,6 +157,10 @@
   function driveSamples(log, system, t0, t1) {
     const chassis = log.get('chassis');
     const odom = log.get('odom');
+    // raw odometry where the log has it: the localizer's correction easing in moves the corrected
+    // pose at up to 4in/s with no volts behind it, which reads as motion
+    const xs = odom.has('raw_x') ? odom.cols.raw_x : odom.cols.x;
+    const ys = odom.has('raw_y') ? odom.cols.raw_y : odom.cols.y;
     const [i0, i1] = odom.range(t0, t1);
     const out = [];
     let along = 0;
@@ -173,8 +177,8 @@
       const s = chassis.cols.strafe_v[j];
       const r = chassis.cols.turn_v[j];
       const clipped = Math.abs(f) + Math.abs(s) + Math.abs(r) > 12;
-      const x = odom.cols.x[i];
-      const y = odom.cols.y[i];
+      const x = xs[i];
+      const y = ys[i];
       const h = odom.cols.heading[i];
       if (prev === null) {
         heading = h;

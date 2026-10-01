@@ -33,6 +33,25 @@ struct DistanceSensorConfig {
  * @brief What the localizer thinks, as of its last update
  */
 struct LocalizationStatus {
+    /** blockedBy flag: setCorrectionEnabled(false) */
+    static constexpr std::uint32_t kCorrectionOff = 1u << 0;
+    /** blockedBy flag: no Odometry::setPose() yet (LocalizerConfig::waitForSetPose) */
+    static constexpr std::uint32_t kNoSetPose = 1u << 1;
+    /** blockedBy flag: no sensor had a usable reading */
+    static constexpr std::uint32_t kNoReadings = 1u << 2;
+    /** blockedBy flag: the particles were too spread out (LocalizerConfig::maxCorrectionSpreadIn)
+     */
+    static constexpr std::uint32_t kTooSpread = 1u << 3;
+    /** blockedBy flag: too few sensors agreed with the map (LocalizerConfig::minAgreeingSensors) */
+    static constexpr std::uint32_t kTooFewAgree = 1u << 4;
+    /** blockedBy flag: odometry turned it down, since a setPose() landed during the update */
+    static constexpr std::uint32_t kRefused = 1u << 5;
+    /**
+     * blockedBy flag: turning faster than LocalizerConfig::maxTurnRateDegPerS, so every reading was
+     * skipped. Comes with kNoReadings
+     */
+    static constexpr std::uint32_t kSpinning = 1u << 6;
+
     /** the particles' weighted mean, with odometry's heading */
     odom::Pose estimate;
 
@@ -50,6 +69,9 @@ struct LocalizationStatus {
 
     /** whether the last update passed every check and set odometry's correction */
     bool correcting = false;
+
+    /** why the last update didn't correct odometry: the k* flags above. 0 when it did */
+    std::uint32_t blockedBy = 0;
 
     /** the correction odometry is easing toward, in inches: how far off raw odometry is */
     double correctionXIn = 0.0;
@@ -108,8 +130,29 @@ struct LocalizerUpdate {
     /** the same fields status() returns, as of this update */
     LocalizationStatus status;
 
+    /**
+     * the heading the beams were cast at, in degrees: odometry's, wound back by
+     * LocalizerConfig::sensorLatencyMs of turning
+     */
+    double beamHeadingDeg = 0.0;
+
+    /** whether this update resampled the particles */
+    bool resampled = false;
+
+    /** how many particles recovery replaced with fresh ones this update */
+    std::uint32_t recovered = 0;
+
+    /** how well the particles explained this update's readings, and recovery's averages of it */
+    RecoveryFit fit;
+
     /** one per sensor, in the order the localizer was given them. Valid during the call only */
     std::span<const BeamSample> beams;
+
+    /**
+     * the particles, as this update left them (after resampling). Valid during the call only.
+     * sampleParticles() picks a few that stand for them all
+     */
+    std::span<const Particle> particles;
 };
 
 /**
@@ -287,6 +330,7 @@ private:
     std::atomic<std::uint32_t> sensorsUsed_{0};
     std::atomic<std::uint32_t> sensorsAgreeing_{0};
     std::atomic<bool> correcting_{false};
+    std::atomic<std::uint32_t> blockedBy_{0};
     std::atomic<double> correctionXIn_{0.0};
     std::atomic<double> correctionYIn_{0.0};
     std::atomic<std::uint32_t> updates_{0};

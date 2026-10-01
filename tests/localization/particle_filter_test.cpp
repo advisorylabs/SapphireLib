@@ -388,6 +388,54 @@ void testWeighMatchesTheExactModel() {
     }
 }
 
+void testSampleParticlesFollowsTheWeights() {
+    // ten particles, one carrying half the weight: half the picks land on it, and the rest are
+    // spread evenly over the others in order
+    std::vector<Particle> particles;
+    for (int i = 0; i < 10; ++i) {
+        particles.push_back({.xIn = static_cast<double>(i), .yIn = 0, .weight = 0.5 / 9});
+    }
+    particles[3].weight = 0.5;
+    std::array<Particle, 8> picks{};
+    sampleParticles(particles, picks);
+    int heavy = 0;
+    for (std::size_t j = 0; j < picks.size(); ++j) {
+        if (picks[j].xIn == 3.0) ++heavy;
+        if (j > 0) assert(picks[j].xIn >= picks[j - 1].xIn);
+    }
+    assert(heavy == 4);
+
+    // equal weights: evenly spaced through the cloud
+    for (Particle& p : particles) p.weight = 0.1;
+    std::array<Particle, 5> even{};
+    sampleParticles(particles, even);
+    for (std::size_t j = 0; j < even.size(); ++j) {
+        expectNear(even[j].xIn, 2.0 * static_cast<double>(j), 0, "evenly spaced picks");
+    }
+
+    // nothing to pick from leaves the output alone
+    std::array<Particle, 2> untouched{Particle{.xIn = 7}, Particle{.xIn = 8}};
+    sampleParticles(std::span<const Particle>(), untouched);
+    expectNear(untouched[0].xIn, 7, 0, "empty input leaves the output alone");
+}
+
+void testRecoveryFitReportsTheLatestFit() {
+    // the first weigh primes both averages to its fit; the cloud sits on the truth, so the fit is
+    // high. Then a bump: the next fit drops, the fast average follows it and the slow one doesn't
+    const FieldMap map = FieldMap::centered();
+    ParticleFilter filter(map, fourSensors(), {.seed = 4});
+    filter.reset(0, 0, 0.5);
+    filter.weigh(0, readingsFrom(map, fourSensors(), 0, 0, 0, nullptr));
+    const RecoveryFit first = filter.recoveryFit();
+    assert(first.latest > 0.3 && first.latest <= 1.0);
+    expectNear(first.fast, first.latest, 1e-15, "fast primed to the first fit");
+    expectNear(first.slow, first.latest, 1e-15, "slow primed to the first fit");
+    filter.weigh(0, readingsFrom(map, fourSensors(), 8, 0, 0, nullptr));
+    const RecoveryFit bumped = filter.recoveryFit();
+    assert(bumped.latest < 0.5 * first.latest);
+    assert(bumped.fast < first.fast && bumped.slow < first.slow && bumped.fast < bumped.slow);
+}
+
 void testGoldenRun() {
     // a fixed, seeded sequence. The JavaScript port must land on the same numbers
     const FieldMap map = FieldMap::centered();
@@ -434,6 +482,8 @@ int main() {
     testBlockedSensorDoesNotDragTheEstimate();
     testRecoveryAfterABump();
     testWeighMatchesTheExactModel();
+    testSampleParticlesFollowsTheWeights();
+    testRecoveryFitReportsTheLatestFit();
     testGoldenRun();
     std::printf("particle_filter_test: all tests passed\n");
     return 0;
