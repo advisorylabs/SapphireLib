@@ -11,6 +11,7 @@
 #include "pros/rtos.hpp"
 #include "sapphirelib/localization/field_map.hpp"
 #include "sapphirelib/localization/localizer_config.hpp"
+#include "sapphirelib/localization/mount_calibration.hpp"
 #include "sapphirelib/localization/particle_filter.hpp"
 #include "sapphirelib/localization/sensor_model.hpp"
 #include "sapphirelib/odom/odometry.hpp"
@@ -279,9 +280,65 @@ public:
     const LocalizerConfig& config() const;
 
     /**
-     * @brief Get the sensors' mounts, in the order given to the constructor
+     * @brief Get the sensors' mounts, in the order given to the constructor. Safe to call from any
+     * task
+     *
+     * The ones the last setSensorMounts() gave, or the constructor's
      */
-    const std::vector<DistanceSensorMount>& sensorMounts() const;
+    std::vector<DistanceSensorMount> sensorMounts() const;
+
+    /**
+     * @brief Move the sensors, e.g. to mounts a calibration found. Safe to call from any task
+     *
+     * Takes effect on the next update(). calibrateSensorMounts() calls this itself
+     *
+     * @param mounts one per sensor, in the order given to the constructor
+     * @return false, changing nothing, if there's a different number of them
+     */
+    bool setSensorMounts(std::vector<DistanceSensorMount> mounts);
+
+    /**
+     * @brief Find where each distance sensor really sits by spinning the robot in place, and use
+     * those mounts from the next update on
+     *
+     * Spins one turn one way and one back (MountCalibrationConfig::turns) at about 45 deg/s,
+     * reading every sensor against odometry's record of the spin, then fits the robot's place on
+     * the field and each sensor's offset along its beam (and sideways, when the readings pin it
+     * down) against the map's perimeter walls: fitSensorMounts(). Every calibrated sensor's
+     * mount is applied with setSensorMounts(), as Odometry::setConfig() applies a tracking wheel
+     * offset calibration; the rest are left as they were. Nothing is saved: copy the logged
+     * mounts into your code to keep them
+     *
+     * Where to spin it: anywhere the walls are in reach and in view, but at least one sensor has to
+     * see both walls of a pair at some point in the spin, since that's what tells the robot's
+     * distance to the walls apart from a sensor's offset. The V5 Distance Sensor reaches 78 in and
+     * the walls are 70 in from the middle, so set the robot on the line halfway between two
+     * opposite walls, within about a foot of it, anywhere along it, facing any way. Keep the
+     * sensors' views of the walls clear: readings off anything else are thrown out, but a sensor
+     * that only ever sees something flat in front of a wall can't be told from one seeing the
+     * wall. Calibrate the tracking wheel offsets first: odometry's record of the spin is what the
+     * fit trusts for how the robot turned and drifted
+     *
+     * Blocks for the whole spin, about 20 s, and the fit, under a second. Run it on its own task,
+     * with nothing else driving the chassis. The localizer keeps running meanwhile
+     *
+     * @param setSpin spins the chassis in place, given a turn command from -1 to 1. Called with 0
+     * to stop
+     * @param config the spin, and what counts as calibrated
+     * @return MountCalibrationResult what each sensor's mount came to. error says why not when
+     * none was calibrated, the spin didn't finish (blocked: it gives up after three times as long
+     * as it should take), or a calibration was already running
+     *
+     * @b Example
+     * @code {.cpp}
+     * pros::Task([] {
+     *     localizer().calibrateSensorMounts(
+     *         [](double turn) { drivetrain().holonomicVolts(0, 0, turn * 12.0); });
+     * });
+     * @endcode
+     */
+    MountCalibrationResult calibrateSensorMounts(std::function<void(double)> setSpin,
+                                                 const MountCalibrationConfig& config = {});
 
     /**
      * @brief Call a function at the end of every update, on the localizer's task
@@ -320,6 +377,13 @@ private:
 
     std::atomic<bool> correctionEnabled_;
     std::atomic<bool> relocalizeRequested_{false};
+
+    // the mounts setSensorMounts() last gave, which update() hands the filter (only update()
+    // touches the filter) the next time it sees mountsChanged_
+    mutable pros::Mutex mountsMutex_;
+    std::vector<DistanceSensorMount> mounts_; // under mountsMutex_
+    std::atomic<bool> mountsChanged_{false};
+    std::atomic<bool> calibratingMounts_{false};
 
     // see status()
     std::atomic<double> estimateXIn_{0.0};

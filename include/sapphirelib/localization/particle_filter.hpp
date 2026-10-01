@@ -315,6 +315,15 @@ public:
     const std::vector<DistanceSensorMount>& sensors() const;
 
     /**
+     * @brief Move the sensors, e.g. after calibrating their mounts (fitSensorMounts()). The next
+     * weigh() casts from the new mounts
+     *
+     * @param sensors one per sensor, in the order the constructor took them
+     * @return false, changing nothing, if there's a different number of them
+     */
+    bool setSensors(std::span<const DistanceSensorMount> sensors);
+
+    /**
      * @brief Get the settings
      */
     const ParticleFilterConfig& config() const;
