@@ -209,6 +209,8 @@ public:
     /**
      * @brief Move every particle by one odometry step, plus noise
      *
+     * The noise comes from Rng::fastGaussian(), a lookup table, since this draws two per particle
+     *
      * @param dxIn how far odometry moved in x since the last predict(), in inches
      * @param dyIn how far odometry moved in y, in inches
      * @param turnedDeg how far the robot turned, in degrees. Only its size matters
@@ -217,6 +219,9 @@ public:
 
     /**
      * @brief Weigh every particle by how well it explains the sensor readings
+     *
+     * Every particle shares the heading, so each sensor's rays are cast with a ParallelRayCaster
+     * and scored with a ReadingScorer: no division, exp() or log() per particle per sensor
      *
      * @param headingDeg the robot's heading, in degrees clockwise from +y
      * @param readings one per sensor, in the order they were given to the constructor. Invalid
@@ -297,12 +302,18 @@ private:
 
     std::vector<Particle> particles_;
 
+    // each particle's weight as a log, kept between updates so weigh() needn't take a log per
+    // particle. Unused while uniformWeights_, when every weight is 1 / particleCount
+    std::vector<double> logWeights_;
+    bool uniformWeights_ = true;
+
     // scratch space, sized once so no update allocates
     std::vector<Particle> resampled_;
-    std::vector<double> logWeights_;
     std::vector<double> logLikelihoods_;
     std::vector<SensorRay> rays_;
-    std::vector<double> sigmas_;
+    std::vector<ParallelRayCaster> casters_;
+    std::vector<ReadingScorer> scorers_;
+    std::vector<std::size_t> usedSensors_;
 
     // recovery's running averages of how well particles explain one reading
     double slowAverage_ = 0.0;

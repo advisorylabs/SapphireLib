@@ -5,6 +5,8 @@
 #include <limits>
 #include <utility>
 
+#include "sapphirelib/util/lookup_table.hpp"
+
 namespace sapphirelib::localization {
 
 namespace {
@@ -12,6 +14,14 @@ namespace {
 // added to the log weight of a particle outside the walls, where the robot can't be. Finite, so a
 // cloud that's all outside (odometry not in the field frame yet) is left alone instead of breaking
 constexpr double kOutsideLogPenalty = -30.0;
+
+// e^x for recovery's fit, which only ever takes x <= 0: 64 samples to the unit, so within
+// (1/64)^2 / 8 = 3.1e-5 of exp(x), relatively. Below -32 a particle explains the readings
+// e^-32 = 1.3e-14 as well as a perfect one, and counts as 0
+const LookupTable& fitExpTable() {
+    static const LookupTable table(-32.0, 0.0, 64, [](double x) { return std::exp(x); });
+    return table;
+}
 
 } // namespace
 
@@ -25,7 +35,11 @@ ParticleFilter::ParticleFilter(FieldMap map, std::vector<DistanceSensorMount> se
     logWeights_.resize(count);
     logLikelihoods_.resize(count);
     rays_.resize(sensors_.size());
-    sigmas_.resize(sensors_.size());
+    casters_.resize(sensors_.size());
+    scorers_.resize(sensors_.size());
+    usedSensors_.reserve(sensors_.size());
+    // aim each caster once, so weigh() never allocates
+    for (ParallelRayCaster& caster : casters_) caster.aim(map_, 0.0, 1.0);
 }
 
 void ParticleFilter::reset(double xIn, double yIn, double spreadIn) {
@@ -35,6 +49,7 @@ void ParticleFilter::reset(double xIn, double yIn, double spreadIn) {
         p.yIn = yIn + spreadIn * rng_.gaussian();
         p.weight = weight;
     }
+    uniformWeights_ = true;
     averagesPrimed_ = false;
     lastRecovered_ = 0;
 }
@@ -48,6 +63,7 @@ void ParticleFilter::resetUniform() {
         p.yIn = map_.minYIn() + rng_.uniform() * height;
         p.weight = weight;
     }
+    uniformWeights_ = true;
     averagesPrimed_ = false;
     lastRecovered_ = 0;
 }
@@ -57,62 +73,72 @@ void ParticleFilter::predict(double dxIn, double dyIn, double turnedDeg) {
     const double sigmaIn = noise.baseIn + noise.perInch * std::hypot(dxIn, dyIn) +
                            noise.perDegreeIn * std::fabs(turnedDeg);
     for (Particle& p : particles_) {
-        p.xIn += dxIn + sigmaIn * rng_.gaussian();
-        p.yIn += dyIn + sigmaIn * rng_.gaussian();
+        p.xIn += dxIn + sigmaIn * rng_.fastGaussian();
+        p.yIn += dyIn + sigmaIn * rng_.fastGaussian();
     }
 }
 
 bool ParticleFilter::weigh(double headingDeg, std::span<const DistanceReading> readings) {
     const std::size_t sensorCount = std::min(readings.size(), sensors_.size());
 
-    // every particle shares the heading, so each sensor's offset and direction are worked out once
-    std::size_t validCount = 0;
+    // every particle shares the heading, so each sensor's offset, direction and scoring are worked
+    // out once
+    usedSensors_.clear();
     double logPerfectFit = 0.0;
     for (std::size_t s = 0; s < sensorCount; ++s) {
         if (!readings[s].valid) continue;
         rays_[s] = sensorRay(0.0, 0.0, headingDeg, sensors_[s]);
-        sigmas_[s] = readingSigmaIn(config_.beam, readings[s]);
+        casters_[s].aim(map_, rays_[s].dirX, rays_[s].dirY);
+        scorers_[s] = ReadingScorer(readings[s].distanceIn,
+                                    readingSigmaIn(config_.beam, readings[s]), config_.beam);
         // the most this reading could score, from a particle exactly where it says
-        logPerfectFit += readingLogLikelihood(readings[s].distanceIn, readings[s].distanceIn,
-                                              sigmas_[s], config_.beam);
-        ++validCount;
+        logPerfectFit += scorers_[s].logLikelihood(readings[s].distanceIn);
+        usedSensors_.push_back(s);
     }
+    const std::size_t validCount = usedSensors_.size();
     if (validCount == 0) return false;
 
+    // in logs, so four sensors' small densities multiplied together can't underflow
+    const double uniformLogWeight = -std::log(static_cast<double>(particles_.size()));
     double maxLogWeight = -std::numeric_limits<double>::infinity();
     for (std::size_t i = 0; i < particles_.size(); ++i) {
         const Particle& p = particles_[i];
         double logLikelihood = map_.contains(p.xIn, p.yIn) ? 0.0 : kOutsideLogPenalty;
-        for (std::size_t s = 0; s < sensorCount; ++s) {
-            if (!readings[s].valid) continue;
+        for (const std::size_t s : usedSensors_) {
             const SensorRay& ray = rays_[s];
-            const double expectedIn =
-                map_.castRayIn(p.xIn + ray.xIn, p.yIn + ray.yIn, ray.dirX, ray.dirY);
             logLikelihood +=
-                readingLogLikelihood(readings[s].distanceIn, expectedIn, sigmas_[s], config_.beam);
+                scorers_[s].logLikelihood(casters_[s].castIn(p.xIn + ray.xIn, p.yIn + ray.yIn));
         }
         logLikelihoods_[i] = logLikelihood;
-        // in logs, so four sensors' small densities multiplied together can't underflow
-        logWeights_[i] = std::log(p.weight) + logLikelihood;
+        logWeights_[i] = (uniformWeights_ ? uniformLogWeight : logWeights_[i]) + logLikelihood;
         maxLogWeight = std::max(maxLogWeight, logWeights_[i]);
     }
 
+    // the weights, and alongside them recovery's average: how well the particles explain the
+    // readings, as a fraction of a perfect fit, per reading. Against a perfect fit because a far
+    // reading's likelihood is lower however right it is (its noise is wider), and per reading so a
+    // sensor dropping in or out doesn't look like the match suddenly getting worse or better
+    const LookupTable& fitExp = fitExpTable();
+    const double inverseValid = 1.0 / static_cast<double>(validCount);
     double sum = 0.0;
+    double average = 0.0;
     for (std::size_t i = 0; i < particles_.size(); ++i) {
         particles_[i].weight = std::exp(logWeights_[i] - maxLogWeight);
         sum += particles_[i].weight;
-    }
-    for (Particle& p : particles_) p.weight /= sum;
-
-    // recovery's averages: how well the particles explain the readings, as a fraction of a perfect
-    // fit, per reading. Against a perfect fit because a far reading's likelihood is lower however
-    // right it is (its noise is wider), and per reading so a sensor dropping in or out doesn't
-    // look like the match suddenly getting worse or better
-    double average = 0.0;
-    for (std::size_t i = 0; i < particles_.size(); ++i) {
-        average += std::exp((logLikelihoods_[i] - logPerfectFit) / static_cast<double>(validCount));
+        const double fit = (logLikelihoods_[i] - logPerfectFit) * inverseValid;
+        if (fit > fitExp.minX()) average += fitExp.at(fit);
     }
     average /= static_cast<double>(particles_.size());
+
+    // normalized, and the logs kept to match for the next weigh()
+    const double inverseSum = 1.0 / sum;
+    const double logSum = std::log(sum);
+    for (std::size_t i = 0; i < particles_.size(); ++i) {
+        particles_[i].weight *= inverseSum;
+        logWeights_[i] = logWeights_[i] - maxLogWeight - logSum;
+    }
+    uniformWeights_ = false;
+
     if (!averagesPrimed_) {
         slowAverage_ = average;
         fastAverage_ = average;
@@ -189,6 +215,7 @@ bool ParticleFilter::resampleIfNeeded() {
     const double weight = 1.0 / static_cast<double>(count);
     for (Particle& p : resampled_) p.weight = weight;
     std::swap(particles_, resampled_);
+    uniformWeights_ = true;
     lastRecovered_ = recovered;
     return true;
 }

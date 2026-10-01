@@ -19,6 +19,15 @@ constexpr std::int32_t kMinRangeMm = 20;
 // confidence only means something past this distance
 constexpr std::int32_t kConfidenceMinMm = 200;
 
+// softplus(x) = log(1 + e^x), for ReadingScorer: 64 samples to the unit, so off by at most
+// (1/64)^2 / 32 = 7.6e-6 (softplus'' is at most 1/4). Past +-16 it's within 1.2e-7 of 0 or x.
+// Built by the first ReadingScorer, at the first localizer update
+const LookupTable& softplusTable() {
+    static const LookupTable table(-16.0, 16.0, 64,
+                                   [](double x) { return std::log1p(std::exp(x)); });
+    return table;
+}
+
 } // namespace
 
 SensorRay sensorRay(double robotXIn, double robotYIn, double headingDeg,
@@ -50,6 +59,16 @@ double readingLogLikelihood(double measuredIn, double expectedIn, double sigmaIn
     const double density =
         (1.0 - beam.outlierProbability) * hit + beam.outlierProbability / beam.maxRangeIn;
     return std::log(density);
+}
+
+ReadingScorer::ReadingScorer(double measuredIn, double sigmaIn, const BeamModel& beam)
+    : measuredIn_(measuredIn), invSigma_(1.0 / sigmaIn), softplus_(&softplusTable()) {
+    // readingLogLikelihood()'s mixture, peak * exp(-z^2 / 2) + floor, as logs
+    const double peak = (1.0 - beam.outlierProbability) * kInvSqrtTwoPi / sigmaIn;
+    const double floor = beam.outlierProbability / beam.maxRangeIn;
+    noOutliers_ = !(floor > 0.0);
+    logFloor_ = noOutliers_ ? 0.0 : std::log(floor);
+    logPeak_ = noOutliers_ ? std::log(peak) : std::log(peak) - logFloor_;
 }
 
 DistanceReading distanceReadingFromMm(std::int32_t millimeters, std::int32_t confidence,
