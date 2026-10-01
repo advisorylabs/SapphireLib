@@ -311,6 +311,30 @@ defaults shipped here.
     dropout, plus a pit session with an Auto-Tune run) loads on start, so every view can be seen
     without a robot.
 
+- [x] Recording on demand: `Logger::startRecording()`/`stopRecording()` (one file per recording,
+      closed on stop so the card is safe to pull), a Start log / Stop log button on the Home page, and
+      `RecordingPolicy`: record from start (the library default), or on the button, and on its own
+      whenever competition control is connected (closed 5 s after it's unplugged, so a tether blip
+      doesn't split a match). Between recordings nothing is recorded or counted as dropped. The
+      logger measures its own CPU (`samp_us`/`fmt_us` in `H` rows), and the localizer its update time
+      (`mcl.us`). 96671H's robot records on the button and in matches. Policy unit-tested in
+      `tests/telemetry/recording_policy_test.cpp`.
+- [x] `TUNE.CFG`: tuned values on the SD card, loaded at startup, so the tools' results reach the
+      robot without a rebuild. `tuning::parseTuneProfile()` checks every line against the program's
+      schema and `LocalizerConfig`'s ranges (`localization/localizer_config.hpp`, every field by
+      name), and a file with any bad line is rejected whole; the code's values stay the fallback.
+      96671H's robot applies `pid.*`, `model.*`, `lift.gravityVolts` and `mcl.*`, shows the
+      revision on the Home page, and stamps it, with the localizer's full settings and sensor
+      mounts, into every log's `#meta`. The tools read and write it (`tools/analyzer/js/tunefile.js`,
+      held to the same golden file), keeping each other's lines and a changelog.
+- [x] PID refinement from real motions: the analyzer's Refine tab replays every logged step response
+      through the axis model with the gains it ran, identifies the inertia, damping and delay that
+      reproduce what the robot did (closed-loop identification), designs again with the robot's own
+      pole placement, and proposes new gains with the reasons and the predicted effect on the same
+      steps, capped at 2× per round; it tells a model that's off from steps the model can't explain.
+      A run-by-run history shows each controller's gains and results and what changed them
+      (`TUNE.CFG` revision, Auto-Tune, the PID page, a restart, a rebuild). Tested on logs of robots
+      whose true model is known. See [`docs/TUNING.md`](TUNING.md).
 - [x] GUI refresh-cost pass: the default pages were cheap individually but the refresh model wasn't:
       every registered page's `update()` ran on every tick regardless of which tab was showing, and each
       one rewrote its labels unconditionally. `lv_label_set_text()` reallocates and invalidates even when
@@ -717,6 +741,14 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       that writes the `LocalizerConfig{...}` to paste. Its Node tests (in CI) check the claims it
       makes: every routine finishes within an inch and closer on average than on odometry alone,
       worn wheels and bumps are corrected, and unmapped elements are ignored.
+- [x] MCL auto-tuning: the simulator's Tune tab searches `LocalizerConfig` (coordinate pattern
+      search, each candidate replaying the same recorded paths open loop so only the settings differ,
+      changes kept only when better by more than a standard error, the winner checked on unseen
+      seeds), on the simulator's scenarios or on a world calibrated from the robot's logs: the robot
+      logs every update's readings against the map (`mcl.beams`), and `mclcal.js` measures sensor
+      noise, blocked and missing readings, mount biases and tracking wheel scale from them, while the
+      sensor delay is matched by simulating the robot's own paths. Results go to `TUNE.CFG`. Tested
+      against simulated logs of worlds the calibration isn't told about.
 
 **Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
 in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts

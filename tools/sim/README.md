@@ -65,8 +65,15 @@ odometry. The chart shows the last minute of the same errors.
   error, slip and offset error, IMU drift and scale error, distance sensor noise, delay and dropouts.
   And the chassis model (kS, kV, kA per axis, plus delay) that Auto-Tune would measure. **Auto-Tune**
   designs gains from it with the robot's pole placement.
-- **MCL**: every `LocalizerConfig` setting that matters, live. It writes the `LocalizerConfig{...}`
-  to paste into `localizer()` in `src/robot/devices.cpp`, listing only what you changed.
+- **MCL**: every `LocalizerConfig` setting that matters, live. It writes what you changed two ways:
+  as `TUNE.CFG` lines (the robot loads them from its SD card at startup) and as the
+  `LocalizerConfig{...}` for `localizerSettings()` in `src/robot/tune.cpp`.
+- **Tune**: the localizer, auto-tuned. A search over `LocalizerConfig` on a suite of runs: the
+  simulator's scenarios, or **your robot**, a world calibrated from the robot's own logs (open the
+  `SL*.CSV` files from its card; **Demo** uses a simulated robot's) with the paths it really drove
+  replayed. Every candidate replays the same paths with the same noise, the winner is checked on
+  runs it never saw, and **Save TUNE.CFG** writes the next revision of the robot's tuning file,
+  keeping the analyzer's PID lines. How it all works: [`docs/TUNING.md`](../../docs/TUNING.md).
 
 ## Showing it to someone
 
@@ -92,7 +99,12 @@ also load under Node, for the tests:
 | `robot.js` | The robot program: `Imu`, `Odometry`, `MonteCarloLocalizer`, the drivetrain and its motions (generators that yield where the C++ calls `pros::delay(10)`), and Auto-Tune's gain design |
 | `routines.js` | The autonomous routines, written like `src/robot/autons.cpp`. Add your own here |
 | `sim.js` | A world and a robot, run in 10 ms ticks, with the error history the page charts |
-| `render.js`, `app.js` | The canvas drawing, and the page |
+| `recorder.js` | A run, logged the way the robot logs it (`odom`, `chassis`, `mcl`, `mcl.beams`, the `#meta` lines) |
+| `tuner.js` | The MCL auto-tuner: the cases, open-loop replays, the search, the holdout check, and calibrating the world from logs |
+| `render.js`, `app.js`, `tuneview.js` | The canvas drawing, the page, and the Tune tab |
+
+It also loads four of the analyzer's files: `slt.js` (reading logs), `demo.js` (writing them),
+`tunefile.js` (`TUNE.CFG`) and `mclcal.js` (measuring the localizer's world from logs).
 
 The simulated chassis is the three axis models Auto-Tune measures, with the six motors and the
 Asterisk center wheels folded in, as they are when Auto-Tune measures the whole chassis at once.
@@ -110,6 +122,9 @@ the claims the page makes: every routine finishes within an inch and is closer o
 than without, worn wheels and bumps are corrected, unmapped elements are shrugged off, nothing is
 corrected before `setPose()`, a closed `followPath()` lap drives the whole lap, a spin in place leaves
 odometry still (so the simulated tracking wheels follow `OdometryConfig`'s sign), and stepping through
-an update by hand gives the same run as ticking. Change a port's C++ side, change the port.
+an update by hand gives the same run as ticking. `tuner.test.js` checks the tuner on worlds it can't
+see: calibration finds the noise, blocked and missing readings, wheel scale and a mis-measured mount
+of a world it's only given logs of, the matched sensor delay lands near the truth, and a search
+started from bad settings climbs out and holds on seeds it never saw. Change a port's C++ side, change the port.
 
 Team 96671H: Hitmen
