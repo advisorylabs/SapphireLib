@@ -70,6 +70,7 @@
       <button role="tab" data-tab="events">Events</button>
       <button role="tab" data-tab="robot">Robot</button>
       <button role="tab" data-tab="mcl">MCL</button>
+      <button role="tab" data-tab="tune">Tune</button>
     </nav>
 
     <!-- Drive -->
@@ -213,20 +214,96 @@
         <div class="sliders" id="mcl-sliders"></div>
         <div class="checks" id="mcl-checks"></div>
         <div class="row"><button class="btn" id="mcl-defaults-btn" type="button">Back to defaults</button></div>
-        <p class="hint">Everything here is a field of <code>LocalizerConfig</code> or <code>ParticleFilterConfig</code>. Find settings you like here, then copy them into <code>localizer()</code> in <code>src/robot/devices.cpp</code>:</p>
+        <p class="hint">Everything here is a field of <code>LocalizerConfig</code> or <code>ParticleFilterConfig</code>. Find settings you like here (or let the Tune tab find them), then give them to the robot as <code>TUNE.CFG</code> lines on its SD card, no rebuild needed:</p>
+        <pre class="code" id="mcl-cfg"></pre>
+        <p class="hint">or as C++, for the <code>LocalizerConfig</code> in <code>localizerSettings()</code> in <code>src/robot/tune.cpp</code>:</p>
         <pre class="code" id="mcl-code"></pre>
+      </section>
+    </div>
+
+    <!-- Tune -->
+    <div class="tab-body" data-body="tune" hidden>
+      <section class="panel">
+        <header><h3>Auto-tune the localizer</h3></header>
+        <p class="hint">Searches <code>LocalizerConfig</code> for the settings that keep the corrected pose closest to where the robot really is, across simulated runs, starting from the MCL tab's settings. Every candidate replays the same paths with the same noise, so only the settings differ, and the winner is checked on runs it never saw.</p>
+        <div class="segments" id="tune-suite" role="group" aria-label="Suite">
+          <button type="button" data-value="standard" aria-pressed="true">Standard suite</button>
+          <button type="button" data-value="robot" aria-pressed="false">Your robot</button>
+        </div>
+        <p class="hint" id="tune-suite-hint"></p>
+        <div class="checks" id="tune-cases"></div>
+        <details class="tune-more">
+          <summary>Settings to search</summary>
+          <div class="checks" id="tune-params"></div>
+        </details>
+        <div class="row wrap">
+          <select class="select" id="tune-budget" aria-label="How long to search"></select>
+          <button class="btn primary" id="tune-start-btn" type="button">Start search</button>
+        </div>
+        <div class="progress" id="tune-bar" role="presentation"><span></span></div>
+        <p class="hint" id="tune-progress-text"></p>
+        <canvas id="tune-chart" class="tune-chart" aria-label="Score of every try, and the best so far; 1.0 is the starting settings"></canvas>
+      </section>
+
+      <section class="panel" id="tune-result" hidden>
+        <header><h3>What the search found</h3></header>
+        <p class="verdict" id="tune-verdict"></p>
+        <div class="table-wrap"><table class="data-table" id="tune-changes"></table></div>
+        <div class="table-wrap"><table class="data-table wrap-names" id="tune-percase"></table></div>
+        <p class="hint">Errors are the corrected pose's distance from the truth, in inches, averaged over the search's seeds; "New seeds" are the holdout runs.</p>
+        <div class="row wrap">
+          <button class="btn" id="tune-use-btn" type="button">Use in the simulator</button>
+          <button class="btn primary" id="tune-save-btn" type="button">Save TUNE.CFG</button>
+        </div>
+        <p class="result" id="tune-save-status" hidden></p>
+      </section>
+
+      <section class="panel">
+        <header><h3>Calibrate from the robot's logs</h3></header>
+        <p class="hint">Copy the <code>sl</code> folder off the robot's SD card and open its logs (and its <code>TUNE.CFG</code>, if it has one). The robot's own readings say how noisy its sensors really are, how often they're blocked or read nothing, how old a reading is, whether a sensor's mount is off, and how far off the tracking wheels' scale is. The simulated robot gets those errors, its real paths become cases, and the search runs on that: "Your robot".</p>
+        <div class="drop" id="tune-drop">
+          <div class="row wrap">
+            <button class="btn" id="tune-open-btn" type="button">Open logs…</button>
+            <button class="btn" id="tune-demo-btn" type="button">Demo: a simulated robot's logs</button>
+          </div>
+          <span class="hint">or drop <code>SL*.CSV</code> files here</span>
+          <input type="file" id="tune-files" multiple accept=".csv,.CSV,.cfg,.CFG" hidden>
+        </div>
+        <p class="result warn" id="tune-cal-problems" hidden></p>
+        <div id="tune-cal" hidden>
+          <p class="hint" id="tune-cal-status"></p>
+          <div class="table-wrap"><table class="data-table wrap-names" id="tune-cal-table"></table></div>
+          <div class="row"><button class="btn primary" id="tune-use-world-btn" type="button" hidden>Use this world</button></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header><h3>TUNE.CFG</h3><span class="hint">What the robot loads at startup</span></header>
+        <p class="hint" id="tune-file-name"></p>
+        <pre class="code" id="tune-file-mcl"></pre>
+        <ul class="changelog" id="tune-file-log" hidden></ul>
+        <div class="row"><button class="btn" id="tune-from-file-btn" type="button">Start from its settings</button></div>
+        <p class="result" id="tune-file-status" hidden></p>
+        <p class="hint">Saving keeps every other line (the analyzer's PID gains), adds one to the revision, and notes what changed at the bottom. The robot's Home page shows the revision it loaded, and every log records it.</p>
       </section>
     </div>
   </aside>
 </main>
 
 <script src="../analyzer/js/model.js"></script>
+<script src="../analyzer/js/slt.js"></script>
+<script src="../analyzer/js/demo.js"></script>
+<script src="../analyzer/js/tunefile.js"></script>
+<script src="../analyzer/js/mclcal.js"></script>
 <script src="js/mcl.js"></script>
 <script src="js/world.js"></script>
 <script src="js/robot.js"></script>
 <script src="js/routines.js"></script>
 <script src="js/sim.js"></script>
+<script src="js/recorder.js"></script>
+<script src="js/tuner.js"></script>
 <script src="js/render.js"></script>
+<script src="js/tuneview.js"></script>
 <script src="js/app.js"></script>
 <script>SIM.app.start();</script>
 </body>

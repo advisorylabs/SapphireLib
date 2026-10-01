@@ -265,16 +265,20 @@
       const spinning = Math.abs(turnRateDegPerS) > config.maxTurnRateDegPerS;
 
       const readings = [];
+      const closing = [];
       let used = 0;
       for (let s = 0; s < this.sensors.length; ++s) {
         const raw = this.sensors[s]();
         let r = L.distanceReadingFromMm(raw.mm, raw.confidence, config.minConfidence, config.filter.beam);
         if (spinning) r.valid = false;
         const ray = L.sensorRay(0.0, 0.0, beamHeadingDeg, this.filter.sensors[s]);
-        r = L.compensateLatency(r, velocityX * ray.dirX + velocityY * ray.dirY, latencyS);
+        const closingSpeed = velocityX * ray.dirX + velocityY * ray.dirY;
+        r = L.compensateLatency(r, closingSpeed, latencyS);
         readings.push(r);
+        closing.push(closingSpeed);
         if (r.valid) ++used;
       }
+      w.closing = closing;
 
       w.weighed = this.filter.weigh(beamHeadingDeg, readings);
       w.estimate = this.filter.estimate();
@@ -323,6 +327,29 @@
       }
       st.updates++;
       this.phase = 'idle';
+    }
+
+    /**
+     * The last update's BeamSamples, as the C++ hands its update callback:
+     * each sensor's reading (NaN if unused), what the map says it should read
+     * from the estimate (worked out for every sensor), and its closing speed.
+     * What the robot logs in "mcl.beams".
+     */
+    beamSamples() {
+      const w = this.work;
+      if (!w || !w.readings || !w.estimate) return [];
+      return this.filter.sensors.map((mount, s) => {
+        const r = w.readings[s];
+        let expectedIn;
+        if (w.checks[s] && w.checks[s].used) {
+          expectedIn = w.checks[s].expectedIn;
+        } else {
+          const ray = L.sensorRay(w.estimate.xIn, w.estimate.yIn, w.beamHeadingDeg, mount);
+          expectedIn = this.filter.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+        }
+        return { used: r.valid, measuredIn: r.valid ? r.distanceIn : NaN, expectedIn,
+          closingSpeedInPerS: w.closing[s] };
+      });
     }
 
     setCorrectionEnabled(enabled) {
@@ -614,7 +641,12 @@
    * src/robot/devices.cpp wires them, against a World.
    */
   class Robot {
-    constructor(world, { odometryConfig, localizer, gains, startPose, mapFor }) {
+    /**
+     * `mounts` is where the robot program believes its distance sensors are
+     * (LocalizerConfig's DistanceSensorConfig mounts); by default exactly
+     * where the world has them. Different ones are a mount measured wrong.
+     */
+    constructor(world, { odometryConfig, localizer, gains, startPose, mapFor, mounts = null }) {
       this.world = world;
       const clock = () => world.timeMs;
       this.clock = clock;
@@ -624,7 +656,7 @@
         horizontal: () => world.horizontalWheelIn(),
       }, odometryConfig, startPose, clock);
       const sensors = world.settings.sensors.map((_, i) => () => world.distanceSensor(i));
-      this.localizer = new MonteCarloLocalizer(this.odometry, sensors, world.settings.sensors, mapFor(),
+      this.localizer = new MonteCarloLocalizer(this.odometry, sensors, mounts || world.settings.sensors, mapFor(),
         localizer, clock);
       this.drivetrain = new Drivetrain(world, this.imu, this.odometry, gains, clock);
       this.localizerPeriodMs = 50;

@@ -20,6 +20,7 @@
   const R = SIM.robot;
   const S = SIM.sim;
   const M = root.SA.model;
+  const TF = root.SA.tunefile;
   const { ROUTINES } = SIM.routines;
 
   const kTickMs = S.kTickMs;
@@ -87,6 +88,7 @@
     buildEvents();
     buildRobot();
     buildMcl();
+    buildTune();
     buildLegend();
     bindField();
     bindKeyboard();
@@ -461,6 +463,7 @@
     ['sensorNoiseScale', 'Distance sensor noise', 0, 5, 0.1, '×', '1 is half the V5 spec (±15mm, ±5%) as one standard deviation'],
     ['sensorDelayMs', 'Distance sensor delay', 0, 100, 1, 'ms', 'On top of its ~30Hz sampling'],
     ['sensorDropoutPct', 'Distance sensor dropouts', 0, 50, 1, '%', 'Readings of "no object"'],
+    ['sensorOutlierPct', 'Distance sensor outliers', 0, 30, 0.5, '%', 'Readings off something nearer than the wall that no map has: a game element, a robot'],
   ];
 
   const sliderSyncers = [];
@@ -496,6 +499,8 @@
       grid.append(el('span', { text: label }));
       for (const term of ['kS', 'kV', 'kA']) {
         const input = el('input', { type: 'number', step: 'any', value: options.world.models[axis][term] });
+        // a calibrated world (Tune tab) can bring the robot's own models
+        sliderSyncers.push(() => { input.value = options.world.models[axis][term]; });
         input.addEventListener('change', () => {
           const value = +input.value;
           if (!Number.isFinite(value) || value < 0) return;
@@ -509,6 +514,7 @@
     }
     grid.append(el('span', { text: 'Delay (s)' }));
     const delay = el('input', { type: 'number', step: 'any', value: options.world.delayS });
+    sliderSyncers.push(() => { delay.value = options.world.delayS; });
     delay.addEventListener('change', () => {
       if (!(+delay.value >= 0)) return;
       options.world.delayS = +delay.value;
@@ -605,7 +611,7 @@
       const robot = sim.robot;
       if (sim.pendingStep) sim.finishLocalizerStep();
       robot.localizer = new R.MonteCarloLocalizer(robot.odometry, sim.world.settings.sensors.map((_, i) => () => sim.world.distanceSensor(i)),
-        sim.world.settings.sensors, sim.localizerMap(), options.localizer, robot.clock);
+        options.localizerMounts || sim.world.settings.sensors, sim.localizerMap(), options.localizer, robot.clock);
       robot.localizer.setCorrectionEnabled(options.correctOdometry);
       robot.localizerPeriodMs = periodMs;
       robot.localizer.update();
@@ -614,37 +620,116 @@
     }, 150);
   }
 
-  /** The non-default settings, as the C++ to paste into localizer(). */
+  /**
+   * The non-default settings two ways: TUNE.CFG lines (the Tune tab saves
+   * them, and the robot loads them without a rebuild), and the C++ for the
+   * LocalizerConfig in localizerSettings() (src/robot/tune.cpp), nested in
+   * declaration order the way designated initializers need.
+   */
   function updateMclCode() {
-    const d = defaultMcl();
-    const c = mclConfig;
-    const num = (v) => (Number.isInteger(v) ? `${v}` : `${+v.toFixed(4)}`);
-    const dbl = (v) => (Number.isInteger(v) ? `${v}.0` : `${+v.toFixed(4)}`);
-    const group = (fields) => fields.filter(Boolean).join(', ');
-    const pick = (path, render) => (getPath(c, path) !== getPath(d, path) ? `.${path.split('.').pop()} = ${render(getPath(c, path))}` : null);
+    const flat = mclFlat();
+    const changed = TF.LOCALIZER_SETTINGS.filter((setting) => flat[setting.key] !== setting.default);
+    const cfg = changed.map((setting) => `mcl.${setting.key}=${TF.num(flat[setting.key])}`);
+    if (flat.periodMs !== TF.DEFAULT_PERIOD_MS) cfg.unshift(`mcl.periodMs=${flat.periodMs}`);
+    $('mcl-cfg').textContent = cfg.length ? cfg.join('\n') : '# the defaults: nothing to add';
 
-    const motion = group([pick('filter.motionNoise.baseIn', dbl), pick('filter.motionNoise.perInch', dbl),
-      pick('filter.motionNoise.perDegreeIn', dbl)]);
-    const beam = group([pick('filter.beam.sigmaFraction', dbl), pick('filter.beam.outlierProbability', dbl)]);
-    const recovery = group([pick('filter.recovery.enabled', String), pick('filter.recovery.triggerRatio', dbl),
-      pick('filter.recovery.radiusIn', dbl)]);
-    const filter = group([
-      pick('filter.particleCount', num),
-      motion && `.motionNoise = {${motion}}`,
-      beam && `.beam = {${beam}}`,
-      recovery && `.recovery = {${recovery}}`,
-    ]);
-    const fields = [
-      filter && `.filter = {${filter}}`,
-      pick('sensorLatencyMs', dbl),
-      pick('waitForSetPose', String),
-      pick('maxCorrectionSpreadIn', dbl),
-      pick('minAgreeingSensors', num),
-      pick('maxCorrectionRateInPerS', dbl),
-    ].filter(Boolean);
-    let code = fields.length ? `LocalizerConfig{\n    ${fields.join(',\n    ')},\n}` : 'LocalizerConfig{}  // the defaults';
-    if (c.periodMs !== d.periodMs) code += `\n\n// in initDevices()\nlocalizer().startTask(${c.periodMs});`;
+    const literal = (setting, value) => {
+      if (['filter.recovery.enabled', 'correctOdometry', 'waitForSetPose'].includes(setting.key)) return value ? 'true' : 'false';
+      if (setting.whole) return String(value);
+      return Number.isInteger(value) ? `${value}.0` : TF.num(value);
+    };
+    // { name, fields: [...] } groups, in the order the structs declare them
+    const tree = { fields: [] };
+    for (const setting of changed) {
+      const parts = setting.key.split('.');
+      let node = tree;
+      for (const part of parts.slice(0, -1)) {
+        let child = node.fields.find((f) => f.name === part && f.fields);
+        if (!child) {
+          child = { name: part, fields: [] };
+          node.fields.push(child);
+        }
+        node = child;
+      }
+      node.fields.push({ name: parts[parts.length - 1], value: literal(setting, flat[setting.key]) });
+    }
+    const render = (node) => node.fields.map((f) => (f.fields ? `.${f.name} = {${render(f)}}` : `.${f.name} = ${f.value}`)).join(', ');
+    let code = changed.length ? `LocalizerConfig{\n    ${tree.fields.map((f) => render({ fields: [f] })).join(',\n    ')},\n}`
+      : 'LocalizerConfig{}  // the defaults';
+    if (flat.periodMs !== TF.DEFAULT_PERIOD_MS) code += `\n\n// and in initDevices()\nlocalizer().startTask(${flat.periodMs});`;
     $('mcl-code').textContent = code;
+  }
+
+  /** The MCL tab's settings as a flat { path: value } config, like TUNE.CFG's mcl.* lines. */
+  function mclFlat() {
+    const out = {};
+    for (const setting of TF.LOCALIZER_SETTINGS) {
+      const value = getPath(mclConfig, setting.key);
+      out[setting.key] = typeof value === 'boolean' ? (value ? 1 : 0) : value;
+    }
+    out.periodMs = mclConfig.periodMs;
+    return out;
+  }
+
+  /** Sets the MCL tab, and the running localizer, from a flat config. */
+  function setMclFlat(flat) {
+    mclConfig = defaultMcl();
+    for (const setting of TF.LOCALIZER_SETTINGS) {
+      if (flat[setting.key] === undefined) continue;
+      const isSwitch = typeof getPath(mclConfig, setting.key) === 'boolean';
+      setPath(mclConfig, setting.key, isSwitch ? flat[setting.key] !== 0 : flat[setting.key]);
+    }
+    if (flat.periodMs !== undefined) mclConfig.periodMs = flat.periodMs;
+    syncSliders();
+    refreshChecks();
+    applyMcl();
+  }
+
+  // --- Tune tab -------------------------------------------------------------------------------
+
+  function buildTune() {
+    SIM.tuneview.build({
+      $, el, fmt, segmented, setSegment,
+      getMclFlat: mclFlat,
+      setMclFlat,
+      setPlaying: (value) => setPlaying(value),
+      applyWorld,
+      saveText,
+    });
+    // the chart sizes itself when the tab is first shown
+    $('tabs').addEventListener('click', () => requestAnimationFrame(() => SIM.tuneview.drawHistory()));
+  }
+
+  /** The world's errors from a calibration (Tune tab), and a fresh run in it. */
+  function applyWorld(world) {
+    const { models, ...rest } = world;
+    Object.assign(options.world, rest);
+    if (models) options.world.models = JSON.parse(JSON.stringify(models));
+    syncSliders();
+    runRoutine(selectedRoutine);
+  }
+
+  /** Saves text as a file: a save dialog where the browser has one, a download otherwise. */
+  async function saveText(name, text) {
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({ suggestedName: name,
+          types: [{ description: 'SapphireLib tuning profile', accept: { 'text/plain': ['.cfg', '.CFG'] } }] });
+        const writable = await handle.createWritable();
+        await writable.write(text);
+        await writable.close();
+        return true;
+      } catch (error) {
+        if (error && error.name === 'AbortError') return false; // they cancelled
+        // anything else (a file:// page some browsers refuse): fall back to a download
+      }
+    }
+    const link = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    return true;
   }
 
   // --- the field: selecting, dragging, kidnapping ---------------------------------------------------------------------------

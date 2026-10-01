@@ -39,6 +39,8 @@
       useAutoTune: true,
       // which of the world's elements the localizer's map includes
       elementsInMap: false,
+      // where the robot program thinks its distance sensors are; null is where they really are
+      localizerMounts: null,
       start: { xIn: -48, yIn: -60, headingDeg: 0 },
     };
   }
@@ -60,6 +62,7 @@
         gains: this.gains,
         startPose: start,
         mapFor: () => this.localizerMap(),
+        mounts: o.localizerMounts,
       });
       this.robot.localizerPeriodMs = o.localizerPeriodMs;
       this.robot.localizer.setCorrectionEnabled(o.correctOdometry);
@@ -104,9 +107,14 @@
       this.robot.drivetrain.setGains(this.gains);
     }
 
-    /** Start an autonomous routine (from routines.js) where it expects to start. */
+    /**
+     * Start an autonomous routine (from routines.js) where it expects to start.
+     * A routine with a `script` (a replayed log, see tuner.js) moves the robot
+     * along it instead of simulating the chassis.
+     */
     runRoutine(routine) {
       this.reset(routine.start);
+      if (routine.script) this.world.setScript(routine.script);
       this.programName = routine.name;
       this.program = routine.run(this.robot);
     }
@@ -180,6 +188,8 @@
         else this.robot.drivetrain.stop();
       }
       if (this.world.timeMs % 50 === 0) this.sample();
+      // a LogRecorder (recorder.js) writing this run as the robot would log it
+      if (this.recorder) this.recorder.afterTick(this);
     }
 
     /** Errors against the truth, right now. */
