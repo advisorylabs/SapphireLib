@@ -93,6 +93,9 @@ jobs:
               tests/tuning/characterization_runner_test.cpp)
                 extra="src/sapphirelib/tuning/characterization_math.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/mechanism/position_control.cpp src/sapphirelib/control/pid.cpp" ;;
               tests/tuning/gain_design_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
+              # reads tests/tuning/tune_profile_golden.cfg, relative to the repository root
+              tests/tuning/tune_profile_test.cpp)
+                extra="src/sapphirelib/localization/localizer_config.cpp src/sapphirelib/control/feedforward.cpp" ;;
             esac
             echo "== $name"
             # -pthread for record_ring_test's producer threads; harmless for
