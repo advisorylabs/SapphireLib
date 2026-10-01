@@ -761,6 +761,23 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       its ellipse, the particles and every beam against the map, with a Localizer panel and chart and
       findings for long stretches without correcting, odometry jumps, and sensors that disagree with
       the map or read nothing.
+- [x] Distance sensor mount calibration: the Odom page's **Calibrate Sensors**
+      (`OdometryPage::enableSensorCalibration()`, `MonteCarloLocalizer::calibrateSensorMounts()`)
+      spins one turn each way at 45°/s, holding the rate with an integrator on the turn command and
+      giving up after 3× the expected time. It pairs each reading with odometry's raw pose from
+      `sensorLatencyMs` earlier. `fitSensorMounts()` (pure, tested) then fits the start pose and each
+      sensor's along-beam and sideways offset against the perimeter: a grid over the start heading,
+      Levenberg-Marquardt with Tukey's biweight, and readings only within 20° of square on. The
+      calibrated mounts go to the running localizer via `setSensorMounts()` (handed to the filter on
+      its own task), like the wheel offsets' `setConfig()`, and are logged for copying into
+      `config.hpp`. Three things the simulated spins taught: weighting each reading by noise from
+      its *measured* distance biased every offset out by about 2σ²/d (0.08 in), so the noise comes
+      from the predicted distance. A Huber start, or a noise scale allowed to grow, let a hidden
+      wall's readings drag the fit into a compromise, so it's Tukey from the start with a scale that
+      only shrinks. And a sideways shift common to every sensor is almost the same as a heading
+      offset, so sideways is applied only when its standard error is under 0.25 in. Along-beam
+      lands within about 0.1 in at the simulator's sensor noise; sensors that saw no pinned pair of
+      walls are left alone.
 
 **Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
 in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts

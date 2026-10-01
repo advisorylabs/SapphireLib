@@ -18,7 +18,7 @@ against a simulated field with realistic sensor noise, slip, bumps and a defende
 (Follow ×4) to watch the particles do what the rest of this page describes.
 
 Contents: [How it works](#how-it-works) · [Setting it up](#setting-it-up) ·
-[Autonomous](#autonomous) · [What it won't do](#what-it-wont-do) · [Tuning](#tuning) ·
+[Calibrating the mounts](#calibrating-the-mounts) · [Autonomous](#autonomous) · [What it won't do](#what-it-wont-do) · [Tuning](#tuning) ·
 [Telemetry](#telemetry) · [Checking it on the robot](#checking-it-on-the-robot) ·
 [The code](#the-code)
 
@@ -76,7 +76,8 @@ about ±15 mm of noise up close and ±5% past 200 mm, so readings of the far wal
 **Measure each sensor's mount** from the tracking center (the point odometry tracks) to the sensor's
 *face*: inches forward (negative behind), inches right (negative left), and which way it faces
 (0 forward, 90 right, 180 back, 270 left). An inch of error here is an inch of bias along that
-sensor's beam.
+sensor's beam. The tracking center is hard to find with a ruler, so measure roughly and let the
+robot find the rest ([Calibrating the mounts](#calibrating-the-mounts)).
 
 **Build the localizer** on your odometry, after it:
 
@@ -117,6 +118,59 @@ downfield, the same frame as `odom::Pose`. Add solid, fixed structures the senso
 `addBox()` or `addSegment()`. Leave out anything that gets pushed around. A thing in the world but not
 in the map only produces outliers, which the model shrugs off; a thing in the map that isn't there
 makes the localizer expect a wall that isn't, which is worse. The simulator's Events tab shows both.
+
+### Calibrating the mounts
+
+The Odom page's **Calibrate Sensors** button finds where each sensor really sits, the way
+**Calibrate Offsets** finds the tracking wheels. Calibrate the wheel offsets first: this one trusts
+odometry's record of the spin.
+
+1. Set the robot on the field on the **line halfway between two opposite walls**, within about a
+   foot of it, anywhere along it, facing any way. Clear anything that would block the sensors' view
+   of the walls.
+2. Tap **Calibrate Sensors**. The robot spins one turn each way at about 45°/s (under 20 s) while
+   it reads every sensor against odometry.
+3. The status line shows each calibrated sensor's forward and right offsets, already applied to the
+   running localizer. The terminal logs each one as a `{.forwardIn = ..., .rightIn = ...,
+   .facingDeg = ...}` to copy into your code (96671H's: the `k*Sensor*In` constants in
+   `config.hpp`). Like Calibrate Offsets, nothing is saved, and a restart goes back to the code's
+   mounts.
+
+**How it works.** As the robot turns, each sensor's face circles the tracking center, and what it
+reads from a wall depends on where the robot is, which way it faces, and where the sensor sits. The
+fit (`localization::fitSensorMounts()`) solves for all of them at once against the map's four
+perimeter walls: the robot's position and heading when the spin started, and each sensor's offset
+along its beam and sideways from it. It searches the starting heading on a grid, so the robot can
+face any way, then refines with Levenberg-Marquardt. It uses only readings that hit a wall within
+20° of square on, because a slanted beam's cone can read short. Readings off anything that isn't a
+wall drop out as the fit goes (Tukey's biweight).
+
+**Why the halfway line.** From walls on one side only, a robot an inch nearer the wall with a sensor
+an inch further back reads exactly the same. The field's known width separates the two, so at least
+one sensor has to see *both* walls of an opposite pair during the spin. The sensors reach 78 in and
+the walls are 70 in from the middle, so anywhere within about a foot of the halfway line, every
+sensor sees both. Started in a corner, every sensor is left as it was ("no two opposite walls seen").
+
+**What it finds, and what it leaves.**
+
+- **Along the beam: always fitted.** This is the offset that decides what a sensor reads from a wall
+  it faces. In simulated spins with the simulator's sensor noise it lands within about 0.1 in (its
+  reported standard error matches its real error). Each sensor needs 30 readings matching a wall, a
+  standard error under 0.25 in, and a change under 6 in, or it's left as it was.
+- **Sideways: only when it's pinned down.** A sideways offset shows only in slanted readings, and
+  every sensor shifted sideways the same way looks almost exactly like the robot facing a little
+  differently. The two separate only when the walls are at quite different distances, as they are
+  near a wall with quiet sensors. Otherwise the configured offset is kept.
+- **Facing: never.** A sensor's facing and the robot's heading can't be told apart, and a degree of
+  facing error barely changes a square-on reading.
+
+Something flat parked right in front of a wall, square to it, can look like the wall itself. When
+it hides the whole wall, the fit can take it for that wall. The mounts still come out right while
+the other pair of walls pins them, but keep the view clear.
+
+To run it from code instead of the screen, use `localizer().calibrateSensorMounts(setSpin)` on its
+own task, with nothing else driving the chassis. `setSensorMounts()` applies mounts you already
+know without rebuilding.
 
 ## Autonomous
 
@@ -215,10 +269,10 @@ None of this has run on the real robot yet. The math is unit-tested on a desktop
 bit for bit by the simulator, and the simulator's physics is the same axis model Auto-Tune measures,
 but real sensors, real walls and real wheel slip are what count. Before trusting it in a match:
 
-1. **Sensor mounts.** Set the pose where the robot really sits and leave it still. In
-   `localizer().status()` (or the `mcl` log), every sensor that sees a wall should agree, and the
-   correction should be well under an inch. A sensor that never agrees has a wrong mount, or faces
-   the wrong way.
+1. **Sensor mounts.** Run **Calibrate Sensors** and copy what it finds into the code. Then set the
+   pose where the robot really sits and leave it still. In `localizer().status()` (or the `mcl`
+   log), every sensor that sees a wall should agree, and the correction should be well under an
+   inch. A sensor that never agrees has a wrong mount, or faces the wrong way.
 2. **Drift without it.** Run a long routine with `setCorrectionEnabled(false)` and measure how far off
    the robot ends. That's what the localizer has to fix.
 3. **Drift with it.** The same routine with correction on. It should end within an inch or so.
@@ -238,7 +292,8 @@ but real sensors, real walls and real wheel slip are what count. Before trusting
 | `ParticleFilter`: predict, weigh, resample, recovery, `sampleParticles()` | `localization/particle_filter.hpp` | `tests/localization/particle_filter_test.cpp`: unit checks, the exact model the tables replaced, plus closed-loop runs on a simulated field against biased odometry, a blocked sensor and a bump |
 | `Rng`: seeded xoshiro128**, and `fastGaussian()` (a ziggurat) | `util/random.hpp` | `tests/util/random_test.cpp` |
 | `LookupTable`: a function sampled and interpolated | `util/lookup_table.hpp` | `tests/util/lookup_table_test.cpp` |
-| `MonteCarloLocalizer`: sensors, gating, the correction | `localization/monte_carlo_localizer.hpp` | on the robot; its logic runs in the simulator |
+| `fitSensorMounts()`: each sensor's mount, from readings taken while spinning | `localization/mount_calibration.hpp` | `tests/localization/mount_calibration_test.cpp`: simulated spins with known mounts, from exact readings to noisy ones with outliers, a hidden wall, the halfway line, and a corner it must refuse |
+| `MonteCarloLocalizer`: sensors, gating, the correction, the mount calibration's spin | `localization/monte_carlo_localizer.hpp` | on the robot; its logic runs in the simulator |
 | Odometry's correction: `snapshot()`, `setPositionCorrection()`, the ease-in | `odom/odometry.hpp`, `odom/odometry_math.hpp` | `tests/odom/odometry_math_test.cpp` (`correctionStep()`) |
 
 Everything but `MonteCarloLocalizer` and `Odometry` is pure (no PROS). The simulator's

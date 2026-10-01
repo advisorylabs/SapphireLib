@@ -167,7 +167,9 @@ From each update where the localizer trusted its estimate, a reading's error aga
 - **Sensor bias**: each sensor's typical error, fitted together with the latency (otherwise a
   sensor mostly driven away from reads short from latency alone). A mount measured an inch wrong
   shows as about half an inch here (the estimate gives some ground to it), on that sensor alone. The
-  table flags anything past 0.3 in and says roughly how far off the mount is.
+  table flags anything past 0.3 in and says roughly how far off the mount is. To fix it, run the
+  Odom page's **Calibrate Sensors** on the robot, which measures the mounts directly
+  ([`docs/LOCALIZATION.md`](LOCALIZATION.md#calibrating-the-mounts)).
 - **Tracking wheels**: how far raw odometry drifts from the estimate per inch driven, along each
   wheel, in the robot's frame. "+2.1%" means the wheel reads 2.1% long: its real diameter is
   1/1.021 of the configured one, and the table gives the factor to multiply
