@@ -97,6 +97,9 @@ constexpr double kHorizontalWheelOffsetIn = 4.18;
 // the spot its reading starts from; an inch off here is an inch of bias in
 // the localizer's estimate along that sensor's direction. TODO: measure them;
 // these are placeholders for sensors centered on each side of a ~14in chassis.
+// Or measure them roughly and let the Odom page's "Calibrate Sensors" find
+// them: it applies what it finds until the program restarts, and the terminal
+// logs each sensor's {.forwardIn, .rightIn} to copy here.
 constexpr double kFrontSensorForwardIn = 7.0;
 constexpr double kFrontSensorRightIn = 0.0;
 constexpr double kRightSensorForwardIn = 0.0;
