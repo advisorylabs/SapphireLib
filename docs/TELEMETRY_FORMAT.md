@@ -232,6 +232,12 @@ volts that hold it against gravity.
 
 - `auton`: `start,<routine name>` / `end,<routine name>` around each autonomous routine (a routine
   the competition switch cuts short has no `end`).
+- `mcl`: a distance sensor mount calibration (`MonteCarloLocalizer::calibrateSensorMounts()`, the
+  Odom page's Calibrate Sensors). It logs `mount_calibration,start` when the spin starts, then one
+  `mount,<index>,<calibrated|kept>,forward=<in>,right=<in>,facing=<deg>,stderr=<in>` per sensor
+  with the mount the localizer uses from then on, or `mount_calibration,failed,<why>` if the spin
+  didn't finish. A file's `#meta mcl.sensorN` lines record the mounts the program started with, so
+  after one of these the events are what's current.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button), `macro`.
 
 ## Channels on 96671H's robot
@@ -243,7 +249,7 @@ names to match on.
 | Channel | Kind | Columns | Source |
 |---|---|---|---|
 | `sys` | events | - | Competition phases (`phase`). |
-| `events` | events | - | Everything else: `motion`, `auton`, `tune`, ... |
+| `events` | events | - | Everything else: `motion`, `auton`, `tune`, `mcl`, ... |
 | `drive` | pid | pid columns | The drivetrain's `drivePID()`: distance loops. |
 | `turn` | pid | pid columns | The drivetrain's `turnPID()`: turns, heading hold/steering in point and path motions. |
 | `hold` | pid | pid columns | The drivetrain's `headingHoldPID()`: driver-control heading hold. |

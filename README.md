@@ -29,8 +29,9 @@ PID tuning is still per-robot work you'll do after pulling it in. See
 - **Odometry**: `odom::Odometry` on a background task, for any of the four sensor configurations below.
 - **Localization**: `localization::MonteCarloLocalizer`, Monte Carlo localization on distance sensors
   that see the field walls. It runs beside odometry and eases odometry's pose back whenever it
-  drifts, so every pose motion drives by the corrected pose with no other changes. See
-  [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
+  drifts, so every pose motion drives by the corrected pose with no other changes. A spin in place
+  finds where its distance sensors really sit (the Odom page's Calibrate Sensors), the way
+  Calibrate Offsets finds the tracking wheels. See [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
 - **Motion**: `moveToPoint()`, `moveToPose()` (boomerang on tank), and pure-pursuit `followPath()` on
   both drivetrains, plus `MotionQueue`. Every blocking motion returns a `MotionResult`, so a routine
   can tell a motion that settled from one that timed out against something.
