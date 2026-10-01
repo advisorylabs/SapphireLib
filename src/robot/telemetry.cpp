@@ -18,6 +18,7 @@
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
+#include "robot/tune.hpp"
 
 namespace robot {
 
@@ -25,6 +26,8 @@ using sapphirelib::chassis::AxisVolts;
 using sapphirelib::chassis::HolonomicDrivetrain;
 using sapphirelib::input::Axis;
 using sapphirelib::input::Controller;
+using sapphirelib::localization::BeamSample;
+using sapphirelib::localization::LocalizerUpdate;
 using sapphirelib::telemetry::Channel;
 using sapphirelib::telemetry::Logger;
 
@@ -38,7 +41,19 @@ Channel* driverLog = nullptr;
 Logger& logger() {
     // A function-local static, like the devices: constructing a Logger only
     // sets up its tables, no tasks and no card access until start().
-    static Logger instance({.directory = "/usd/sl", .robotName = "96671H"});
+    //
+    // Recording waits for the Home page's Start log button, so pit testing
+    // doesn't fill the card with every power-on, and a match records itself:
+    // plugging into a competition switch or the field starts a new file, and
+    // it closes 5s after the tether comes out. Logging costs the control
+    // loops nothing (rows are copied into rings; formatting and SD writes
+    // happen on the lowest-priority task), and every file's H rows say what
+    // the logger itself took (samp_us, fmt_us) next to the localizer's own
+    // update time (mcl's "us"), to check that on the real brain.
+    static Logger instance({.directory = "/usd/sl",
+                            .robotName = "96671H",
+                            .recordAtStart = false,
+                            .recordUnderCompetition = true});
     return instance;
 }
 
@@ -56,27 +71,55 @@ void startTelemetry() {
     // x, y, heading at 100Hz. The corrected pose, what every motion drives by.
     log.pose(odometry(), "odom", 10);
 
-    // The localizer, at its own 20Hz: its estimate, how sure it is (spread in
-    // inches, effective particle count), how many of the four sensors gave a
-    // reading and how many of those agree with the walls, whether that update
-    // corrected odometry, and the correction odometry is easing toward, which
-    // is how far raw odometry had drifted. status() is atomics, safe from the
-    // sampler task.
-    log.poll(
-        "mcl", {"x", "y", "spread", "neff", "used", "agree", "correcting", "corr_x", "corr_y"}, 50,
-        [](double* values) {
-            const sapphirelib::localization::LocalizationStatus status = localizer().status();
-            values[0] = status.estimate.xIn;
-            values[1] = status.estimate.yIn;
-            values[2] = status.spreadIn;
-            values[3] = status.effectiveParticles;
-            values[4] = status.sensorsUsed;
-            values[5] = status.sensorsAgreeing;
-            values[6] = status.correcting ? 1.0 : 0.0;
-            values[7] = status.correctionXIn;
-            values[8] = status.correctionYIn;
-        },
-        {.capacity = 32, .decimals = 2});
+    // The localizer, one row per update (20Hz), recorded by the localizer's
+    // own task as each update finishes:
+    //  - "mcl": its estimate, how sure it is (spread in inches, effective
+    //    particle count), how many of the four sensors gave a reading and how
+    //    many of those agree with the walls, whether that update corrected
+    //    odometry, the correction odometry is easing toward (how far raw
+    //    odometry had drifted), how long the update took (us), and raw
+    //    odometry's position, so drift can be measured against distance
+    //    driven;
+    //  - "mcl.beams": each sensor's reading (m, nan if it had none), what the
+    //    map says it should read from the estimate (e, inf if nothing in
+    //    range), and how fast it was closing on what it points at (v, in/s).
+    //    What the simulator's Tune tab fits the sensor model, the latency and
+    //    the tracking wheels' scale from (docs/TUNING.md).
+    // Like the poll() sources, nothing while disabled under competition
+    // control, when the robot sits still in the queue.
+    Channel& mclLog = log.channel("mcl",
+                                  {"x", "y", "spread", "neff", "used", "agree", "correcting",
+                                   "corr_x", "corr_y", "us", "raw_x", "raw_y"},
+                                  {.capacity = 64, .decimals = 2});
+    Channel& beamLog = log.channel("mcl.beams",
+                                   {"m0", "e0", "v0", "m1", "e1", "v1", "m2", "e2", "v2", "m3",
+                                    "e3", "v3"},
+                                   {.capacity = 64, .decimals = 2});
+    localizer().setUpdateCallback([mcl = &mclLog, beams = &beamLog](const LocalizerUpdate& update) {
+        const std::uint8_t competition = pros::competition::get_status();
+        if ((competition & COMPETITION_DISABLED) != 0 &&
+            (competition & COMPETITION_CONNECTED) != 0) {
+            return;
+        }
+        const sapphirelib::localization::LocalizationStatus& status = update.status;
+        mcl->record({status.estimate.xIn, status.estimate.yIn, status.spreadIn,
+                     status.effectiveParticles, static_cast<double>(status.sensorsUsed),
+                     static_cast<double>(status.sensorsAgreeing), status.correcting ? 1.0 : 0.0,
+                     status.correctionXIn, status.correctionYIn,
+                     static_cast<double>(status.updateUs), update.rawPose.xIn,
+                     update.rawPose.yIn});
+        // four sensors fill 12 of a row's 13 columns
+        double values[12];
+        for (std::size_t i = 0; i < 4; ++i) {
+            const bool present = i < update.beams.size();
+            const BeamSample beam = present ? update.beams[i] : BeamSample{};
+            constexpr double kNone = std::numeric_limits<double>::quiet_NaN();
+            values[3 * i] = present ? beam.measuredIn : kNone;
+            values[3 * i + 1] = present ? beam.expectedIn : kNone;
+            values[3 * i + 2] = present ? beam.closingSpeedInPerS : kNone;
+        }
+        beams->record(values, 12);
+    });
 
     // What the drivetrain actually commanded on each axis (the PIDs' "out" is
     // only the loop's share, before mixing and heading correction): the
@@ -139,6 +182,11 @@ void startTelemetry() {
 
     // "lift" PID + "lift.act".
     macros::attachTelemetry(log);
+
+    // #meta lines at the top of every file: which TUNE.CFG revision this run
+    // used, and the localizer's settings and sensor mounts, so each log says
+    // what produced it.
+    describeTuning(log);
 
     log.start();
 }

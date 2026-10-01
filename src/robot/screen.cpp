@@ -20,6 +20,7 @@
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/telemetry.hpp"
+#include "robot/tune.hpp"
 #include "robot/tuning.hpp"
 #include "sapphirelib/diag/sensor_check.hpp"
 #include "sapphirelib/gui/auton_selector_page.hpp"
@@ -72,8 +73,12 @@ void buildScreen() {
     Gui& gui = screen();
 
     auto homePage = std::make_unique<HomePage>(&drivetrain().imu());
-    // An "SD:" row, so a missing or pulled card is noticed in the pits.
+    // An "SD:" row with a Start/Stop log button, so a missing or pulled card
+    // is noticed in the pits and a test run is one tap to record. Matches
+    // record on their own (see logger()).
     homePage->setTelemetry(&logger());
+    // Which TUNE.CFG this run is using, or that it's on the code's values.
+    homePage->addRow(&tuneStatusText);
     gui.addPage(std::move(homePage));
 
     auto autonSelectorPage = std::make_unique<AutonSelectorPage>();
