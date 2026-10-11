@@ -227,6 +227,25 @@ void testFileEpoch() {
     assert(owned.fileEpoch() == 4);
 }
 
+void testNothingRecordedBetweenRecordings() {
+    std::atomic<bool> recording{false};
+    Channel channel(samplesSchema({"a"}), 8, nullptr, &recording);
+    // turned away, and not counted as lost: nothing was being recorded
+    assert(!channel.record({1.0}));
+    assert(!channel.recordEvent("rec", "nothing"));
+    assert(channel.front() == nullptr);
+    assert(channel.droppedFull() == 0 && channel.droppedContended() == 0);
+
+    recording.store(true);
+    assert(channel.record({2.0}));
+    assert(channel.recordEvent("mark", "driver"));
+    assert(drain(channel).size() == 2);
+
+    recording.store(false);
+    assert(!channel.record({3.0}));
+    assert(channel.front() == nullptr);
+}
+
 // --- PidProbe ----------------------------------------------------------------
 
 PID::Config liftConfig() {
@@ -360,6 +379,29 @@ void testNewFileReannouncesConfigAndGains() {
     assert(drain(channel).size() == 1);
 }
 
+void testProbeCatchesUpWhenRecordingStarts() {
+    // a PID running between recordings logs nothing, then its config and gains with its first
+    // step once recording starts, so the new file has them before its first S row
+    std::atomic<std::uint32_t> epoch{1};
+    std::atomic<bool> recording{false};
+    Channel channel(pidSchema(), 32, &epoch, &recording);
+    PID pid(liftConfig());
+    PidProbe probe(channel, pid);
+    pid.setObserver(&probe);
+
+    pid.update(150.0, 0.0);
+    pid.update(150.0, 1.0);
+    assert(channel.front() == nullptr);
+
+    recording.store(true);
+    pid.update(150.0, 2.0);
+    std::vector<Record> records = drain(channel);
+    assert(records.size() == 3);
+    assert(records[0].kind == RecordKind::pidConfig);
+    assert(records[1].kind == RecordKind::pidGains);
+    assert(records[2].kind == RecordKind::sample);
+}
+
 void testResetLoggedOnlyWhenThereWasState() {
     std::atomic<std::uint32_t> epoch{1};
     Channel channel(pidSchema(), 32, &epoch);
@@ -415,10 +457,12 @@ int main() {
     testEventIsAllOrNothingWhenNearlyFull();
     testContendedRecordIsDroppedNotWaited();
     testFileEpoch();
+    testNothingRecordedBetweenRecordings();
     testFirstUpdateLogsConfigGainsThenSample();
     testGainsLoggedOnlyWhenTheyChange();
     testDroppedGainsAreRetried();
     testNewFileReannouncesConfigAndGains();
+    testProbeCatchesUpWhenRecordingStarts();
     testResetLoggedOnlyWhenThereWasState();
     testCopiedPidIsForeign();
     std::printf("channel_test: all tests passed\n");

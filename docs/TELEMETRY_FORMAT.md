@@ -1,7 +1,7 @@
 # SapphireLib telemetry format (SLT v1)
 
 `sapphirelib::telemetry::Logger` records PID steps, pose, mechanism commands, motor health and
-events to the V5's SD card while the robot runs, one file per program run. This document is the
+events to the V5's SD card while the robot runs, one file per recording. This document is the
 contract the telemetry analyzer (`tools/analyzer/`) and any other reader code against. The encoder (`src/sapphirelib/telemetry/csv_format.cpp`) is
 golden-tested byte for byte against it (`tests/telemetry/csv_format_test.cpp`), and
 `tools/telemetry/slt_read.py` is the reference reader, standard library only, with a
@@ -17,8 +17,20 @@ Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives]
 ## File
 
 - ASCII text. Every line ends in LF (`\n`). No BOM, no CR.
-- One file per program run, plus a new file after each recovered SD fault (card pulled and
-  reinserted, say).
+- One file per recording, plus a new file after each recovered SD fault (card pulled and
+  reinserted, say). When a recording runs is up to the program (`LoggerConfig`):
+  - `recordAtStart` (the library's default): from `start()`, so one file per program run.
+  - `startRecording()` / `stopRecording()`, e.g. the Home page's Start log button. A stop writes
+    everything recorded before it and closes the file, so the card is safe to pull once the Home
+    page says "SD: ready, not logging".
+  - `recordUnderCompetition` (on by default): connecting competition control (a field, or a
+    competition switch) starts a recording if none is running, and it ends once competition
+    control has been disconnected for `competitionStopDelayMs` (5 s), so a tether that drops for a
+    moment doesn't split a match.
+
+  96671H's robot waits for the button or a match (`recordAtStart = false`). Between recordings
+  nothing is recorded at all: rows are turned away before they reach a buffer, and nothing counts
+  as dropped. Every file in one program run shares its clock (`t_us`).
 - Name: `SLnnnnnn.CSV`: `SL`, six zero-padded digits, `.CSV`, in `/usd/sl/` (the `sl` folder at
   the card's root). Always a legal 8.3 name: the V5 has no confirmed long-file-name support.
 - The brain has no clock, so files are numbered, not dated: each new file takes the next number
@@ -68,6 +80,7 @@ Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives]
 | Line | Meaning |
 |---|---|
 | `#meta,<key>,<value>` | The value is the rest of the line. v1 keys: `writer` (`sapphirelib <version>`), `kernel` (PROS version), `build` (when the robot program was linked), `robot` (`LoggerConfig::robotName`), `file` (this file's name), `dir` (`/usd/sl`, or `/usd` in the root fallback), `open_us` (`t_us` when the file opened), `clock` (`us_since_program_start`). |
+| `#meta,<key>,<value>` (the program's own) | Lines the program adds with `Logger::addMeta()`, after the v1 keys, in every file. Keys are `[A-Za-z0-9_.-]{1,63}`; values are cut to 63 characters. 96671H's: `tune` (`loaded`, `rejected`, `none` or `no_card`: what its `TUNE.CFG` came to), `tune.rev`, `tune.path`, `tune.note`, `tune.error` (`line <n>: <why>` for a rejected file), every `LocalizerConfig` field as `mcl.<path>` (`mcl.filter.motionNoise.perInch`, ..., the settings the localizer ran with, file or code), `mcl.periodMs`, and `mcl.sensor<i>` = `<forward>,<right>,<facing>` for each distance sensor's mount. See [`docs/TUNING.md`](TUNING.md). |
 | `#chan,<id>,<name>,<kind>,<decimals>[,<col>...]` | Declares a channel. `id` is 0–65535 and unique in the file. `kind` is `samples`, `pid` or `events`. Columns exclude `t_us`. For `pid` the columns are exactly `target,meas,err,p,i,d,u_raw,out,dt,flags`; for `events` there are none. A channel's `#chan` line always comes before any row that uses its id. Ids 0 (`sys`) and 1 (`events`) are always the event channels. **Match channels by name** across files: ids depend on registration order. |
 
 ## Rows
@@ -93,6 +106,13 @@ Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives]
 - `resyncs`, `breaks`: buffer recoveries and producer-gate reclaims since start. Both should stay 0;
   a `break` means a task was deleted mid-record (the competition switch does that), costing one row.
 - `faults`: SD write failures since start.
+- `samp_us`: microseconds the sampler task spent since the previous `H` row (polling sources and
+  watching the competition state).
+- `fmt_us`: microseconds the writer task spent since the previous `H` row outside its SD writes
+  (draining and formatting rows); the writes themselves are `wmax_us`/`wavg_us`.
+
+  Both are wall time, so time another task spent preempting them counts too: an upper bound on
+  the logger's own CPU. Per second, `(samp_us + fmt_us) / 10000` is a percentage of the brain.
 
 <a name="ordering"></a>
 ## Ordering and robustness
@@ -128,6 +148,8 @@ what it is.
 | `sd` | `dir_missing,<dir>` | The log folder is missing; this file is in the card's root. |
 | `sd` | `open_failed,<dir>` | A file couldn't be created in the folder (usually also a missing folder: PROS reports every failed open the same way); this file is in the root. |
 | `sd` | `reopened,prev=<name>,faults=<n>` | This file follows a write fault on `<name>`. At most 8 faults per run; after that the robot stops logging until it restarts. |
+| `rec` | `start,<manual\|competition\|startup>` | At every file open except a reopen after a fault: a recording starts, and why (the button or `startRecording()`, competition control connecting, or `recordAtStart`). |
+| `rec` | `stop,<reason>` | The last row of a recording's file, with the reason it started. Missing when the power went first. |
 
 ### Motion events
 
@@ -210,6 +232,12 @@ volts that hold it against gravity.
 
 - `auton`: `start,<routine name>` / `end,<routine name>` around each autonomous routine (a routine
   the competition switch cuts short has no `end`).
+- `mcl`: a distance sensor mount calibration (`MonteCarloLocalizer::calibrateSensorMounts()`, the
+  Odom page's Calibrate Sensors). It logs `mount_calibration,start` when the spin starts, then one
+  `mount,<index>,<calibrated|kept>,forward=<in>,right=<in>,facing=<deg>,stderr=<in>` per sensor
+  with the mount the localizer uses from then on, or `mount_calibration,failed,<why>` if the spin
+  didn't finish. A file's `#meta mcl.sensorN` lines record the mounts the program started with, so
+  after one of these the events are what's current.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button), `macro`.
 
 ## Channels on 96671H's robot
@@ -221,12 +249,15 @@ names to match on.
 | Channel | Kind | Columns | Source |
 |---|---|---|---|
 | `sys` | events | - | Competition phases (`phase`). |
-| `events` | events | - | Everything else: `motion`, `auton`, `tune`, ... |
+| `events` | events | - | Everything else: `motion`, `auton`, `tune`, `mcl`, ... |
 | `drive` | pid | pid columns | The drivetrain's `drivePID()`: distance loops. |
 | `turn` | pid | pid columns | The drivetrain's `turnPID()`: turns, heading hold/steering in point and path motions. |
 | `hold` | pid | pid columns | The drivetrain's `headingHoldPID()`: driver-control heading hold. |
-| `odom` | samples | `x,y,heading` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. The corrected pose, the one every motion drives by: raw odometry plus whatever correction the localizer has eased in (see `mcl`). |
-| `mcl` | samples | `x,y,spread,neff,used,agree,correcting,corr_x,corr_y` | The Monte Carlo localizer every 50 ms while enabled ([`docs/LOCALIZATION.md`](LOCALIZATION.md)): its estimate (inches), the particles' RMS spread around it (inches), the effective particle count, how many of the four distance sensors gave a usable reading and how many of those agree with the walls, 1/0 for whether that update set odometry's correction, and the correction odometry is easing toward (inches). The correction is how far raw odometry had drifted: `odom` minus `corr_x,corr_y` is raw odometry, once the correction has finished easing in. |
+| `odom` | samples | `x,y,heading,raw_x,raw_y` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. The corrected pose, the one every motion drives by: raw odometry plus whatever correction the localizer has eased in (see `mcl`). `raw_x,raw_y` are raw odometry's position from the same snapshot, before any correction: what fitting the chassis from a log should differentiate, since a correction easing in (up to `maxCorrectionRateInPerS`) moves `x,y` without the motors doing anything. Older logs have only `x,y,heading`. |
+| `mcl` | samples | `x,y,spread,neff,used,agree,correcting,corr_x,corr_y,us,raw_x,raw_y` | The Monte Carlo localizer, one row per update (every 50 ms by default) while enabled, recorded by the localizer's own task ([`docs/LOCALIZATION.md`](LOCALIZATION.md)): its estimate (inches), the particles' RMS spread around it (inches), the effective particle count, how many of the four distance sensors gave a usable reading and how many of those agree with the walls, 1/0 for whether that update set odometry's correction, the correction odometry is easing toward (inches), how long the update took (`us`, microseconds of wall time: an upper bound on its CPU), and raw odometry's position (inches) before any correction. The correction is how far raw odometry had drifted; `x,y` minus `raw_x,raw_y` is the same thing, for every update rather than only correcting ones. |
+| `mcl.beams` | samples | `m0,e0,v0,m1,e1,v1,m2,e2,v2,m3,e3,v3` | Each distance sensor in that update, in the order the localizer was given them (96671H: front, right, back, left): `m` the reading in inches after latency compensation (`nan` when unusable: nothing in range, low confidence, dropped, or skipped mid-spin), `e` what the map says it should read from the estimate (inches; `inf` when the beam would see nothing in range), and `v` how fast the sensor was closing on what it points at (in/s, by odometry). `m - e` is the reading's error against the map. The simulator's Tune tab calibrates the localizer's world from these (sensor noise, blocked and missing readings, the latency left uncompensated, mount errors and the tracking wheels' scale): [`docs/TUNING.md`](TUNING.md). Four sensors fill 12 of a row's 13 columns. |
+| `mcl.state` | samples | `sxx,syy,sxy,fit,fit_ratio,recovered,resampled,blocked,hdg` | The rest of each update, for the analyzer's replay: the particles' weighted covariance (`sxx`, `syy` variances and `sxy` covariance, in²: the uncertainty ellipse), recovery's fit (`fit`, how well the particles explain the readings as a share of a perfect fit per reading, 0 to 1) and its fast average over its slow one (`fit_ratio`: recovery starts below `filter.recovery.triggerRatio`), how many particles recovery replaced, 1/0 for whether the update resampled, why it didn't correct odometry (`blocked`, bits below; 0 when it did), and the heading the beams were cast at (`hdg`, degrees: odometry's, wound back by `sensorLatencyMs` of turning). |
+| `mcl.pts` | samples | `dx0,dy0,...,dx5,dy5` | A sample of the particle cloud: every 5th update, 24 particles picked by weight (`sampleParticles()`, systematic), as four rows of six (x, y) offsets from that update's estimate, in inches. The four rows of one sample are recorded within microseconds of each other; group rows less than 10 ms apart. Add the `mcl` row's `x,y` for field positions. |
 | `chassis` | samples | `fwd_v,strafe_v,turn_v` | The volts the drivetrain last commanded on each axis, before each motor's ±12 V clamp, every 10 ms while enabled. A snapshot, possibly one tick torn across the three fields; `strafe_v` is always 0 on a tank. |
 | `batt` | samples | `volts,pct,amps,temp` | Battery voltage, charge (%), current drawn (A) and pack temperature (°C), every 200 ms. A failed read is `nan`. |
 | `motor.<name>` | samples | `volts,amps,temp,rpm,eff,faults` | One per motor, every 100 ms: see [Motor channels](#motor-channels). 96671H logs `motor.fl`, `fr`, `bl`, `br`, `ml`, `mr` (drivetrain), `motor.liftA`, `liftB`, `intake` and `claw`. |
@@ -235,6 +266,19 @@ names to match on.
 | `lift.act` | samples | `target,pos,volts,law` | Every lift update: target and position in degrees (`pos` is `nan` if the rotation sensor didn't answer), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking; `nan` while Auto-Tune has the motors), and which branch of the control law ran (`law`, below). |
 | `mech` | samples | `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed` | The macro system, every opcontrol tick: volts sent to the intake and roller claw, the claw piston (1 extended), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 stowed) and goal (0 alliance, 1 medium, 2 center), the running sequence step (−1 none; else 0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), and whether the claw is deployed. |
 | `char.fwd`, `char.strafe`, `char.turn`, `char.lift` | samples | `volts,pos` | Auto-Tune characterization runs, one row per sample the runner takes. Declared in every file; rows appear only while Auto-Tune runs. See [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows). |
+
+`mcl.state`'s `blocked` is `LocalizationStatus::blockedBy`, a sum of these bits; a reader should
+ignore bits it doesn't know:
+
+| bit | Name | The update didn't correct because |
+|---|---|---|
+| 1 | correction off | `setCorrectionEnabled(false)` |
+| 2 | no setPose | `waitForSetPose`, and no `Odometry::setPose()` yet |
+| 4 | no readings | no sensor had a usable reading |
+| 8 | too spread | the particles' spread was over `maxCorrectionSpreadIn` |
+| 16 | too few agree | fewer than `minAgreeingSensors` readings agreed with the map |
+| 32 | refused | a `setPose()` landed during the update |
+| 64 | spinning | turning faster than `maxTurnRateDegPerS`, so every reading was skipped (comes with 4) |
 
 `lift.act`'s `law` is `mechanism::PositionLaw` as an integer:
 
@@ -352,7 +396,7 @@ This is the golden file from `tests/telemetry/csv_format_test.cpp` (and `slt_rea
 #chan,8,lift.act,samples,3,target,pos,volts,law
 E,2104502,file,open,SL000042.CSV
 E,2104502,phase,disabled,comp=1,field=1
-H,3104771,rows=4,bytes=1034,writes=1,wmax_us=21873,wavg_us=21873,drops=0,unlogged=2,resyncs=0,breaks=0,faults=0
+H,3104771,rows=4,bytes=1034,writes=1,wmax_us=21873,wavg_us=21873,drops=0,unlogged=2,resyncs=0,breaks=0,faults=0,samp_us=1840,fmt_us=2615
 E,15003114,phase,autonomous,comp=1,field=1
 S,5,15003201,0,0,0
 S,6,15003201,12.61,87
@@ -399,6 +443,7 @@ How to read it:
   - The PID output is clamped to 12.7; with gravity feedforward the motors were sent the full
     12 V, which is what `lift.act` shows, with law 0 (track).
 - **H row.** One second after the file opened: 4 rows and 1034 bytes so far in one write that took
-  22 ms, and 2 rows drained before the file was open.
+  22 ms, and 2 rows drained before the file was open. The sampler spent 1.8 ms of that second and
+  the writer 2.6 ms outside its write: under half a percent of the brain.
 - **D row.** One row was lost from the `events` channel because two tasks logged an event at the
   same instant.

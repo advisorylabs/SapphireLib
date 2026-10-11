@@ -88,6 +88,47 @@ void testGaussianMoments() {
     expectNear(std::sqrt(sumSquares / n - mean * mean), 1.0, 0.01, "gaussian stddev");
 }
 
+void testFastGaussianGolden() {
+    // the ziggurat's tables and first draws. tools/sim/test/mcl.test.js checks the same numbers
+    const sapphirelib::ZigguratTables& z = sapphirelib::zigguratTables();
+    assert(z.k[0] == 15555140u);
+    assert(z.k[1] == 0u);
+    assert(z.k[2] == 12590646u);
+    assert(z.k[64] == 16628623u);
+    assert(z.k[127] == 15707337u);
+    expectNear(z.w[0], 2.2131718675747815e-07, 1e-20, "golden w[0]");
+    expectNear(z.w[127], 2.0519613360756637e-07, 1e-20, "golden w[127]");
+    expectNear(z.f[1], 0.96359969312708615, 1e-14, "golden f[1]");
+    expectNear(z.f[127], 0.0026696290838809228, 1e-16, "golden f[127]");
+    Rng rng(7);
+    const double expected[] = {0.25539103897165999,  -1.2118758829994307, -0.9925865667999193,
+                               -0.15473818772236891, 0.79863601552382013, -0.84043943732603632};
+    for (const double value : expected) expectNear(rng.fastGaussian(), value, 1e-12, "golden fast");
+}
+
+void testFastGaussianMatchesTheNormalDistribution() {
+    // moments, and the tails, which the ziggurat draws by a separate path past 3.44
+    Rng rng(12345);
+    const int n = 2000000;
+    double sum = 0.0;
+    double sumSquares = 0.0;
+    int over2 = 0;
+    int pastTail = 0;
+    for (int i = 0; i < n; ++i) {
+        const double g = rng.fastGaussian();
+        sum += g;
+        sumSquares += g * g;
+        if (std::fabs(g) > 2.0) ++over2;
+        if (std::fabs(g) > sapphirelib::ZigguratTables::kTailStart) ++pastTail;
+    }
+    const double mean = sum / n;
+    expectNear(mean, 0.0, 0.003, "fast gaussian mean");
+    expectNear(std::sqrt(sumSquares / n - mean * mean), 1.0, 0.003, "fast gaussian stddev");
+    // P(|x| > 2) = 0.0455, P(|x| > 3.4426) = 0.000576: within 4 standard errors
+    expectNear(static_cast<double>(over2) / n, 0.0455003, 4 * 1.47e-4, "fast gaussian past 2");
+    expectNear(static_cast<double>(pastTail) / n, 0.0005761, 4 * 1.7e-5, "fast gaussian tail");
+}
+
 } // namespace
 
 int main() {
@@ -96,6 +137,8 @@ int main() {
     testReseedRestarts();
     testUniformRangeAndMean();
     testGaussianMoments();
+    testFastGaussianGolden();
+    testFastGaussianMatchesTheNormalDistribution();
     std::printf("random_test: all tests passed\n");
     return 0;
 }

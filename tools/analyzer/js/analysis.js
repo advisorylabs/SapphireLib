@@ -51,7 +51,69 @@
     sagMin: 3,
     odomJumpIn: 6,
     slowWriteUs: 250000,
+    mclBlockedS: 3, // the localizer not correcting this long, while enabled
+    mclDisagreeShare: 0.25, // a sensor's readings off the map this often
+    mclSilentShare: 0.5, // a sensor with nothing to report this often, with a wall in range
+    mclLossIn: 2, // the correction jumping this far in half a second: odometry lost travel
+    mclSlowUs: 5000, // an update this long is 10% of the brain at 20Hz
   };
+
+  /**
+   * LocalizationStatus::blockedBy's bits (mcl.state's "blocked"), with what each means, in the
+   * order they're worth naming.
+   */
+  const BLOCKED_REASONS = [
+    { bit: 1, short: 'correction off', long: 'setCorrectionEnabled(false)' },
+    { bit: 2, short: 'no setPose() yet', long: 'odometry wasn\'t in the field frame yet' },
+    { bit: 64, short: 'spinning', long: 'turning too fast to read the sensors' },
+    { bit: 4, short: 'no readings', long: 'no sensor had a usable reading' },
+    { bit: 8, short: 'too spread out', long: 'the particles disagreed (spread over maxCorrectionSpreadIn)' },
+    { bit: 16, short: 'too few agree', long: 'too few sensors agreed with the map' },
+    { bit: 32, short: 'refused', long: 'a setPose() landed mid-update' },
+  ];
+
+  /** The reasons in a blockedBy value, most telling first. */
+  function blockedReasons(blocked) {
+    return BLOCKED_REASONS.filter((r) => (blocked & r.bit) !== 0);
+  }
+
+  /**
+   * What the log says about its localizer: each sensor's mount and a name from which way it
+   * faces (#meta mcl.sensor<i>), and the settings the beams are judged by (mcl.* meta, else
+   * LocalizerConfig's defaults). Null without an "mcl" channel.
+   */
+  function localizerInfo(log) {
+    if (!log.get('mcl')) return null;
+    const meta = log.meta || {};
+    const num = (key, fallback) => (Number.isFinite(Number(meta[key])) && meta[key] !== '' ? Number(meta[key]) : fallback);
+    const faces = { 0: 'Front', 90: 'Right', 180: 'Back', 270: 'Left' };
+    const mounts = [];
+    for (let i = 0; i < 4; ++i) {
+      const text = meta[`mcl.sensor${i}`];
+      const [forwardIn, rightIn, facingDeg] = text ? text.split(',').map(Number) : [NaN, NaN, NaN];
+      const facing = Number.isFinite(facingDeg) ? ((Math.round(facingDeg) % 360) + 360) % 360 : null;
+      mounts.push({ forwardIn, rightIn, facingDeg, known: Number.isFinite(forwardIn),
+        name: faces[facing] || `Sensor ${i}` });
+    }
+    return {
+      mounts,
+      minSigmaIn: num('mcl.filter.beam.minSigmaIn', 0.6),
+      sigmaFraction: num('mcl.filter.beam.sigmaFraction', 0.05),
+      maxRangeIn: num('mcl.filter.beam.maxRangeIn', 78),
+      agreementSigmas: num('mcl.agreementSigmas', 3),
+      maxCorrectionSpreadIn: num('mcl.maxCorrectionSpreadIn', 3),
+      minAgreeingSensors: num('mcl.minAgreeingSensors', 2),
+      maxCorrectionRateInPerS: num('mcl.maxCorrectionRateInPerS', 4),
+      particles: num('mcl.filter.particleCount', 300),
+      periodMs: num('mcl.periodMs', 50),
+    };
+  }
+
+  /** Whether reading `m` agrees with the map's `e`, by the localizer's own yardstick. */
+  function beamAgrees(info, m, e) {
+    const sigma = Math.max(info.minSigmaIn, info.sigmaFraction * m);
+    return Math.abs(m - e) <= info.agreementSigmas * sigma;
+  }
 
   const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
@@ -168,7 +230,7 @@
 
   /**
    * Analyzes `log` over [range[0], range[1]] (default: all of it). Returns
-   * { findings, motors, battery, pids, mechanisms, motions, logger, sessions }.
+   * { findings, motors, battery, pids, mechanisms, motions, logger, localizer, sessions }.
    * Findings are sorted most severe first, then by time; each is { severity:
    * 'critical'|'warning'|'info', t, end, system, title, detail, channels }.
    */
@@ -197,6 +259,7 @@
     analyzeDriver(log, t0, t1, periods, add, when);
     analyzeDevices(log, add, when);
     analyzeOdometry(log, t0, t1, add, when);
+    report.localizer = analyzeLocalizer(log, t0, t1, periods, add, when);
     report.motions = analyzeMotions(log, t0, t1, report, add, when);
     analyzeEnding(log, add, when);
     mergeDuplicates(findings);
@@ -524,6 +587,141 @@
     }
   }
 
+  /**
+   * The localizer, from mcl, mcl.beams and mcl.state: how often it corrected and why not, how far
+   * odometry drifted, each sensor's agreement with the map, and its CPU. Findings for long
+   * stretches without a correction, sensors that disagree or go quiet, odometry losing travel all
+   * at once (a hit), and slow updates. Returns null without an "mcl" channel.
+   */
+  function analyzeLocalizer(log, t0, t1, periods, add, when) {
+    const mcl = log.get('mcl');
+    const info = localizerInfo(log);
+    if (!mcl || !info) return null;
+    const [i0, i1] = mcl.range(t0, t1);
+    if (i1 - i0 < 10) return null;
+    const state = log.get('mcl.state');
+    const beams = log.get('mcl.beams');
+    const out = { updates: i1 - i0, correctingShare: 0, maxDriftIn: 0, maxDriftAt: null, meanSpreadIn: 0,
+      meanUs: NaN, maxUs: NaN, sensors: [], info };
+
+    let correcting = 0;
+    let spread = 0;
+    let usSum = 0;
+    let usCount = 0;
+    for (let i = i0; i < i1; ++i) {
+      if (mcl.cols.correcting[i] > 0) correcting++;
+      spread += mcl.cols.spread[i];
+      const drift = Math.hypot(mcl.cols.corr_x[i], mcl.cols.corr_y[i]);
+      if (drift > out.maxDriftIn) {
+        out.maxDriftIn = drift;
+        out.maxDriftAt = mcl.t[i];
+      }
+      if (mcl.has('us') && mcl.cols.us[i] > 0) {
+        usSum += mcl.cols.us[i];
+        usCount++;
+        out.maxUs = Math.max(Number.isFinite(out.maxUs) ? out.maxUs : 0, mcl.cols.us[i]);
+      }
+    }
+    out.correctingShare = correcting / (i1 - i0);
+    out.meanSpreadIn = spread / (i1 - i0);
+    if (usCount) out.meanUs = usSum / usCount;
+
+    // long stretches without a correction while enabled, and why
+    const blockedAt = (t) => {
+      if (!state) return 0;
+      const j = state.indexAt(t + 0.001);
+      return j >= 0 && Math.abs(state.t[j] - t) < 0.02 ? state.cols.blocked[j] : 0;
+    };
+    const stretches = episodes(mcl, i0, i1, (i) => mcl.cols.correcting[i] === 0 && isEnabled(periods, mcl.t[i]) &&
+      !(blockedAt(mcl.t[i]) & 2));
+    const long = stretches.filter((e) => e.end - e.start >= THRESHOLDS.mclBlockedS);
+    if (long.length) {
+      const worst = long.reduce((a, b) => (b.end - b.start > a.end - a.start ? b : a));
+      const counts = new Map();
+      for (let i = worst.first; i <= worst.last; ++i) {
+        for (const r of blockedReasons(blockedAt(mcl.t[i]))) counts.set(r, (counts.get(r) || 0) + 1);
+      }
+      const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+      add({ severity: 'warning', t: worst.start, end: worst.end, system: 'Localizer', kind: 'mcl-blocked',
+        title: `Localizer didn't correct for ${(worst.end - worst.start).toFixed(1)}s` +
+          (long.length > 1 ? ` (${long.length} times)` : ''),
+        detail: `From ${when(worst.start)}${top ? `, mostly ${top[0].long}` : ''}. Odometry ran alone meanwhile.`,
+        channels: ['mcl', 'mcl.state'] });
+    }
+
+    // odometry losing travel all at once: the correction jumping, which a hit or a lifted wheel does
+    let lossAt = null;
+    let lossIn = 0;
+    let losses = 0;
+    for (let i = i0 + 1; i < i1; ++i) {
+      if (!mcl.cols.correcting[i]) continue;
+      let k = i - 1;
+      while (k > i0 && mcl.t[i] - mcl.t[k] < 0.5 && !mcl.cols.correcting[k]) --k;
+      if (mcl.t[i] - mcl.t[k] > 0.5 || !mcl.cols.correcting[k]) continue;
+      const jump = Math.hypot(mcl.cols.corr_x[i] - mcl.cols.corr_x[k], mcl.cols.corr_y[i] - mcl.cols.corr_y[k]);
+      if (jump >= THRESHOLDS.mclLossIn && (lossAt === null || mcl.t[i] - lossAt > 2)) {
+        losses++;
+        if (jump > lossIn) {
+          lossIn = jump;
+          lossAt = mcl.t[i];
+        }
+      }
+    }
+    if (losses) {
+      add({ severity: 'info', t: lossAt, system: 'Localizer', kind: 'mcl-loss',
+        title: `Odometry lost ${lossIn.toFixed(1)}in at once${losses > 1 ? ` (${losses} times)` : ''}`,
+        detail: `At ${when(lossAt)} the localizer's correction jumped: a hit, or a wheel off the floor. It eased ` +
+          `the pose back at up to ${info.maxCorrectionRateInPerS} in/s.`, channels: ['mcl'] });
+    }
+
+    // each sensor against the map
+    if (beams) {
+      const [b0, b1] = beams.range(t0, t1);
+      for (let s = 0; s < 4 && beams.has(`m${s}`); ++s) {
+        const m = beams.cols[`m${s}`];
+        const e = beams.cols[`e${s}`];
+        let reachable = 0;
+        let read = 0;
+        let agree = 0;
+        const residuals = [];
+        for (let i = b0; i < b1; ++i) {
+          const inRange = Number.isFinite(e[i]) && e[i] <= info.maxRangeIn - 4;
+          if (inRange) reachable++;
+          if (!Number.isFinite(m[i])) continue;
+          if (inRange) read++;
+          if (Number.isFinite(e[i])) {
+            residuals.push(m[i] - e[i]);
+            if (beamAgrees(info, m[i], e[i])) agree++;
+          }
+        }
+        const name = info.mounts[s].name;
+        const sensor = { name, reachable, readShare: reachable ? read / reachable : NaN,
+          agreeShare: residuals.length ? agree / residuals.length : NaN, medianOffIn: median(residuals) };
+        out.sensors.push(sensor);
+        if (reachable >= 100 && sensor.readShare < 1 - THRESHOLDS.mclSilentShare) {
+          add({ severity: 'warning', t: null, system: 'Localizer', kind: 'mcl-silent',
+            title: `${name} distance sensor read nothing ${Math.round(100 * (1 - sensor.readShare))}% of the time`,
+            detail: 'With a wall in range. Unplugged, low confidence, or pointed where it can\'t see the wall.',
+            channels: ['mcl.beams'] });
+        } else if (residuals.length >= 100 && sensor.agreeShare < 1 - THRESHOLDS.mclDisagreeShare) {
+          add({ severity: 'warning', t: null, system: 'Localizer', kind: 'mcl-disagree',
+            title: `${name} distance sensor disagreed with the map ${Math.round(100 * (1 - sensor.agreeShare))}% of the time`,
+            detail: `Median ${sensor.medianOffIn >= 0 ? '+' : ''}${sensor.medianOffIn.toFixed(1)}in off. Steady: check its ` +
+              'mount in config.hpp (the simulator\'s calibration measures it). Scattered: something blocks it.',
+            channels: ['mcl.beams'] });
+        }
+      }
+    }
+
+    if (Number.isFinite(out.meanUs) && out.meanUs > THRESHOLDS.mclSlowUs) {
+      add({ severity: 'warning', t: null, system: 'Localizer', kind: 'mcl-slow',
+        title: `Localizer updates take ${(out.meanUs / 1000).toFixed(1)}ms`,
+        detail: `${(out.meanUs / (10 * info.periodMs)).toFixed(0)}% of the brain every ${info.periodMs}ms ` +
+          `(${info.particles} particles). Fewer particles, or a longer period.`, channels: ['mcl'] });
+    }
+    return out;
+  }
+
   /** Per-response metrics for every pid channel, plus oscillation and loop-stall findings. */
   function analyzePids(log, t0, t1, add, when) {
     const out = [];
@@ -824,6 +1022,10 @@
     THRESHOLDS,
     reportedDerating,
     analyze,
+    BLOCKED_REASONS,
+    blockedReasons,
+    localizerInfo,
+    beamAgrees,
     timeLabel,
     clock,
     motorChannels,

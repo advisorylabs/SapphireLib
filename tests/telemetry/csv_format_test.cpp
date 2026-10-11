@@ -30,6 +30,7 @@ using sapphirelib::telemetry::formatEvent;
 using sapphirelib::telemetry::formatEventRecords;
 using sapphirelib::telemetry::formatHeader;
 using sapphirelib::telemetry::formatHealth;
+using sapphirelib::telemetry::formatMeta;
 using sapphirelib::telemetry::formatNumber;
 using sapphirelib::telemetry::formatRecord;
 using sapphirelib::telemetry::formatSchema;
@@ -297,10 +298,21 @@ void testDropsAndHealthRows() {
                             .unlogged = 2,
                             .resyncs = 0,
                             .breaks = 0,
-                            .faults = 0};
+                            .faults = 0,
+                            .samplerUs = 1840,
+                            .formatUs = 2615};
     checkLine([&](char* out, std::size_t size) { return formatHealth(out, size, 3104771, stats); },
               "H,3104771,rows=4,bytes=1034,writes=1,wmax_us=21873,wavg_us=21873,drops=0,"
-              "unlogged=2,resyncs=0,breaks=0,faults=0\n");
+              "unlogged=2,resyncs=0,breaks=0,faults=0,samp_us=1840,fmt_us=2615\n");
+}
+
+void testMetaLine() {
+    checkLine([](char* out,
+                 std::size_t size) { return formatMeta(out, size, "mcl.sensorLatencyMs", "30"); },
+              "#meta,mcl.sensorLatencyMs,30\n");
+    // keys keep name characters only; values lose line breaks
+    checkLine([](char* out, std::size_t size) { return formatMeta(out, size, "tune rev", "7\nx"); },
+              "#meta,tune_rev,7 x\n");
 }
 
 void testHeader() {
@@ -361,7 +373,7 @@ const char* const kGoldenFile =
     "E,2104502,file,open,SL000042.CSV\n"
     "E,2104502,phase,disabled,comp=1,field=1\n"
     "H,3104771,rows=4,bytes=1034,writes=1,wmax_us=21873,wavg_us=21873,drops=0,unlogged=2,"
-    "resyncs=0,breaks=0,faults=0\n"
+    "resyncs=0,breaks=0,faults=0,samp_us=1840,fmt_us=2615\n"
     "E,15003114,phase,autonomous,comp=1,field=1\n"
     "S,5,15003201,0,0,0\n"
     "S,6,15003201,12.61,87\n"
@@ -444,7 +456,9 @@ void testGoldenFile() {
                                     .writes = 1,
                                     .writeMaxUs = 21873,
                                     .writeAvgUs = 21873,
-                                    .unlogged = 2}));
+                                    .unlogged = 2,
+                                    .samplerUs = 1840,
+                                    .formatUs = 2615}));
     ev(sys, 15003114, "phase", "autonomous,comp=1,field=1");
     row(odom, sample(15003201, {0.0f, 0.0f, 0.0f}));
     row(batt, sample(15003201, {12.61f, 87.0f}));
@@ -498,6 +512,7 @@ int main() {
     testRecordRows();
     testEventRows();
     testDropsAndHealthRows();
+    testMetaLine();
     testHeader();
     testGoldenFile();
     std::printf("csv_format_test: all tests passed\n");

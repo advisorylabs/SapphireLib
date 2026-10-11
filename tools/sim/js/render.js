@@ -112,7 +112,7 @@
       return { xIn: cam.xIn + (px - this.sizePx / 2) / this.scale, yIn: cam.yIn - (py - this.sizePx / 2) / this.scale };
     }
 
-    /** Draw one frame. `view` holds the toggles, the selection, and step mode's extras. */
+    /** Draw one frame. `view` holds the Show tab's toggles and the zoom. */
     draw(sim, view) {
       const ctx = this.ctx;
       const c = this.colors;
@@ -133,18 +133,13 @@
       // the real robot underneath, so the particles and beams show over it
       this.drawRobot(truth, sim.options.world, { outline: c['robot-line'], fill: c['robot-fill'], details: view.mounts });
 
-      if (view.particles) {
-        if (view.step && view.step.phase === 'predicted' && work && work.before) this.drawPredictLines(loc, work);
-        if (view.step && view.step.killed) this.drawKilled(view.step.killed);
-        this.drawParticles(loc.filter, view);
-      }
+      if (view.particles) this.drawParticles(loc.filter, view);
 
       const est = work && work.estimate;
       if (view.ellipse && est) this.drawEllipse(est);
 
       if (view.beams) this.drawBeams(sim);
       if (view.expected && work && work.checks && est) this.drawExpected(loc, work);
-      if (view.selected != null && work && work.readings) this.drawSelected(loc, work, view.selected);
 
       const snap = robot.odometry.snapshot();
       if (view.raw) this.drawRobot(snap.rawPose, sim.options.world, { outline: c.raw, dash: [5, 4], ghost: true });
@@ -306,39 +301,6 @@
       }
     }
 
-    drawPredictLines(loc, work) {
-      const ctx = this.ctx;
-      const particles = loc.filter.particles;
-      if (particles.length > 800) return;
-      ctx.strokeStyle = rgba(this.colors.rampMid, 0.5);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let i = 0; i < particles.length; ++i) {
-        const b = work.before[i];
-        if (!b) continue;
-        const [x0, y0] = this.toPx(b.xIn, b.yIn);
-        const [x1, y1] = this.toPx(particles[i].xIn, particles[i].yIn);
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-      }
-      ctx.stroke();
-    }
-
-    drawKilled(killed) {
-      const ctx = this.ctx;
-      ctx.strokeStyle = rgba(this.colors.criticalRgb, 0.55);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (const k of killed) {
-        const [x, y] = this.toPx(k.xIn, k.yIn);
-        ctx.moveTo(x - 2.5, y - 2.5);
-        ctx.lineTo(x + 2.5, y + 2.5);
-        ctx.moveTo(x + 2.5, y - 2.5);
-        ctx.lineTo(x - 2.5, y + 2.5);
-      }
-      ctx.stroke();
-    }
-
     drawParticles(filter, view) {
       const ctx = this.ctx;
       const c = this.colors;
@@ -362,15 +324,6 @@
           ctx.lineWidth = 1;
           ctx.stroke();
         }
-      }
-      if (view.selected != null && particles[view.selected]) {
-        const p = particles[view.selected];
-        const [x, y] = this.toPx(p.xIn, p.yIn);
-        ctx.strokeStyle = c.ink;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, 7, 0, 2 * Math.PI);
-        ctx.stroke();
       }
     }
 
@@ -454,34 +407,6 @@
         ctx.moveTo(xm - nx, ym - ny);
         ctx.lineTo(xm + nx, ym + ny);
         ctx.stroke();
-      }
-    }
-
-    drawSelected(loc, work, index) {
-      if (!loc.filter.particles[index]) return;
-      const ctx = this.ctx;
-      const c = this.colors;
-      const info = loc.filter.explainParticle(index, work.beamHeadingDeg, work.readings);
-      for (const row of info.rows) {
-        const ray = row.ray;
-        const expectedIn = Number.isFinite(row.expectedIn) ? row.expectedIn : 90;
-        const [x0, y0] = this.toPx(ray.xIn, ray.yIn);
-        const [xe, ye] = this.toPx(ray.xIn + ray.dirX * expectedIn, ray.yIn + ray.dirY * expectedIn);
-        ctx.strokeStyle = c.ink;
-        ctx.lineWidth = 1.2;
-        ctx.setLineDash([2, 3]);
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(xe, ye);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (row.used) {
-          const [xm, ym] = this.toPx(ray.xIn + ray.dirX * row.measuredIn, ray.yIn + ray.dirY * row.measuredIn);
-          ctx.fillStyle = c['series-5'];
-          ctx.beginPath();
-          ctx.arc(xm, ym, 4, 0, 2 * Math.PI);
-          ctx.fill();
-        }
       }
     }
 
@@ -595,21 +520,6 @@
       ctx.moveTo(x + 6, y - 6);
       ctx.lineTo(x - 6, y + 6);
       ctx.stroke();
-    }
-
-    /** The particle nearest a pixel, within `radiusPx`, or null. */
-    particleAt(filter, px, py, radiusPx = 10) {
-      let best = null;
-      let bestDist = radiusPx;
-      filter.particles.forEach((p, i) => {
-        const [x, y] = this.toPx(p.xIn, p.yIn);
-        const d = Math.hypot(x - px, y - py);
-        if (d < bestDist) {
-          bestDist = d;
-          best = i;
-        }
-      });
-      return best;
     }
   }
 

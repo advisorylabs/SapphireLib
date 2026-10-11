@@ -81,6 +81,8 @@ jobs:
               tests/control/heading_hold_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/localization/particle_filter_test.cpp)
                 extra="src/sapphirelib/localization/field_map.cpp src/sapphirelib/localization/sensor_model.cpp" ;;
+              tests/localization/mount_calibration_test.cpp)
+                extra="src/sapphirelib/localization/field_map.cpp src/sapphirelib/localization/sensor_model.cpp" ;;
               tests/mechanism/position_control_test.cpp) extra="src/sapphirelib/control/pid.cpp" ;;
               tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
@@ -94,6 +96,9 @@ jobs:
               tests/tuning/characterization_runner_test.cpp)
                 extra="src/sapphirelib/tuning/characterization_math.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/mechanism/position_control.cpp src/sapphirelib/control/pid.cpp" ;;
               tests/tuning/gain_design_test.cpp) extra="src/sapphirelib/control/feedforward.cpp" ;;
+              # reads tests/tuning/tune_profile_golden.cfg, relative to the repository root
+              tests/tuning/tune_profile_test.cpp)
+                extra="src/sapphirelib/localization/localizer_config.cpp src/sapphirelib/control/feedforward.cpp" ;;
             esac
             echo "== $name"
             # -pthread for record_ring_test's producer threads; harmless for
