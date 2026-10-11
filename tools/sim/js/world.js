@@ -23,6 +23,11 @@
  *     and the defender robot;
  *   - and things odometry never sees: bumps, and being picked up and put down.
  *
+ * It can also replay a path instead of simulating the chassis (setScript()):
+ * the robot really goes where a log says it went, and the sensors and
+ * tracking wheels report it with this world's errors. That's how the tuner
+ * (tuner.js) runs the localizer over the team's own matches.
+ *
  * Plain script: window.SIM.world in a browser, require('./world.js') in Node.
  *
  * Team 96671H: Hitmen
@@ -78,6 +83,9 @@
       sensorPeriodMs: 33,
       sensorDelayMs: 15, // measurement to the value being readable
       sensorDropoutPct: 1.0,
+      // readings off something between the sensor and the wall that isn't in any map: a game
+      // element or a robot crossing the beam. Calibrated from a log's mcl.beams (mclcal.js)
+      sensorOutlierPct: 0.0,
       // field elements (boxes), and whether each is really there
       elements: [],
       defender: { enabled: false, xIn: 30, yIn: 20, sizeIn: 18, patrol: false },
@@ -123,6 +131,7 @@
       this.lastBeams = s.sensors.map(() => null);
       this.bumps = 0;
       this.patrolT = 0;
+      this.script = null;
       this.rebuildMap();
       this.recordHistory();
     }
@@ -161,24 +170,65 @@
       for (let i = 0; i < ms; ++i) this.stepOne();
     }
 
+    /**
+     * Replay a path instead of simulating the chassis: `samples` is [{ tMs,
+     * xIn, yIn, headingDeg }] from tMs 0, headings unwrapped (no jump at
+     * 0/360). Between samples the robot moves in a straight line; after the
+     * last it stays put. null goes back to the chassis.
+     */
+    setScript(samples) {
+      this.script = samples && samples.length ? samples : null;
+      this.scriptIndex = 0;
+      // bumps move the robot off the script, and it stays off (see bump())
+      this.scriptOffset = { xIn: 0, yIn: 0 };
+    }
+
+    /** Where the script puts the robot at `tMs`. */
+    scriptPose(tMs) {
+      const script = this.script;
+      while (this.scriptIndex + 1 < script.length && script[this.scriptIndex + 1].tMs <= tMs) {
+        this.scriptIndex++;
+      }
+      const a = script[this.scriptIndex];
+      const b = script[Math.min(this.scriptIndex + 1, script.length - 1)];
+      const f = b.tMs > a.tMs ? Math.min(Math.max((tMs - a.tMs) / (b.tMs - a.tMs), 0), 1) : 0;
+      return {
+        xIn: a.xIn + f * (b.xIn - a.xIn),
+        yIn: a.yIn + f * (b.yIn - a.yIn),
+        headingDeg: a.headingDeg + f * (b.headingDeg - a.headingDeg),
+      };
+    }
+
     stepOne() {
       const s = this.settings;
       const p = this.plants;
-      for (const plant of [p.forward, p.strafe, p.turn]) plant.advance(kPhysicsStepS);
 
       const x0 = this.truth.xIn;
       const y0 = this.truth.yIn;
       const h0 = this.truth.headingDeg;
 
-      // integrate at the middle of the step's rotation
-      const turnDeg = p.turn.v * kPhysicsStepS;
-      const midRad = (h0 + turnDeg / 2) * kDegToRad;
-      const sin = Math.sin(midRad);
-      const cos = Math.cos(midRad);
-      this.truth.xIn += (p.forward.v * sin + p.strafe.v * cos) * kPhysicsStepS;
-      this.truth.yIn += (p.forward.v * cos - p.strafe.v * sin) * kPhysicsStepS;
-      this.truth.headingDeg += turnDeg;
-      this.collide();
+      let sin;
+      let cos;
+      if (this.script) {
+        const pose = this.scriptPose(this.timeMs + 1);
+        this.truth.xIn = pose.xIn + this.scriptOffset.xIn;
+        this.truth.yIn = pose.yIn + this.scriptOffset.yIn;
+        this.truth.headingDeg = pose.headingDeg;
+        const midRad = ((h0 + this.truth.headingDeg) / 2) * kDegToRad;
+        sin = Math.sin(midRad);
+        cos = Math.cos(midRad);
+      } else {
+        for (const plant of [p.forward, p.strafe, p.turn]) plant.advance(kPhysicsStepS);
+        // integrate at the middle of the step's rotation
+        const turnDeg = p.turn.v * kPhysicsStepS;
+        const midRad = (h0 + turnDeg / 2) * kDegToRad;
+        sin = Math.sin(midRad);
+        cos = Math.cos(midRad);
+        this.truth.xIn += (p.forward.v * sin + p.strafe.v * cos) * kPhysicsStepS;
+        this.truth.yIn += (p.forward.v * cos - p.strafe.v * sin) * kPhysicsStepS;
+        this.truth.headingDeg += turnDeg;
+        this.collide();
+      }
 
       // what the robot really did this step, in its own frame
       const dx = this.truth.xIn - x0;
@@ -303,6 +353,11 @@
         const trueIn = this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
         let mm = trueIn * 25.4;
         mm += gaussianAt(this.rng, s.sensorNoiseScale * 0.5 * Math.max(15, 0.05 * mm));
+        // something nearer than the wall, anywhere along the beam. Only drawn when enabled, so a
+        // world without outliers runs the same random numbers it always has
+        if (s.sensorOutlierPct > 0 && Number.isFinite(mm) && this.rng.uniform() * 100 < s.sensorOutlierPct) {
+          mm = 25 + this.rng.uniform() * Math.max(0, mm - 25);
+        }
         const dropped = this.rng.uniform() * 100 < s.sensorDropoutPct;
         this.readingsMm[i] = !Number.isFinite(mm) || mm > kMaxRangeMm || dropped ? kNoObjectMm
           : Math.max(0, Math.round(mm));
@@ -337,7 +392,13 @@
     bump(dxIn, dyIn) {
       this.truth.xIn += dxIn;
       this.truth.yIn += dyIn;
-      this.collide();
+      if (this.script) {
+        // the rest of the path, shifted: a replayed robot doesn't steer back, it just carries on
+        this.scriptOffset.xIn += dxIn;
+        this.scriptOffset.yIn += dyIn;
+      } else {
+        this.collide();
+      }
       this.bumps++;
     }
 

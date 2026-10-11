@@ -21,6 +21,7 @@
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
 #include "robot/telemetry.hpp"
+#include "robot/tune.hpp"
 #include "robot/tuning.hpp"
 #include "sapphirelib/diag/sensor_check.hpp"
 #include "sapphirelib/gui/auton_selector_page.hpp"
@@ -73,10 +74,14 @@ void buildScreen() {
     Gui& gui = screen();
 
     auto homePage = std::make_unique<HomePage>(&drivetrain().imu());
-    // An "SD:" row, so a missing or pulled card is noticed in the pits.
+    // An "SD:" row with a Start/Stop log button, so a missing or pulled card
+    // is noticed in the pits and a test run is one tap to record. Matches
+    // record on their own (see logger()).
     homePage->setTelemetry(&logger());
+    // Which TUNE.CFG this run is using, or that it's on the code's values.
+    homePage->addRow(&tuneStatusText);
     // The macros' debug mode: L1/L2 power the lift directly, no levels (see
-    // macros.hpp). Red while on.
+    // macros.hpp). Top right of the page, red while on.
     homePage->addToggle(
         "Debug", [] { return macros::debug(); }, [](bool on) { macros::setDebug(on); });
     gui.addPage(std::move(homePage));
@@ -133,6 +138,15 @@ void buildScreen() {
     odometryPage->enableOffsetCalibration(
         drivetrain().imu(), &verticalWheel(), &horizontalWheel(),
         [](double turn) { drivetrain().holonomicVolts(0.0, 0.0, turn * 12.0); });
+    // "Calibrate Sensors" button: spins one turn each way at ~45 deg/s with
+    // the robot on the field's halfway line, fits where each localization
+    // distance sensor really sits against the walls, and applies the ones it
+    // pinned down straight to the running localizer, as Calibrate Offsets
+    // does for odometry. The terminal logs each mount ready to copy into
+    // config.hpp's k*Sensor*In to keep it. Run Calibrate Offsets first: the
+    // fit trusts odometry's record of the spin.
+    odometryPage->enableSensorCalibration(
+        localizer(), [](double turn) { drivetrain().holonomicVolts(0.0, 0.0, turn * 12.0); });
     gui.addPage(std::move(odometryPage));
     SAPPHIRELIB_LOG_INFO("init", "all pages built");
 

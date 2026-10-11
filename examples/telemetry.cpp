@@ -5,8 +5,9 @@
  * with one vertical tracking wheel. Logs every step of the drivetrain's PIDs,
  * the odometry pose, the volts the drivetrain commanded, every motor's health,
  * the battery, a custom channel recorded from driver control, and event
- * markers, one file per program run, for tuning and troubleshooting off the
- * robot. docs/TELEMETRY_FORMAT.md is the file format (and what each column
+ * markers, one file per recording, for tuning and troubleshooting off the
+ * robot. Recording starts with the Home page's Start log button, and on its
+ * own whenever a competition switch or the field is plugged in. docs/TELEMETRY_FORMAT.md is the file format (and what each column
  * means for tuning); open the files in tools/analyzer/index.html to see what
  * went wrong in a match, replay it, and tune from it, or read them with
  * tools/telemetry/slt_read.py.
@@ -82,8 +83,16 @@ Odometry& odometry() {
 /// Exactly one Logger per program, with static storage: its tasks run for the
 /// rest of the program. `directory` and `robotName` are read for as long, so
 /// they're string literals.
+///
+/// recordAtStart = false: nothing is recorded until the Home page's Start log
+/// button (or startRecording()), so pit testing doesn't fill the card, and a
+/// match records itself (recordUnderCompetition, on by default): a new file
+/// when the competition switch or field connects, closed 5s after it's
+/// unplugged. Leave recordAtStart at its default (true) to record every
+/// program run from power-on instead.
 Logger& logger() {
-    static Logger instance({.directory = "/usd/sl", .robotName = "1234A"});
+    static Logger instance(
+        {.directory = "/usd/sl", .robotName = "1234A", .recordAtStart = false});
     return instance;
 }
 
@@ -153,8 +162,10 @@ void initialize() {
     // holds up initialize().
     log.start();
 
-    // An "SD: logging SL000042" line on the home page, so a missing, full, or
-    // pulled card is noticed in the pits rather than after the match.
+    // An "SD: logging SL000042 (button)" line on the home page, with a Start
+    // log / Stop log button beside it, so a missing, full, or pulled card is
+    // noticed in the pits rather than after the match. "SD: ready, not
+    // logging" means the file is closed and the card is safe to pull.
     auto home = std::make_unique<HomePage>(&drivetrain().imu());
     home->setTelemetry(&log);
     gui.addPage(std::move(home));

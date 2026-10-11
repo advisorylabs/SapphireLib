@@ -49,14 +49,18 @@ LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, dou
         const double b = 2.0 * dot(f, d);
         const double c = dot(f, f) - lookaheadIn * lookaheadIn;
         const double discriminant = b * b - 4.0 * a * c;
-        if (discriminant < 0.0) continue;
 
-        // only the exit root, t2, can be a forward target; t1 would point back along the path. If
-        // t2 isn't on this segment, keep looking at later ones
-        const double t2 = (-b + std::sqrt(discriminant)) / (2.0 * a);
-        if (t2 < 0.0 || t2 > 1.0) continue;
+        // only the exit root, t2, can be a forward target; t1 would point back along the path
+        const double t2 = discriminant < 0.0 ? -1.0 : (-b + std::sqrt(discriminant)) / (2.0 * a);
+        if (t2 < 0.0 || t2 > 1.0) {
+            // before the first hit, this segment lies inside the circle: keep looking. After one,
+            // the path has left the circle, and a later segment that comes back within reach (a
+            // closed lap's last side, passing beside its first) is for later in the path
+            if (found) break;
+            continue;
+        }
 
-        // keep scanning even after a hit, since a later segment's intersection is further along
+        // keep scanning after a hit, since the next segment's intersection is further along
         found = true;
         bestPoint = Waypoint{p1.x + d.x * t2, p1.y + d.y * t2};
         bestIndex = i;

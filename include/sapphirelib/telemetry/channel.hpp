@@ -49,9 +49,12 @@ public:
      * @param schema the channel's name, kind, and columns
      * @param capacity ring size in rows
      * @param fileEpoch the owning Logger's count of files opened, see fileEpoch()
+     * @param recording the owning Logger's "recording now" flag. While it's false, nothing is
+     * recorded (and nothing counts as dropped). nullptr always records
      */
     Channel(ChannelSchema schema, std::size_t capacity,
-            const std::atomic<std::uint32_t>* fileEpoch = nullptr);
+            const std::atomic<std::uint32_t>* fileEpoch = nullptr,
+            const std::atomic<bool>* recording = nullptr);
 
     Channel(const Channel&) = delete;
     Channel& operator=(const Channel&) = delete;
@@ -69,7 +72,7 @@ public:
      *
      * @param values the values
      * @return true the row was logged
-     * @return false it was dropped, or this is an events channel
+     * @return false it was dropped, the Logger isn't recording, or this is an events channel
      */
     bool record(std::initializer_list<double> values);
     bool record(const double* values, std::size_t count);
@@ -143,6 +146,7 @@ private:
     RecordRing ring_;
     ProducerGate gate_;
     const std::atomic<std::uint32_t>* fileEpoch_;
+    const std::atomic<bool>* recording_;
 };
 
 /**

@@ -2,9 +2,9 @@
  * SapphireLib simulator: app.js
  *
  * The page: the frame loop (real time × speed, in 10ms simulation ticks),
- * keyboard driving, the controls in each tab, stepping through one localizer
- * update a phase at a time, the particle inspector, and the readouts. The
- * simulation itself is sim.js; this only drives it and shows it.
+ * keyboard driving, the controls in each tab, the help card, and the
+ * readouts. The simulation itself is sim.js; this only drives it and shows
+ * it.
  *
  * Browser only: window.SIM.app.
  *
@@ -20,11 +20,11 @@
   const R = SIM.robot;
   const S = SIM.sim;
   const M = root.SA.model;
+  const TF = root.SA.tunefile;
   const { ROUTINES } = SIM.routines;
 
   const kTickMs = S.kTickMs;
   const kMaxTicksPerFrame = 400;
-  const kSensorNames = ['Front', 'Right', 'Back', 'Left'];
 
   let options;
   let sim;
@@ -46,8 +46,6 @@
     raw: true, corrected: true, estimate: true, correctionArrow: true, trails: true, target: true,
     mounts: true, grid: true,
     zoom: 1,
-    selected: null,
-    step: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -83,11 +81,12 @@
     buildTransport();
     buildDrive();
     buildShow();
-    buildLearn();
     buildEvents();
     buildRobot();
     buildMcl();
+    buildTune();
     buildLegend();
+    buildHelp();
     bindField();
     bindKeyboard();
 
@@ -114,11 +113,7 @@
 
   function buildTransport() {
     $('play-btn').addEventListener('click', () => setPlaying(!playing));
-    $('reset-btn').addEventListener('click', () => {
-      sim.reset(selectedRoutine.start);
-      clearStepView();
-      view.selected = null;
-    });
+    $('reset-btn').addEventListener('click', () => sim.reset(selectedRoutine.start));
     $('speed-select').addEventListener('change', (event) => { speed = +event.target.value; });
     $('theme-btn').addEventListener('click', () => {
       const docEl = document.documentElement;
@@ -133,10 +128,15 @@
   function setPlaying(value) {
     playing = value;
     $('play-btn').textContent = playing ? 'Pause' : 'Play';
-    if (playing) {
-      if (sim.pendingStep) sim.finishLocalizerStep();
-      clearStepView();
-    }
+  }
+
+  function buildHelp() {
+    $('help-btn').addEventListener('click', () => toggleHelp());
+  }
+
+  function toggleHelp(open = $('help').hidden) {
+    $('help').hidden = !open;
+    $('help-btn').setAttribute('aria-expanded', String(open));
   }
 
   // --- Drive tab ---------------------------------------------------------------------------
@@ -181,8 +181,6 @@
     selectedRoutine = routine;
     $('routine-select').value = routine.id;
     $('routine-desc').textContent = routine.description;
-    clearStepView();
-    view.selected = null;
     sim.runRoutine(routine);
     $('routine-result').hidden = true;
     if (!playing) setPlaying(true);
@@ -193,32 +191,34 @@
     const box = $('gains-readout');
     box.replaceChildren();
     const row = (label, text) => box.append(el('span', { text: label }), el('span', { text }));
-    row('Drive', `kP ${fmt(g.drive.kP, 3)}  kD ${fmt(g.drive.kD, 4)}`);
-    row('Turn', `kP ${fmt(g.turn.kP, 3)}  kD ${fmt(g.turn.kD, 5)}`);
+    row('Drive', `kP ${fmt(g.drive.kP, 3)}  kD ${fmt(g.drive.kD, 4)}  (V/in)`);
+    row('Turn', `kP ${fmt(g.turn.kP, 3)}  kD ${fmt(g.turn.kD, 5)}  (V/°)`);
     if (options.useAutoTune && sim.designs) {
       const d = sim.designs;
-      row('Designed', `settle ${fmt(d.drive.settleTimeS, 2)}s / ${fmt(d.turn.settleTimeS, 2)}s, ` +
-        `phase margin ${fmt(d.drive.phaseMarginDeg, 0)}° / ${fmt(d.turn.phaseMarginDeg, 0)}°`);
+      row('Settle', `${fmt(d.drive.settleTimeS, 2)} s / ${fmt(d.turn.settleTimeS, 2)} s`);
+      row('Margin', `${fmt(d.drive.phaseMarginDeg, 0)}° / ${fmt(d.turn.phaseMarginDeg, 0)}°`);
     }
   }
 
   // --- Show tab ---------------------------------------------------------------------------
 
+  // [view key, label, tooltip, swatch]
   const SHOW = {
     'show-particles': [
       ['particles', 'Particles', 'Every guess at where the robot is', 'accent'],
       ['weightColor', 'Color by fit', 'Amber explains the last readings best, grey worst', 'warning'],
-      ['weightSize', 'Size by weight', 'Big ones count most in the estimate', null],
-      ['ellipse', 'Uncertainty ellipse', 'Where the cloud puts the robot, 2 sigma', 'accent'],
+      ['weightSize', 'Size by weight', 'Bigger counts more in the estimate', null],
+      ['ellipse', 'Uncertainty ellipse (2σ)', 'Where the cloud puts the robot', 'accent'],
     ],
     'show-sensors': [
       ['beams', 'Sensor beams', 'What each sensor really sees, from the real robot', 'beam'],
-      ['expected', 'Expected vs measured', 'From the estimate: dashed to where the map says the wall is, a tick where the sensor says it is. Green agrees, red doesn\'t', 'good'],
+      ['expected', 'Expected vs measured', 'From the estimate: dashed to where the map says the wall is, a tick at ' +
+        'the reading. Green agrees (within 3σ), red doesn\'t', 'good'],
     ],
     'show-poses': [
-      ['raw', 'Odometry alone', 'Where the tracking wheels and IMU alone put the robot', 'raw'],
+      ['raw', 'Odometry alone', 'Tracking wheels and IMU only', 'raw'],
       ['corrected', 'Corrected pose', 'What the motions drive by: odometry plus the correction', 'corrected'],
-      ['estimate', 'MCL estimate', 'The particles\' weighted average (×)', 'accent'],
+      ['estimate', 'MCL estimate (×)', 'The particles\' weighted mean', 'accent'],
       ['correctionArrow', 'Correction', 'From odometry alone to the corrected pose', 'corrected'],
       ['trails', 'Trails', 'Real (grey), odometry alone, corrected', null],
       ['target', 'Motion target', 'The running motion\'s point, pose, or path', 'series-4'],
@@ -233,13 +233,13 @@
     segmented($('zoom-seg'), (value) => { view.zoom = +value; });
     for (const [containerId, items] of Object.entries(SHOW)) {
       const container = $(containerId);
-      for (const [key, label, hint, swatch] of items) {
+      for (const [key, label, tip, swatch] of items) {
         const input = el('input', { type: 'checkbox' });
         input.checked = view[key];
         input.addEventListener('change', () => { view[key] = input.checked; });
         const sw = el('span', { class: 'sw' });
         sw.style.background = swatch ? `var(--${swatch})` : 'transparent';
-        container.append(el('label', {}, [input, sw, el('span', {}, [label, hint ? el('small', { text: hint }) : null])]));
+        container.append(el('label', { title: tip || null }, [input, sw, el('span', { text: label })]));
       }
     }
   }
@@ -259,101 +259,6 @@
       swatch.style.color = color;
       legend.append(el('span', {}, [swatch, label]));
     }
-  }
-
-  // --- Learn tab ---------------------------------------------------------------------------
-
-  function buildLearn() {
-    $('step-btn').addEventListener('click', stepPhase);
-    $('step-full-btn').addEventListener('click', () => {
-      setPlaying(false);
-      if (!sim.pendingStep) stepPhase();
-      if (sim.pendingStep === 'predicted') stepPhase();
-      if (sim.pendingStep === 'weighed') stepPhase();
-    });
-  }
-
-  function stepPhase() {
-    setPlaying(false);
-    const loc = sim.robot.localizer;
-    const caption = $('step-caption');
-    caption.hidden = false;
-    if (!sim.pendingStep) {
-      sim.beginLocalizerStep();
-      const w = loc.work;
-      const noise = loc.config.filter.motionNoise;
-      const sigma = noise.baseIn + noise.perInch * Math.hypot(w.dxIn, w.dyIn) + noise.perDegreeIn * Math.abs(w.turnedDeg);
-      view.step = { phase: 'predicted' };
-      caption.innerHTML = w.restarted
-        ? '<strong>1 · Start over.</strong> Odometry was just reset (setPose), so the particles were scattered around its new pose.'
-        : `<strong>1 · Predict.</strong> Odometry moved ${fmt(Math.hypot(w.dxIn, w.dyIn), 2)} in and turned ` +
-          `${fmt(Math.abs(w.turnedDeg), 1)}° since the last update, so every particle moved the same, plus random ` +
-          `noise (σ = ${fmt(sigma, 3)} in) because odometry isn't perfect. The lines show each particle's move.`;
-      $('step-btn').textContent = 'Step: weigh';
-    } else if (sim.pendingStep === 'predicted') {
-      sim.weighLocalizerStep();
-      const w = loc.work;
-      view.step = { phase: 'weighed' };
-      const n = loc.filter.particles.length;
-      const readings = w.readings.map((r, i) => (r.valid ? `${kSensorNames[i] || i} ${fmt(r.distanceIn, 1)} in` : null))
-        .filter(Boolean);
-      caption.innerHTML = w.weighed
-        ? `<strong>2 · Weigh.</strong> The sensors read ${readings.join(', ')}. Each particle was scored on what ` +
-          'those sensors would read from where it is: amber ones explain the readings best, grey worst, and size is ' +
-          `weight. ${fmt(w.estimate.effectiveParticles, 0)} of ${n} particles now carry the estimate (×).`
-        : '<strong>2 · Weigh.</strong> No sensor had a usable reading this time (out of range, dropped, or ' +
-          'spinning too fast), so the weights didn\'t change.';
-      $('step-btn').textContent = 'Step: resample';
-    } else {
-      const before = loc.filter.particles.map((p) => ({ xIn: p.xIn, yIn: p.yIn }));
-      sim.finishLocalizerStep();
-      const w = loc.work;
-      const filter = loc.filter;
-      let text;
-      if (w.resampled) {
-        const survivors = filter.lastSurvivors;
-        const killed = before.filter((_, i) => survivors[i] === 0);
-        let kept = 0;
-        for (const count of survivors) if (count > 0) kept++;
-        view.step = { phase: 'resampled', killed };
-        text = `<strong>3 · Resample.</strong> ${kept} particles survived and were copied in proportion to their ` +
-          `weight; ${killed.length} light ones were dropped (×).` +
-          (filter.lastRecovered ? ` ${filter.lastRecovered} fresh ones were scattered near the estimate for recovery (pink ring), since the readings suddenly got harder to explain.` : '');
-      } else {
-        view.step = { phase: 'resampled', killed: [] };
-        text = '<strong>3 · Resample: not yet.</strong> The weights are still spread across enough particles ' +
-          `(${fmt((100 * w.estimate.effectiveParticles) / filter.particles.length, 0)}% effective, resampling below ` +
-          `${fmt(100 * filter.config.resampleThreshold, 0)}%), so they carry over to the next update.`;
-      }
-      text += ` ${gateSentence(loc)}`;
-      caption.innerHTML = text;
-      $('step-btn').textContent = 'Step: predict';
-    }
-    updateDom();
-  }
-
-  function gateSentence(loc) {
-    const w = loc.work;
-    if (!w || !w.gate) return '';
-    const st = loc.status;
-    if (st.correcting) {
-      return `<br>By the estimate, odometry alone is ${fmt(Math.hypot(st.correctionXIn, st.correctionYIn), 2)} in ` +
-        `off, so the pose is easing toward the estimate at up to ${fmt(loc.config.maxCorrectionRateInPerS, 1)} in/s.`;
-    }
-    const g = w.gate;
-    const why = [];
-    if (!g.enabled) why.push('correction is off (Drive tab)');
-    if (g.inFieldFrame === false) why.push('there\'s been no setPose() yet');
-    if (!g.weighed) why.push('no sensor had a reading');
-    if (!g.spreadOk) why.push(`the cloud is too spread out (${fmt(w.estimate.spreadIn, 1)} in, over ${fmt(loc.config.maxCorrectionSpreadIn, 1)})`);
-    if (!g.agreeingOk) why.push(`only ${w.agreeing} sensor${w.agreeing === 1 ? '' : 's'} agree with the map (need ${loc.config.minAgreeingSensors})`);
-    return `<br>Not correcting odometry: ${why.join(', ') || 'odometry was reset'}.`;
-  }
-
-  function clearStepView() {
-    view.step = null;
-    $('step-caption').hidden = true;
-    $('step-btn').textContent = 'Step: predict';
   }
 
   // --- Events tab ---------------------------------------------------------------------------
@@ -401,19 +306,20 @@
 
     const d = options.world.defender;
     checkboxList($('defender-checks'), [
-      ['On the field', () => d.enabled, (v) => { d.enabled = v; sim.refreshMaps(); }],
-      ['Patrol back and forth', () => d.patrol, (v) => { d.patrol = v; }],
+      ['On the field', () => d.enabled, (v) => { d.enabled = v; sim.refreshMaps(); },
+        'Drag it on the field. The sensors see it; the map doesn\'t'],
+      ['Patrol', () => d.patrol, (v) => { d.patrol = v; }, 'Drive back and forth'],
     ]);
     // one list of elements, each really there or not, and the map has all of them or none
     checkboxList($('element-checks'), [
-      ['In the world (the sensors see them)', () => options.world.elements.some((e) => e.inWorld), (v) => {
+      ['In the world', () => options.world.elements.some((e) => e.inWorld), (v) => {
         for (const e of options.world.elements) e.inWorld = v;
         sim.refreshMaps();
-      }],
-      ['In the MCL map (the localizer knows them)', () => options.elementsInMap, (v) => {
+      }, 'The sensors see them (filled boxes)'],
+      ['In the map', () => options.elementsInMap, (v) => {
         options.elementsInMap = v;
         sim.refreshMaps();
-      }],
+      }, 'The localizer expects them (dashed outlines). In the map but not the world is the worse mistake'],
     ]);
     const buttons = $('scenario-buttons');
     for (const scenario of SCENARIOS) {
@@ -437,12 +343,12 @@
   const checkRefreshers = [];
 
   function checkboxList(container, items) {
-    for (const [label, get, set] of items) {
+    for (const [label, get, set, tip] of items) {
       const input = el('input', { type: 'checkbox' });
       input.checked = get();
       input.addEventListener('change', () => set(input.checked));
       checkRefreshers.push(() => { input.checked = get(); });
-      container.append(el('label', {}, [input, el('span', { text: label })]));
+      container.append(el('label', { title: tip || null }, [input, el('span', { text: label })]));
     }
   }
 
@@ -461,6 +367,7 @@
     ['sensorNoiseScale', 'Distance sensor noise', 0, 5, 0.1, '×', '1 is half the V5 spec (±15mm, ±5%) as one standard deviation'],
     ['sensorDelayMs', 'Distance sensor delay', 0, 100, 1, 'ms', 'On top of its ~30Hz sampling'],
     ['sensorDropoutPct', 'Distance sensor dropouts', 0, 50, 1, '%', 'Readings of "no object"'],
+    ['sensorOutlierPct', 'Distance sensor outliers', 0, 30, 0.5, '%', 'Readings off something nearer than the wall that no map has: a game element, a robot'],
   ];
 
   const sliderSyncers = [];
@@ -477,7 +384,7 @@
       input.value = get();
       out.textContent = `${get()}${unit}`;
     });
-    container.append(el('label', { class: 'slider' }, [label, out, input, hint ? el('small', { text: hint }) : null]));
+    container.append(el('label', { class: 'slider', title: hint || null }, [label, out, input]));
   }
 
   function syncSliders() {
@@ -490,12 +397,16 @@
       slider(box, { label, min, max, step, unit, hint, get: () => options.world[key], set: (v) => { options.world[key] = v; } });
     }
     const grid = $('model-grid');
-    grid.append(el('span'), el('span', { class: 'h', text: 'kS (V)' }), el('span', { class: 'h', text: 'kV' }),
-      el('span', { class: 'h', text: 'kA' }));
+    // per inch for Forward and Strafe, per degree for Turn
+    grid.append(el('span'), el('span', { class: 'h', text: 'kS (V)' }),
+      el('span', { class: 'h', text: 'kV (V·s/u)', title: 'volts per unit/s: inches, or degrees for Turn' }),
+      el('span', { class: 'h', text: 'kA (V·s²/u)', title: 'volts per unit/s²: inches, or degrees for Turn' }));
     for (const [axis, label] of [['forward', 'Forward'], ['strafe', 'Strafe'], ['turn', 'Turn']]) {
       grid.append(el('span', { text: label }));
       for (const term of ['kS', 'kV', 'kA']) {
         const input = el('input', { type: 'number', step: 'any', value: options.world.models[axis][term] });
+        // a calibrated world (Tune tab) can bring the robot's own models
+        sliderSyncers.push(() => { input.value = options.world.models[axis][term]; });
         input.addEventListener('change', () => {
           const value = +input.value;
           if (!Number.isFinite(value) || value < 0) return;
@@ -507,8 +418,9 @@
         grid.append(input);
       }
     }
-    grid.append(el('span', { text: 'Delay (s)' }));
+    grid.append(el('span', { text: 'Delay (s)', title: 'Between commanding volts and the chassis responding' }));
     const delay = el('input', { type: 'number', step: 'any', value: options.world.delayS });
+    sliderSyncers.push(() => { delay.value = options.world.delayS; });
     delay.addEventListener('change', () => {
       if (!(+delay.value >= 0)) return;
       options.world.delayS = +delay.value;
@@ -582,7 +494,7 @@
         applyMcl();
       });
       checkRefreshers.push(() => { input.checked = getPath(mclConfig, path); });
-      checks.append(el('label', {}, [input, el('span', {}, [label, el('small', { text: hint })])]));
+      checks.append(el('label', { title: hint }, [input, el('span', { text: label })]));
     }
     $('mcl-defaults-btn').addEventListener('click', () => {
       mclConfig = defaultMcl();
@@ -603,48 +515,124 @@
       options.localizer = JSON.parse(JSON.stringify(config));
       options.localizerPeriodMs = periodMs;
       const robot = sim.robot;
-      if (sim.pendingStep) sim.finishLocalizerStep();
       robot.localizer = new R.MonteCarloLocalizer(robot.odometry, sim.world.settings.sensors.map((_, i) => () => sim.world.distanceSensor(i)),
-        sim.world.settings.sensors, sim.localizerMap(), options.localizer, robot.clock);
+        options.localizerMounts || sim.world.settings.sensors, sim.localizerMap(), options.localizer, robot.clock);
       robot.localizer.setCorrectionEnabled(options.correctOdometry);
       robot.localizerPeriodMs = periodMs;
       robot.localizer.update();
-      view.selected = null;
-      clearStepView();
     }, 150);
   }
 
-  /** The non-default settings, as the C++ to paste into localizer(). */
+  /**
+   * The non-default settings two ways: TUNE.CFG lines (the Tune tab saves
+   * them, and the robot loads them without a rebuild), and the C++ for the
+   * LocalizerConfig in localizerSettings() (src/robot/tune.cpp), nested in
+   * declaration order the way designated initializers need.
+   */
   function updateMclCode() {
-    const d = defaultMcl();
-    const c = mclConfig;
-    const num = (v) => (Number.isInteger(v) ? `${v}` : `${+v.toFixed(4)}`);
-    const dbl = (v) => (Number.isInteger(v) ? `${v}.0` : `${+v.toFixed(4)}`);
-    const group = (fields) => fields.filter(Boolean).join(', ');
-    const pick = (path, render) => (getPath(c, path) !== getPath(d, path) ? `.${path.split('.').pop()} = ${render(getPath(c, path))}` : null);
+    const flat = mclFlat();
+    const changed = TF.LOCALIZER_SETTINGS.filter((setting) => flat[setting.key] !== setting.default);
+    const cfg = changed.map((setting) => `mcl.${setting.key}=${TF.num(flat[setting.key])}`);
+    if (flat.periodMs !== TF.DEFAULT_PERIOD_MS) cfg.unshift(`mcl.periodMs=${flat.periodMs}`);
+    $('mcl-cfg').textContent = cfg.length ? cfg.join('\n') : '# the defaults: nothing to add';
 
-    const motion = group([pick('filter.motionNoise.baseIn', dbl), pick('filter.motionNoise.perInch', dbl),
-      pick('filter.motionNoise.perDegreeIn', dbl)]);
-    const beam = group([pick('filter.beam.sigmaFraction', dbl), pick('filter.beam.outlierProbability', dbl)]);
-    const recovery = group([pick('filter.recovery.enabled', String), pick('filter.recovery.triggerRatio', dbl),
-      pick('filter.recovery.radiusIn', dbl)]);
-    const filter = group([
-      pick('filter.particleCount', num),
-      motion && `.motionNoise = {${motion}}`,
-      beam && `.beam = {${beam}}`,
-      recovery && `.recovery = {${recovery}}`,
-    ]);
-    const fields = [
-      filter && `.filter = {${filter}}`,
-      pick('sensorLatencyMs', dbl),
-      pick('waitForSetPose', String),
-      pick('maxCorrectionSpreadIn', dbl),
-      pick('minAgreeingSensors', num),
-      pick('maxCorrectionRateInPerS', dbl),
-    ].filter(Boolean);
-    let code = fields.length ? `LocalizerConfig{\n    ${fields.join(',\n    ')},\n}` : 'LocalizerConfig{}  // the defaults';
-    if (c.periodMs !== d.periodMs) code += `\n\n// in initDevices()\nlocalizer().startTask(${c.periodMs});`;
+    const literal = (setting, value) => {
+      if (['filter.recovery.enabled', 'correctOdometry', 'waitForSetPose'].includes(setting.key)) return value ? 'true' : 'false';
+      if (setting.whole) return String(value);
+      return Number.isInteger(value) ? `${value}.0` : TF.num(value);
+    };
+    // { name, fields: [...] } groups, in the order the structs declare them
+    const tree = { fields: [] };
+    for (const setting of changed) {
+      const parts = setting.key.split('.');
+      let node = tree;
+      for (const part of parts.slice(0, -1)) {
+        let child = node.fields.find((f) => f.name === part && f.fields);
+        if (!child) {
+          child = { name: part, fields: [] };
+          node.fields.push(child);
+        }
+        node = child;
+      }
+      node.fields.push({ name: parts[parts.length - 1], value: literal(setting, flat[setting.key]) });
+    }
+    const render = (node) => node.fields.map((f) => (f.fields ? `.${f.name} = {${render(f)}}` : `.${f.name} = ${f.value}`)).join(', ');
+    let code = changed.length ? `LocalizerConfig{\n    ${tree.fields.map((f) => render({ fields: [f] })).join(',\n    ')},\n}`
+      : 'LocalizerConfig{}  // the defaults';
+    if (flat.periodMs !== TF.DEFAULT_PERIOD_MS) code += `\n\n// and in initDevices()\nlocalizer().startTask(${flat.periodMs});`;
     $('mcl-code').textContent = code;
+  }
+
+  /** The MCL tab's settings as a flat { path: value } config, like TUNE.CFG's mcl.* lines. */
+  function mclFlat() {
+    const out = {};
+    for (const setting of TF.LOCALIZER_SETTINGS) {
+      const value = getPath(mclConfig, setting.key);
+      out[setting.key] = typeof value === 'boolean' ? (value ? 1 : 0) : value;
+    }
+    out.periodMs = mclConfig.periodMs;
+    return out;
+  }
+
+  /** Sets the MCL tab, and the running localizer, from a flat config. */
+  function setMclFlat(flat) {
+    mclConfig = defaultMcl();
+    for (const setting of TF.LOCALIZER_SETTINGS) {
+      if (flat[setting.key] === undefined) continue;
+      const isSwitch = typeof getPath(mclConfig, setting.key) === 'boolean';
+      setPath(mclConfig, setting.key, isSwitch ? flat[setting.key] !== 0 : flat[setting.key]);
+    }
+    if (flat.periodMs !== undefined) mclConfig.periodMs = flat.periodMs;
+    syncSliders();
+    refreshChecks();
+    applyMcl();
+  }
+
+  // --- Tune tab -------------------------------------------------------------------------------
+
+  function buildTune() {
+    SIM.tuneview.build({
+      $, el, fmt, segmented, setSegment,
+      getMclFlat: mclFlat,
+      setMclFlat,
+      setPlaying: (value) => setPlaying(value),
+      applyWorld,
+      saveText,
+    });
+    // the chart sizes itself when the tab is first shown
+    $('tabs').addEventListener('click', () => requestAnimationFrame(() => SIM.tuneview.drawHistory()));
+  }
+
+  /** The world's errors from a calibration (Tune tab), and a fresh run in it. */
+  function applyWorld(world) {
+    const { models, ...rest } = world;
+    Object.assign(options.world, rest);
+    if (models) options.world.models = JSON.parse(JSON.stringify(models));
+    syncSliders();
+    runRoutine(selectedRoutine);
+  }
+
+  /** Saves text as a file: a save dialog where the browser has one, a download otherwise. */
+  async function saveText(name, text) {
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({ suggestedName: name,
+          types: [{ description: 'SapphireLib tuning profile', accept: { 'text/plain': ['.cfg', '.CFG'] } }] });
+        const writable = await handle.createWritable();
+        await writable.write(text);
+        await writable.close();
+        return true;
+      } catch (error) {
+        if (error && error.name === 'AbortError') return false; // they cancelled
+        // anything else (a file:// page some browsers refuse): fall back to a download
+      }
+    }
+    const link = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    return true;
   }
 
   // --- the field: selecting, dragging, kidnapping ---------------------------------------------------------------------------
@@ -676,12 +664,6 @@
         canvas.setPointerCapture(event.pointerId);
         return;
       }
-      view.selected = renderer.particleAt(sim.robot.localizer.filter, px, py);
-      if (view.selected != null) {
-        // the inspector lives on the Learn tab
-        $('tabs').querySelector('[data-tab="learn"]').click();
-      }
-      updateDom();
     });
     canvas.addEventListener('pointermove', (event) => {
       const [px, py] = at(event);
@@ -715,6 +697,14 @@
       if (key === ' ') {
         event.preventDefault();
         setPlaying(!playing);
+        return;
+      }
+      if (key === '?') {
+        toggleHelp();
+        return;
+      }
+      if (key === 'escape') {
+        toggleHelp(false);
         return;
       }
       if (['w', 'a', 's', 'd', 'q', 'e', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'shift'].includes(key)) {
@@ -784,8 +774,8 @@
     const box = $('routine-result');
     box.hidden = false;
     const source = options.correctOdometry ? 'odometry + MCL' : 'odometry alone';
-    box.textContent = `${r.name} finished at ${fmt(r.atMs / 1000, 1)}s, driving by ${source}. It ended ` +
-      `${fmt(r.errors.corrected, 2)} in from where it thinks it is; odometry alone was ${fmt(r.errors.raw, 2)} in off.`;
+    box.textContent = `${r.name}, by ${source}: done at ${fmt(r.atMs / 1000, 1)} s, ${fmt(r.errors.corrected, 2)} in ` +
+      `off (odometry alone ${fmt(r.errors.raw, 2)} in).`;
   }
 
   // --- readouts ---------------------------------------------------------------------------
@@ -796,6 +786,21 @@
     return el('div', { class: `tile ${cls}` }, [labelEl, el('span', { class: 'value num', text: value }), el('span', { class: 'foot', text: foot })]);
   }
 
+  /** Why the last update didn't correct odometry, in a few words: blockedBy's first reason. */
+  function blockedText(loc) {
+    const b = loc.status.blockedBy;
+    const B = R.BLOCKED;
+    const c = loc.config;
+    if (b & B.correctionOff) return 'off (Drive tab)';
+    if (b & B.noSetPose) return 'no setPose() yet';
+    if (b & B.spinning) return 'spinning: readings skipped';
+    if (b & B.noReadings) return 'no readings';
+    if (b & B.tooSpread) return `spread over ${fmt(c.maxCorrectionSpreadIn, 1)} in`;
+    if (b & B.tooFewAgree) return `${loc.status.sensorsAgreeing} agree, needs ${c.minAgreeingSensors}`;
+    if (b & B.refused) return 'setPose() mid-update';
+    return 'holding';
+  }
+
   function updateDom() {
     $('clock').textContent = `${fmt(sim.world.timeMs / 1000, 1)}s`;
     const e = sim.errors();
@@ -803,71 +808,21 @@
     const st = loc.status;
     const n = loc.filter.particles.length;
     $('tiles').replaceChildren(
-      tile('Odometry alone', `${fmt(e.raw, 2)} in`, 'off from the real robot', 'var(--raw)'),
-      tile('Corrected pose', `${fmt(e.corrected, 2)} in`, 'what the motions use', 'var(--corrected)'),
-      tile('Particle spread', `${fmt(st.spreadIn, 2)} in`, `${fmt((100 * st.effectiveParticles) / n, 0)}% of ${n} effective`, 'var(--accent)'),
-      tile('Sensors agree', `${st.sensorsAgreeing} / ${st.sensorsUsed}`, `of ${loc.sensors.length}, with the walls`, 'var(--good)'),
+      tile('Odometry alone', `${fmt(e.raw, 2)} in`, 'from the truth', 'var(--raw)'),
+      tile('Corrected pose', `${fmt(e.corrected, 2)} in`, 'from the truth', 'var(--corrected)'),
+      tile('Particle spread', `${fmt(st.spreadIn, 2)} in`, `neff ${fmt((100 * st.effectiveParticles) / n, 0)}% of ${n}`,
+        'var(--accent)'),
+      tile('Sensors agree', `${st.sensorsAgreeing} / ${st.sensorsUsed}`, `agree / reading, of ${loc.sensors.length}`,
+        'var(--good)'),
       tile('Correcting', st.correcting ? 'Yes' : 'No', st.correcting
-        ? `by ${fmt(Math.hypot(st.correctionXIn, st.correctionYIn), 2)} in` : 'holding the last correction', null,
+        ? `by ${fmt(Math.hypot(st.correctionXIn, st.correctionYIn), 2)} in` : blockedText(loc), null,
       st.correcting ? 'good' : 'off'),
     );
     drawChart();
-    updateSensorTable(loc);
-    updateInspector(loc);
   }
 
   function drawChart() {
     SIM.render.drawChart($('chart'), sim.history, renderer.colors);
-  }
-
-  function updateSensorTable(loc) {
-    const table = $('sensor-table');
-    const w = loc.work;
-    if (!w || !w.checks) return;
-    const rows = [el('tr', {}, ['Sensor', 'Reads', 'Map says', 'Off by', 'Agrees'].map((h) => el('th', { text: h })))];
-    w.checks.forEach((c, i) => {
-      rows.push(el('tr', {}, [
-        el('td', { text: kSensorNames[i] || `#${i}` }),
-        el('td', { text: c.used ? `${fmt(c.measuredIn, 1)} in` : 'nothing' }),
-        el('td', { text: c.used ? (Number.isFinite(c.expectedIn) ? `${fmt(c.expectedIn, 1)} in` : 'nothing') : '' }),
-        el('td', { text: c.used ? `${fmt(c.residualSigmas, 1)} σ` : '' }),
-        el('td', { class: c.used ? (c.agrees ? 'yes' : 'no') : '', text: c.used ? (c.agrees ? 'yes' : 'no') : '' }),
-      ]));
-    });
-    table.replaceChildren(...rows);
-    $('gate-line').innerHTML = gateSentence(loc).replace(/^<br>/, '');
-  }
-
-  function updateInspector(loc) {
-    const box = $('inspector');
-    const w = loc.work;
-    if (view.selected == null || !w || !w.readings || !loc.filter.particles[view.selected]) {
-      box.replaceChildren(el('p', { class: 'hint', text: 'No particle selected. Click one on the field.' }));
-      return;
-    }
-    const info = loc.filter.explainParticle(view.selected, w.beamHeadingDeg, w.readings);
-    const p = info.particle;
-    const n = loc.filter.particles.length;
-    const t = sim.world.truth;
-    const rows = [el('tr', {}, ['Sensor', 'Reads', 'From here', 'Off by', 'Score'].map((h) => el('th', { text: h })))];
-    info.rows.forEach((row, i) => {
-      rows.push(el('tr', {}, [
-        el('td', { text: kSensorNames[i] || `#${i}` }),
-        el('td', { text: row.used ? `${fmt(row.measuredIn, 1)} in` : 'nothing' }),
-        el('td', { text: Number.isFinite(row.expectedIn) ? `${fmt(row.expectedIn, 1)} in` : 'nothing' }),
-        el('td', { text: row.used ? `${fmt((row.measuredIn - row.expectedIn) / row.sigmaIn, 1)} σ` : '' }),
-        el('td', { text: row.used ? fmt(row.logLikelihood, 2) : '' }),
-      ]));
-    });
-    box.replaceChildren(
-      el('div', { class: 'big', text: `Particle #${view.selected}` }),
-      el('div', { text: `At (${fmt(p.xIn, 1)}, ${fmt(p.yIn, 1)}), ${fmt(Math.hypot(p.xIn - t.xIn, p.yIn - t.yIn), 2)} in from the real robot. ` +
-        `Weight ${fmt(p.weight * n, 2)}× average; fit ${fmt(p.score * 100, 0)}% of the best particle's.` }),
-      el('div', { class: 'table-wrap' }, [el('table', { class: 'data-table' }, rows)]),
-      el('p', { class: 'hint', text: 'Its beams are drawn dotted on the field, with pink dots where the sensors really read. ' +
-        'Score is the log of how likely each reading is from here; the total decides its weight. Scores bottom out ' +
-        'near −6.7 however wrong a reading is: that\'s the outlier floor, which is why one blocked sensor can\'t sink a good particle.' }),
-    );
   }
 
   root.SIM.app = { start };

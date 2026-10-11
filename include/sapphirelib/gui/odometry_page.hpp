@@ -5,6 +5,8 @@
 #include <functional>
 
 #include "sapphirelib/gui/page.hpp"
+#include "sapphirelib/localization/monte_carlo_localizer.hpp"
+#include "sapphirelib/localization/mount_calibration.hpp"
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
 #include "sapphirelib/sensors/imu.hpp"
@@ -12,7 +14,8 @@
 namespace sapphirelib::gui {
 
 /**
- * @brief Pose readout and a live field view, with an optional tracking wheel offset calibration
+ * @brief Pose readout and a live field view, with optional tracking wheel offset and distance
+ * sensor mount calibrations
  *
  * @b Example
  * @code {.cpp}
@@ -61,7 +64,36 @@ public:
                                  double turns = 8.0);
 
     /**
-     * @brief Whether a calibration spin is running
+     * @brief Add a "Calibrate Sensors" button that finds where the localizer's distance sensors
+     * really sit
+     *
+     * Spins the chassis in place, one turn each way, and fits each sensor's mount against the
+     * field walls, then applies the ones it could pin down to the running localizer (see
+     * localization::MonteCarloLocalizer::calibrateSensorMounts(), which says where to set the
+     * robot). The status line shows each sensor's forward and right offsets, and the terminal logs
+     * them in full. Runs on a background task, so the screen doesn't freeze. Must be called before
+     * the page is added to the Gui
+     *
+     * @param localizer the localizer whose sensors to calibrate. Must outlive the page
+     * @param setSpin spins the chassis in place, given a turn command from -1 to 1. Called with 0
+     * to stop
+     * @param config the spin, and what counts as calibrated
+     *
+     * @b Example
+     * @code {.cpp}
+     * auto page = std::make_unique<sapphirelib::gui::OdometryPage>(odometry());
+     * page->enableSensorCalibration(localizer(), [](double turn) {
+     *     drivetrain().holonomicVolts(0, 0, turn * 12.0);
+     * });
+     * gui.addPage(std::move(page));
+     * @endcode
+     */
+    void enableSensorCalibration(localization::MonteCarloLocalizer& localizer,
+                                 std::function<void(double)> setSpin,
+                                 localization::MountCalibrationConfig config = {});
+
+    /**
+     * @brief Whether a calibration spin is running, of the wheel offsets or the sensors
      *
      * Driver control must not command the drivetrain meanwhile, or it fights the spin and the
      * calibration never finishes. See Gui::anyPageBusy()
@@ -79,7 +111,9 @@ public:
 
 private:
     void runCalibration();
+    void runSensorCalibration();
     static void calibrateClicked(lv_event_t* e);
+    static void calibrateSensorsClicked(lv_event_t* e);
 
     odom::Odometry& odometry_;
     double fieldWidthIn_;
@@ -118,6 +152,19 @@ private:
     std::atomic<bool> calibResultsReady_{false};
     std::atomic<double> calibVerticalOffsetIn_{0.0};
     std::atomic<double> calibHorizontalOffsetIn_{0.0};
+
+    // sensor mount calibration, see enableSensorCalibration()
+    localization::MonteCarloLocalizer* sensorLocalizer_ = nullptr;
+    std::function<void(double)> sensorSetSpin_;
+    localization::MountCalibrationConfig sensorConfig_;
+
+    lv_obj_t* calibrateSensorsButton_ = nullptr;
+
+    std::atomic<bool> sensorCalibrating_{false};
+    // written by the calibration's task before it sets sensorResultReady_, and read by update()
+    // once it sees that. The next calibration can only start from the screen's task, after
+    std::atomic<bool> sensorResultReady_{false};
+    localization::MountCalibrationResult sensorResult_;
 };
 
 } // namespace sapphirelib::gui

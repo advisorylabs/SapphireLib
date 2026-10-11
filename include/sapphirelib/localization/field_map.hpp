@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 namespace sapphirelib::localization {
@@ -128,6 +129,78 @@ private:
     double maxXIn_;
     double maxYIn_;
     std::vector<Segment> segments_;
+};
+
+/**
+ * @brief FieldMap::castRayIn() for many rays pointing the same way, from different starts
+ *
+ * The particle filter casts one ray per particle per sensor, and every particle shares the
+ * robot's heading, so all of one sensor's rays are parallel. aim() works out each segment's share
+ * of the intersection once, so each castIn() is a few multiplies per segment and no division. A
+ * ray starting inside the walls leaves through whichever of the two walls ahead of it is nearer,
+ * so the perimeter takes two multiplies, and only the segments added to the map are checked one
+ * by one. Agrees with castRayIn() up to rounding
+ *
+ * @b Example
+ * @code {.cpp}
+ * using namespace sapphirelib::localization;
+ * const FieldMap map = FieldMap::centered();
+ * ParallelRayCaster caster;
+ * caster.aim(map, 0.0, 1.0);                // every ray points along +y
+ * double wall = caster.castIn(10.0, -20.0); // as map.castRayIn(10, -20, 0, 1)
+ * @endcode
+ */
+class ParallelRayCaster {
+public:
+    /**
+     * @brief Point every ray one way, against a map's segments
+     *
+     * @note keeps its storage, so it only allocates the first time it sees a map this size
+     *
+     * @param map what the rays can hit. Only read here; later changes to it aren't seen
+     * @param dirX ray direction x. (dirX, dirY) must be a unit vector
+     * @param dirY ray direction y
+     */
+    void aim(const FieldMap& map, double dirX, double dirY);
+
+    /**
+     * @brief Get the distance from a start, along the aimed direction, to the first thing hit
+     *
+     * @param xIn ray start x, in inches
+     * @param yIn ray start y, in inches
+     * @return double distance to the nearest hit, in inches. Infinity if the ray hits nothing
+     */
+    double castIn(double xIn, double yIn) const;
+
+private:
+    // one segment, against the aimed direction: its direction (ex, ey), 1 / the cross product of
+    // the ray's direction with it, and the parts of the two numerators that don't depend on the
+    // ray's start
+    struct Edge {
+        double ex;
+        double ey;
+        double inverseDenominator;
+        double crossT;
+        double crossU;
+    };
+
+    // the walls, from the map
+    double minXIn_ = 0.0;
+    double minYIn_ = 0.0;
+    double maxXIn_ = 0.0;
+    double maxYIn_ = 0.0;
+    // which wall each axis heads for (maxXIn_ or minXIn_), and 1 / the direction along it. 0 when
+    // the rays run parallel to those walls, and never reach them
+    double wallXIn_ = 0.0;
+    double wallYIn_ = 0.0;
+    double inverseDirX_ = 0.0;
+    double inverseDirY_ = 0.0;
+
+    // every segment that isn't parallel to the rays: the perimeter's first, then the rest
+    std::vector<Edge> edges_;
+    std::size_t perimeterEdges_ = 0;
+    double dirX_ = 0.0;
+    double dirY_ = 0.0;
 };
 
 } // namespace sapphirelib::localization

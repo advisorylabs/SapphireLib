@@ -84,7 +84,9 @@ void phaseText(std::uint8_t status, char* out, std::size_t size) {
 
 // registration
 
-Logger::Logger(LoggerConfig config) : config_(config) {
+Logger::Logger(LoggerConfig config)
+    : config_(config),
+      policy_(config.recordAtStart, config.recordUnderCompetition, config.competitionStopDelayMs) {
     if (config_.directory == nullptr) config_.directory = LoggerConfig{}.directory;
     if (config_.robotName == nullptr) config_.robotName = "";
     // a zero period would make that task spin
@@ -99,10 +101,10 @@ Logger::Logger(LoggerConfig config) : config_(config) {
     // ids 0 and 1 are always the event channels
     channels_[0] = std::make_unique<Channel>(
         ChannelSchema{.id = 0, .name = "sys", .kind = ChannelKind::events, .decimals = 0},
-        kSystemEventsCapacity, &fileEpoch_);
+        kSystemEventsCapacity, &fileEpoch_, &recording_);
     channels_[1] = std::make_unique<Channel>(
         ChannelSchema{.id = 1, .name = "events", .kind = ChannelKind::events, .decimals = 0},
-        kUserEventsCapacity, &fileEpoch_);
+        kUserEventsCapacity, &fileEpoch_, &recording_);
     systemEvents_ = channels_[0].get();
     userEvents_ = channels_[1].get();
     channelCount_.store(2, std::memory_order_release);
@@ -233,7 +235,8 @@ Channel& Logger::addChannelLocked(const char* name, ChannelKind kind, const char
         schema.columns.push_back(sanitizeName(columns[i]));
     }
 
-    channels_[count] = std::make_unique<Channel>(std::move(schema), options.capacity, &fileEpoch_);
+    channels_[count] =
+        std::make_unique<Channel>(std::move(schema), options.capacity, &fileEpoch_, &recording_);
     // publish last: the tasks only ever look at entries below the count they loaded
     channelCount_.store(count + 1, std::memory_order_release);
     return *channels_[count];
@@ -273,6 +276,24 @@ bool event(const char* tag, const char* format, ...) {
 
 // control
 
+void Logger::addMeta(const char* key, const char* value) {
+    std::lock_guard<pros::Mutex> lock(registrationMutex_);
+    if (started_) {
+        SAPPHIRELIB_LOG_WARN("telemetry", "addMeta(\"%s\") after start() is ignored",
+                             key != nullptr ? key : "");
+        return;
+    }
+    meta_.emplace_back(key != nullptr ? key : "", value != nullptr ? value : "");
+}
+
+void Logger::startRecording() {
+    request_.store(RecordingRequest::start, std::memory_order_release);
+}
+
+void Logger::stopRecording() { request_.store(RecordingRequest::stop, std::memory_order_release); }
+
+bool Logger::recording() const { return recording_.load(std::memory_order_acquire); }
+
 bool Logger::start() {
     std::lock_guard<pros::Mutex> lock(registrationMutex_);
     if (started_) return false;
@@ -281,7 +302,8 @@ bool Logger::start() {
     // allocate everything up front, so neither task allocates later
     staging_ = std::make_unique<char[]>(config_.stagingBytes);
     stdioBuffer_ = std::make_unique<char[]>(config_.stagingBytes);
-    state_.store(LoggerState::waitingForCard, std::memory_order_release);
+    // the sampler's first tick decides whether to record (LoggerConfig::recordAtStart)
+    state_.store(LoggerState::idle, std::memory_order_release);
     activeLogger.store(this, std::memory_order_release);
 
     // below every control loop, so polling never preempts one, and above the writer, whose SD
@@ -302,7 +324,10 @@ LoggerStatus Logger::status() const {
                         .inRootFolder = inRootFolder_.load(std::memory_order_relaxed),
                         .bytesWritten = bytesWritten_.load(std::memory_order_relaxed),
                         .droppedRows = droppedRows(),
-                        .slowestWriteUs = slowestWriteUs_.load(std::memory_order_relaxed)};
+                        .slowestWriteUs = slowestWriteUs_.load(std::memory_order_relaxed),
+                        .recording = recording_.load(std::memory_order_acquire),
+                        .reason = reason_.load(std::memory_order_relaxed),
+                        .cardInserted = cardInserted_.load(std::memory_order_relaxed)};
 }
 
 std::uint32_t Logger::droppedRows() const {
@@ -325,12 +350,37 @@ void Logger::samplerLoop() {
 }
 
 void Logger::samplerTick() {
+    const std::uint64_t tickStartUs = sapphirelib::micros();
     const std::uint8_t status = pros::competition::get_status();
+    const std::uint32_t nowMs = sapphirelib::millis();
+
+    // start or stop first, so a recording that starts on this tick logs this tick's phase and
+    // polls too
+    const RecordingChange change =
+        policy_.update((status & COMPETITION_CONNECTED) != 0,
+                       request_.exchange(RecordingRequest::none, std::memory_order_acq_rel), nowMs);
+    if (change.stop) {
+        stopReason_.store(change.reason, std::memory_order_relaxed);
+        reason_.store(RecordingReason::none, std::memory_order_relaxed);
+        // released after the reason, so a writer that sees the gate shut also sees why
+        recording_.store(false, std::memory_order_release);
+        flushRequested_.store(true, std::memory_order_release);
+    }
+    if (change.start) {
+        reason_.store(change.reason, std::memory_order_relaxed);
+        // a new session before the gate opens, so the writer opens a new file for it even if the
+        // last recording's file hasn't been closed yet
+        session_.fetch_add(1, std::memory_order_release);
+        recording_.store(true, std::memory_order_release);
+    }
+    const bool recording = recording_.load(std::memory_order_relaxed);
+
     if (status != lastStatus_) {
         char text[48];
         phaseText(status, text, sizeof(text));
-        // only marked seen once the row went in, so a dropped one is retried next tick
-        if (systemEvents_->recordEvent("phase", text)) lastStatus_ = status;
+        // only marked seen once the row went in, so a dropped one is retried next tick. Between
+        // recordings there's no file for it; the next file logs the phase when it opens
+        if (!recording || systemEvents_->recordEvent("phase", text)) lastStatus_ = status;
         // raised after the row is committed, so the pass that acts on it also writes the row. The
         // end of a match is on the card moments after it's disabled
         flushRequested_.store(true, std::memory_order_release);
@@ -338,9 +388,14 @@ void Logger::samplerTick() {
 
     const bool disabledUnderControl =
         (status & COMPETITION_DISABLED) != 0 && (status & COMPETITION_CONNECTED) != 0;
-    if (disabledUnderControl && !config_.pollWhileDisabled) return;
+    if (recording && !(disabledUnderControl && !config_.pollWhileDisabled)) pollSources(nowMs);
 
-    const std::uint32_t nowMs = sapphirelib::millis();
+    const std::uint64_t tickUs = sapphirelib::micros() - tickStartUs;
+    samplerBusyUs_.fetch_add(static_cast<std::uint32_t>(std::min<std::uint64_t>(tickUs, 1000000)),
+                             std::memory_order_relaxed);
+}
+
+void Logger::pollSources(std::uint32_t nowMs) {
     const std::size_t count = polledCount_.load(std::memory_order_acquire);
     for (std::size_t i = 0; i < count; ++i) {
         Polled& source = *polled_[i];
@@ -391,12 +446,21 @@ void Logger::writerLoop() {
 }
 
 void Logger::writerPass() {
+    const std::uint64_t passStartUs = sapphirelib::micros();
+    passWriteUs_ = 0;
     const std::size_t count = channelCount_.load(std::memory_order_acquire);
     // taken before draining: the sampler commits a phase row and then raises this, so the drain
     // below includes that row
     const bool flushNow = flushRequested_.exchange(false, std::memory_order_acq_rel);
+    // acquire pairs with the sampler's release: seeing the gate shut means seeing the stop's
+    // reason, and seeing it open means seeing the session it opened for
+    const bool wanted = recording_.load(std::memory_order_acquire);
+    const std::uint32_t session = session_.load(std::memory_order_acquire);
 
-    manageFile(sapphirelib::millis(), count);
+    // the recording stopped, or stopped and a new one started since this file opened
+    if (file_ != nullptr && (!wanted || session != fileSession_)) closeFile(count);
+
+    manageFile(sapphirelib::millis(), count, wanted);
 
     for (std::size_t i = 0; i < count; ++i) {
         if (channels_[i]->gate().breakIfStuck()) ++breaks_;
@@ -412,10 +476,56 @@ void Logger::writerPass() {
         (flushNow || sapphirelib::millis() - lastWriteMs_ >= config_.flushPeriodMs)) {
         writeStaged();
     }
+
+    // fmt_us: this pass's time minus its SD writes (wmax_us/wavg_us already cover those)
+    const std::uint64_t passUs = sapphirelib::micros() - passStartUs;
+    const std::uint64_t busyUs = passUs > passWriteUs_ ? passUs - passWriteUs_ : 0;
+    writerBusyUs_ += static_cast<std::uint32_t>(std::min<std::uint64_t>(busyUs, 1000000));
 }
 
-void Logger::manageFile(std::uint32_t nowMs, std::size_t channelCount) {
+void Logger::closeFile(std::size_t channelCount) {
+    // everything recorded before the stop belongs in this file. The gate is shut, so the rings
+    // only empty from here
+    for (int pass = 0; pass < 8 && file_ != nullptr; ++pass) {
+        announceChannels(channelCount);
+        if (!drain(channelCount)) break;
+    }
+    if (file_ != nullptr) {
+        char message[32];
+        std::snprintf(message, sizeof(message), "stop,%s",
+                      recordingReasonName(stopReason_.load(std::memory_order_relaxed)));
+        const std::uint64_t nowUs = sapphirelib::micros();
+        stage([&](char* out,
+                  std::size_t size) { return formatEvent(out, size, nowUs, "rec", message); },
+              true);
+        writeStaged();
+    }
+    // writeStaged() closes the file itself if the card failed
+    if (file_ != nullptr) {
+        std::fclose(file_);
+        file_ = nullptr;
+        SAPPHIRELIB_LOG_INFO("telemetry", "recording stopped; %s closed", fileName_);
+    }
+    used_ = 0;
+    fileSession_ = 0;
+}
+
+void Logger::manageFile(std::uint32_t nowMs, std::size_t channelCount, bool wanted) {
     if (file_ == nullptr) {
+        if (!wanted) {
+            // between recordings: nothing to open, and the next start tries right away. The
+            // card's presence is still checked, for the Home page
+            state_.store(LoggerState::idle, std::memory_order_release);
+            openBackoffMs_ = 0;
+            // a fault in the last recording is behind us: the next file starts a recording,
+            // rather than continuing one
+            reopenPending_ = false;
+            if (nowMs - lastCardCheckMs_ >= kCardCheckMs) {
+                lastCardCheckMs_ = nowMs;
+                cardInserted_.store(pros::usd::is_installed() != 0, std::memory_order_relaxed);
+            }
+            return;
+        }
         if (faults_ >= kMaxFaults) return; // gave up, see fault()
         if (openBackoffMs_ != 0 && nowMs - lastOpenAttemptMs_ < openBackoffMs_) return;
         lastOpenAttemptMs_ = nowMs;
@@ -425,7 +535,9 @@ void Logger::manageFile(std::uint32_t nowMs, std::size_t channelCount) {
     // a pulled card doesn't always fail the next write cleanly, so check for it directly
     if (nowMs - lastCardCheckMs_ >= kCardCheckMs) {
         lastCardCheckMs_ = nowMs;
-        if (pros::usd::is_installed() == 0) fault("card removed");
+        const bool inserted = pros::usd::is_installed() != 0;
+        cardInserted_.store(inserted, std::memory_order_relaxed);
+        if (!inserted) fault("card removed");
     }
 }
 
@@ -437,7 +549,9 @@ void Logger::tryOpen(std::size_t channelCount) {
         }
     };
 
-    if (pros::usd::is_installed() == 0) {
+    const bool inserted = pros::usd::is_installed() != 0;
+    cardInserted_.store(inserted, std::memory_order_relaxed);
+    if (!inserted) {
         notLogging();
         openBackoffMs_ = kCardCheckMs;
         return;
@@ -532,6 +646,7 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
     std::memcpy(previousName, fileName_, sizeof(previousName));
     formatLogFileName(fileName_, sizeof(fileName_), static_cast<std::uint32_t>(index));
     file_ = file;
+    fileSession_ = session_.load(std::memory_order_acquire);
     used_ = 0;
     announced_ = 0;
     lastDrops_.fill({0, 0}); // so the first D rows restate any drops so far
@@ -544,6 +659,9 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
     fileIndex_.store(index, std::memory_order_relaxed);
     inRootFolder_.store(fallbackNote != nullptr, std::memory_order_relaxed);
     bytesWritten_.store(0, std::memory_order_relaxed);
+    // the H row's busy times count from here, not from before the recording started
+    samplerBusyUs_.store(0, std::memory_order_relaxed);
+    writerBusyUs_ = 0;
     // every PidProbe sees this and repeats its C and G rows, so each file stands on its own
     fileEpoch_.fetch_add(1, std::memory_order_release);
 
@@ -557,6 +675,12 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
                             .directory = directory,
                             .openUs = openUs};
     stage([&](char* out, std::size_t size) { return formatHeader(out, size, header); }, false);
+    // the program's own #meta lines (addMeta()), fixed since start()
+    for (const auto& [key, value] : meta_) {
+        stage([&](char* out,
+                  std::size_t size) { return formatMeta(out, size, key.c_str(), value.c_str()); },
+              false);
+    }
     announceChannels(channelCount);
 
     auto stageEvent = [&](const char* tag, const char* message) {
@@ -569,6 +693,12 @@ Logger::OpenResult Logger::openIn(const char* directory, std::size_t channelCoun
     stageEvent("file", message);
     phaseText(pros::competition::get_status(), message, sizeof(message));
     stageEvent("phase", message);
+    // a file reopened after a fault continues its recording; any other starts one
+    if (!reopenPending_) {
+        std::snprintf(message, sizeof(message), "start,%s",
+                      recordingReasonName(reason_.load(std::memory_order_relaxed)));
+        stageEvent("rec", message);
+    }
     if (fallbackNote != nullptr) stageEvent("sd", fallbackNote);
     if (reopenPending_) {
         std::snprintf(message, sizeof(message), "reopened,prev=%s,faults=%lu", previousName,
@@ -595,7 +725,7 @@ void Logger::announceChannels(std::size_t channelCount) {
     }
 }
 
-void Logger::drain(std::size_t channelCount) {
+bool Logger::drain(std::size_t channelCount) {
     // merge the channels by t_us, one snapshot per pass; rows committed mid-pass wait for the next
     const Record* heads[kMaxChannels] = {};
     for (std::size_t i = 0; i < channelCount; ++i) heads[i] = channels_[i]->front();
@@ -607,7 +737,7 @@ void Logger::drain(std::size_t channelCount) {
                 next = i;
             }
         }
-        if (next == channelCount) return; // everything drained
+        if (next == channelCount) return false; // everything drained
 
         Channel& channel = *channels_[next];
         const Record& record = *heads[next];
@@ -640,12 +770,17 @@ void Logger::drain(std::size_t channelCount) {
                                    },
                                    true);
             }
-            if (!staged && file_ == nullptr) ++unlogged_;
+            // recording with no file open (no card yet, or after a fault). Leftovers from
+            // before a stop don't count: they weren't meant for a file
+            if (!staged && file_ == nullptr && recording_.load(std::memory_order_relaxed)) {
+                ++unlogged_;
+            }
         }
 
         channel.pop(taken);
         heads[next] = channel.front();
     }
+    return true; // hit the per-pass limit; more may be waiting
 }
 
 void Logger::writeHealth(std::size_t channelCount) {
@@ -669,6 +804,8 @@ void Logger::writeHealth(std::size_t channelCount) {
         .resyncs = resyncs,
         .breaks = breaks_,
         .faults = faults_,
+        .samplerUs = samplerBusyUs_.exchange(0, std::memory_order_relaxed),
+        .formatUs = writerBusyUs_,
     };
     const std::uint64_t nowUs = sapphirelib::micros();
     if (!stage([&](char* out, std::size_t size) { return formatHealth(out, size, nowUs, stats); },
@@ -678,6 +815,7 @@ void Logger::writeHealth(std::size_t channelCount) {
     healthWriteMaxUs_ = 0;
     healthWriteSumUs_ = 0;
     healthWrites_ = 0;
+    writerBusyUs_ = 0;
 
     // D rows only for channels whose counts moved since the last ones in this file
     for (std::size_t i = 0; i < channelCount; ++i) {
@@ -711,6 +849,7 @@ bool Logger::writeStaged() {
     ++fileWrites_;
     ++healthWrites_;
     healthWriteSumUs_ += us;
+    passWriteUs_ += us;
     healthWriteMaxUs_ = std::max(healthWriteMaxUs_, us);
     if (us > slowestWriteUs_.load(std::memory_order_relaxed)) {
         slowestWriteUs_.store(us, std::memory_order_relaxed);

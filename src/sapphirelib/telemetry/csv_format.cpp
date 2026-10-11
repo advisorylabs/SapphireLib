@@ -250,6 +250,16 @@ std::size_t formatHeader(char* out, std::size_t size, const FileHeader& header) 
     return line.finish();
 }
 
+std::size_t formatMeta(char* out, std::size_t size, const char* key, const char* value) {
+    LineWriter line(out, size);
+    line.put("#meta,");
+    line.putName(key, kMaxMetaChars);
+    line.put(',');
+    line.putText(value, kMaxMetaChars);
+    line.put('\n');
+    return line.finish();
+}
+
 std::size_t formatSchema(char* out, std::size_t size, const ChannelSchema& schema) {
     LineWriter line(out, size);
     line.put("#chan,");
@@ -391,7 +401,7 @@ std::size_t formatHealth(char* out, std::size_t size, std::uint64_t tUs, const W
         {"rows", stats.rows},          {"bytes", stats.bytes},        {"writes", stats.writes},
         {"wmax_us", stats.writeMaxUs}, {"wavg_us", stats.writeAvgUs}, {"drops", stats.drops},
         {"unlogged", stats.unlogged},  {"resyncs", stats.resyncs},    {"breaks", stats.breaks},
-        {"faults", stats.faults},
+        {"faults", stats.faults},      {"samp_us", stats.samplerUs},  {"fmt_us", stats.formatUs},
     };
 
     LineWriter line(out, size);

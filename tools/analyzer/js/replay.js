@@ -3,11 +3,13 @@
  *
  * The replay: the match played back from its log. A field view rebuilt from
  * odometry (the robot's footprint, heading, trail, the motion's target, and
- * each drive motor colored by temperature), a side view of the lift (carriage
- * against target, the control law it was in, the volts it was sent, the
- * claw), live motor tiles, the battery and the driver's controller, all at
- * one moment, scrubbed on a timeline or played at speed, with charts whose
- * playhead follows.
+ * each drive motor colored by temperature) with the localizer on top (raw
+ * odometry, the estimate and its uncertainty, a sample of the particles,
+ * each distance sensor's reading against the map), the localizer's state, a
+ * side view of the lift (carriage against target, the control law it was in,
+ * the volts it was sent, the claw), live motor tiles, the battery and the
+ * driver's controller, all at one moment, scrubbed on a timeline or played at
+ * speed, with charts whose playhead follows.
  *
  * Browser only: window.SA.replay and SA.views.replay.
  *
@@ -25,6 +27,15 @@
   const ROBOT_IN = 18;
   const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
   const BUTTONS = ['L1', 'L2', 'R1', 'R2', 'Up', 'Down', 'Left', 'Right', 'X', 'B', 'Y', 'A'];
+
+  /**
+   * The field's walls in the log's frame: a centered origin is the library's FieldMap::centered()
+   * (walls at +-70.25in), a corner one runs 0 to 144.
+   */
+  function fieldFrame(run) {
+    const [ox] = fieldOrigin(run);
+    return ox < 0 ? { minX: -70.25, minY: -70.25, size: 140.5 } : { minX: 0, minY: 0, size: FIELD_IN };
+  }
 
   /** Whether a run's odometry uses a centered origin (−72..72) or a corner one (0..144). */
   function fieldOrigin(run) {
@@ -54,7 +65,8 @@
   /**
    * Draws the field at time `t`. `opts.from` limits the trail's start (the
    * Motions view draws one motion's whole path); `opts.motion` forces the
-   * target shown.
+   * target shown; `opts.layers` picks the localizer's layers; `opts.zoom` over
+   * 1 follows the robot that much closer.
    */
   function drawField(canvas, app, t, opts = {}) {
     const run = app.run;
@@ -66,27 +78,37 @@
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const m = 10;
-    const scale = (size - 2 * m) / FIELD_IN;
-    const [ox, oy] = fieldOrigin(run);
-    const sx = (x) => m + (x - ox) * scale;
-    const sy = (y) => size - m - (y - oy) * scale;
+    const frame = fieldFrame(run);
+    const zoom = opts.zoom > 1 ? opts.zoom : 1;
+    const scale = ((size - 2 * m) / frame.size) * zoom;
+    // the view's center: the field's, or the robot's when zoomed in
+    const at = odom && odom.length ? odom.indexAt(t) : -1;
+    const cx = zoom > 1 && at >= 0 ? odom.cols.x[at] : frame.minX + frame.size / 2;
+    const cy = zoom > 1 && at >= 0 ? odom.cols.y[at] : frame.minY + frame.size / 2;
+    const sx = (x) => size / 2 + (x - cx) * scale;
+    const sy = (y) => size / 2 - (y - cy) * scale;
+    const layers = Object.assign({}, DEFAULT_LAYERS, opts.layers);
+    const maxX = frame.minX + frame.size;
+    const maxY = frame.minY + frame.size;
 
+    ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = token('--surface-2');
-    ctx.fillRect(m, m, FIELD_IN * scale, FIELD_IN * scale);
+    ctx.fillRect(sx(frame.minX), sy(maxY), frame.size * scale, frame.size * scale);
     ctx.strokeStyle = token('--grid');
     ctx.lineWidth = 1;
-    for (let i = 1; i < 6; ++i) {
-      const p = m + i * 24 * scale;
+    for (let k = 1; k < 6; ++k) {
+      const px = Math.round(sx(frame.minX + (k * frame.size) / 6)) + 0.5;
+      const py = Math.round(sy(frame.minY + (k * frame.size) / 6)) + 0.5;
       ctx.beginPath();
-      ctx.moveTo(Math.round(p) + 0.5, m);
-      ctx.lineTo(Math.round(p) + 0.5, size - m);
-      ctx.moveTo(m, Math.round(p) + 0.5);
-      ctx.lineTo(size - m, Math.round(p) + 0.5);
+      ctx.moveTo(px, sy(maxY));
+      ctx.lineTo(px, sy(frame.minY));
+      ctx.moveTo(sx(frame.minX), py);
+      ctx.lineTo(sx(maxX), py);
       ctx.stroke();
     }
     ctx.strokeStyle = token('--axis');
     ctx.lineWidth = 2;
-    ctx.strokeRect(m, m, FIELD_IN * scale, FIELD_IN * scale);
+    ctx.strokeRect(sx(frame.minX), sy(maxY), frame.size * scale, frame.size * scale);
     if (!odom || odom.length === 0) {
       ctx.fillStyle = token('--muted');
       ctx.font = `13px ${token('--font-body')}`;
@@ -170,6 +192,11 @@
       }
     }
 
+    // The localizer: beams and raw odometry under the robot, the cloud over it.
+    const loc = opts.from === undefined ? localizerAt(run, t) : null;
+    const locView = { sx, sy, scale, layers, px, py, heading: hd[i] };
+    if (loc) drawLocalizer(ctx, loc, locView, 'under');
+
     // The robot, rotated to its heading (clockwise from +y).
     const rad = (hd[i] * Math.PI) / 180;
     const half = (ROBOT_IN / 2) * scale;
@@ -192,7 +219,8 @@
     ctx.fill();
     // Drive motors at their corners (and the center pair), colored by heat.
     const corners = { fl: [-1, -1], fr: [1, -1], bl: [-1, 1], br: [1, 1], ml: [-1, 0], mr: [1, 0] };
-    const r = Math.max(4, half * 0.28);
+    // small enough to see past when zoomed in
+    const r = Math.min(7, Math.max(4, half * 0.28));
     for (const [name, [cx, cy]] of Object.entries(corners)) {
       const ch = run.get(`motor.${name}`);
       if (!ch) continue;
@@ -222,11 +250,293 @@
     }
     ctx.restore();
 
+    if (loc) drawLocalizer(ctx, loc, locView, 'over');
+    if (loc && layers.estimate) {
+      // the estimate, a cross
+      const ex = sx(loc.x);
+      const ey = sy(loc.y);
+      ctx.strokeStyle = token('--accent');
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(ex - 5, ey - 5);
+      ctx.lineTo(ex + 5, ey + 5);
+      ctx.moveTo(ex + 5, ey - 5);
+      ctx.lineTo(ex - 5, ey + 5);
+      ctx.stroke();
+    }
+
     ctx.fillStyle = token('--muted');
     ctx.font = `11px ${token('--font-data')}`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText(`(${x[i].toFixed(1)}, ${y[i].toFixed(1)}) ${hd[i].toFixed(0)}°`, m + 4, m + 4);
+    ctx.fillText(`(${x[i].toFixed(1)}, ${y[i].toFixed(1)}) in, ${hd[i].toFixed(0)}°`, m + 4, m + 4);
+    if (zoom > 1) {
+      // a 6in scale bar, so a zoomed view still reads in inches
+      const length = 6 * scale;
+      ctx.strokeStyle = token('--ink');
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(m + 4, size - m - 9);
+      ctx.lineTo(m + 4, size - m - 4);
+      ctx.lineTo(m + 4 + length, size - m - 4);
+      ctx.lineTo(m + 4 + length, size - m - 9);
+      ctx.stroke();
+      ctx.fillStyle = token('--ink');
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('6 in', m + 10 + length, size - m - 2);
+    }
+  }
+
+  // --- The localizer ---------------------------------------------------------------------------
+
+  /** What the field draws of the localizer; the Field panel's toggles. */
+  const DEFAULT_LAYERS = { raw: true, particles: true, ellipse: true, beams: true, estimate: true };
+
+  /** mcl.pts rows grouped into samples (rows under 10ms apart): [{ t, i0, i1 }]. Cached on the run. */
+  function particleSamples(run) {
+    if (run._particleSamples) return run._particleSamples;
+    const pts = run.get('mcl.pts');
+    const out = [];
+    if (pts) {
+      for (let i = 0; i < pts.length; ++i) {
+        const last = out[out.length - 1];
+        if (last && pts.t[i] - last.t < 0.01) last.i1 = i + 1;
+        else out.push({ t: pts.t[i], i0: i, i1: i + 1 });
+      }
+    }
+    run._particleSamples = out;
+    return out;
+  }
+
+  /** The row of `ch` recorded with mcl's row at time `t` (within 20ms), or -1. */
+  function rowWith(ch, t) {
+    if (!ch) return -1;
+    const j = ch.indexAt(t + 0.001);
+    return j >= 0 && Math.abs(ch.t[j] - t) < 0.02 ? j : -1;
+  }
+
+  /**
+   * The localizer's last update at or before `t` (none if older than 0.25s), with its beams,
+   * state and the latest particle sample, and raw odometry at `t`. Null without one.
+   */
+  function localizerAt(run, t) {
+    const mcl = run.get('mcl');
+    if (!mcl) return null;
+    const k = mcl.indexAt(t);
+    if (k < 0 || t - mcl.t[k] > 0.25) return null;
+    const c = mcl.cols;
+    const info = run._localizerInfo || (run._localizerInfo = A.localizerInfo(run));
+    const at = mcl.t[k];
+    const out = { t: at, info, x: c.x[k], y: c.y[k], spread: c.spread[k], neff: c.neff[k], used: c.used[k],
+      agree: c.agree[k], correcting: c.correcting[k] > 0, corrX: c.corr_x[k], corrY: c.corr_y[k],
+      us: mcl.has('us') ? c.us[k] : NaN, rawX: c.raw_x[k], rawY: c.raw_y[k], state: null, beams: [],
+      particles: null };
+
+    // raw odometry at t: odom's raw columns where the log has them, else the update's
+    const odom = run.get('odom');
+    if (odom && odom.has('raw_x')) {
+      const i = odom.indexAt(t);
+      if (i >= 0 && t - odom.t[i] < 0.1) {
+        out.rawX = odom.cols.raw_x[i];
+        out.rawY = odom.cols.raw_y[i];
+      }
+    }
+    const state = run.get('mcl.state');
+    const j = rowWith(state, at);
+    if (j >= 0) {
+      const sc = state.cols;
+      out.state = { sxx: sc.sxx[j], syy: sc.syy[j], sxy: sc.sxy[j], fit: sc.fit[j], fitRatio: sc.fit_ratio[j],
+        recovered: sc.recovered[j], resampled: sc.resampled[j] > 0, blocked: sc.blocked[j], heading: sc.hdg[j] };
+    }
+    const beams = run.get('mcl.beams');
+    const b = rowWith(beams, at);
+    if (b >= 0) {
+      for (let s = 0; s < 4 && beams.has(`m${s}`); ++s) {
+        const m = beams.cols[`m${s}`][b];
+        const e = beams.cols[`e${s}`][b];
+        out.beams.push({ name: info.mounts[s].name, mount: info.mounts[s], m, e,
+          agrees: Number.isFinite(m) && Number.isFinite(e) && A.beamAgrees(info, m, e) });
+      }
+    }
+    // the newest particle sample at or before t, as offsets from its own update's estimate
+    const samples = particleSamples(run);
+    let lo = 0;
+    let hi = samples.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (samples[mid].t <= t + 0.001) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (found >= 0 && t - samples[found].t < 0.6) {
+      const pts = run.get('mcl.pts');
+      const offsets = [];
+      for (let i = samples[found].i0; i < samples[found].i1; ++i) {
+        for (let p = 0; pts.has(`dx${p}`); ++p) offsets.push([pts.cols[`dx${p}`][i], pts.cols[`dy${p}`][i]]);
+      }
+      out.particles = offsets;
+    }
+    return out;
+  }
+
+  /**
+   * The localizer's layers on the field, in screen coordinates via `v.sx`, `v.sy`: the beams and
+   * raw odometry `pass` 'under' the robot, the particles and the ellipse 'over' it.
+   */
+  function drawLocalizer(ctx, loc, v, pass) {
+    const { sx, sy, scale } = v;
+    const layers = pass === 'over' ? { particles: v.layers.particles, ellipse: v.layers.ellipse }
+      : { beams: v.layers.beams, raw: v.layers.raw };
+    const ex = sx(loc.x);
+    const ey = sy(loc.y);
+
+    if (layers.particles && loc.particles) {
+      ctx.fillStyle = token('--accent');
+      ctx.globalAlpha = 0.55;
+      for (const [dx, dy] of loc.particles) {
+        ctx.beginPath();
+        ctx.arc(sx(loc.x + dx), sy(loc.y + dy), 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    if (layers.ellipse) {
+      // 2 sigma, from the covariance where the log has it, else a circle of the spread
+      let major = loc.spread / Math.SQRT2;
+      let minor = major;
+      let angle = 0;
+      if (loc.state && Number.isFinite(loc.state.sxx)) {
+        const { sxx: a, sxy: b, syy: d } = loc.state;
+        const mid = (a + d) / 2;
+        const r = Math.sqrt(((a - d) / 2) ** 2 + b * b);
+        major = Math.sqrt(Math.max(0, mid + r));
+        minor = Math.sqrt(Math.max(0, mid - r));
+        angle = 0.5 * Math.atan2(2 * b, a - d);
+      }
+      ctx.strokeStyle = token('--accent');
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      // the screen's y is flipped, so the angle is too
+      ctx.ellipse(ex, ey, Math.max(1.5, 2 * major * scale), Math.max(1.5, 2 * minor * scale), -angle, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if (layers.beams) {
+      const heading = loc.state && Number.isFinite(loc.state.heading) ? loc.state.heading : v.heading;
+      for (const beam of loc.beams) {
+        const mount = beam.mount;
+        if (!mount.known) continue;
+        const h = (heading * Math.PI) / 180;
+        const f = ((heading + mount.facingDeg) * Math.PI) / 180;
+        const ox = loc.x + mount.forwardIn * Math.sin(h) + mount.rightIn * Math.cos(h);
+        const oy = loc.y + mount.forwardIn * Math.cos(h) - mount.rightIn * Math.sin(h);
+        const dirX = Math.sin(f);
+        const dirY = Math.cos(f);
+        const read = Number.isFinite(beam.m);
+        const expected = Number.isFinite(beam.e) ? beam.e : loc.info.maxRangeIn;
+        const color = !read ? token('--muted') : beam.agrees ? token('--good') : token('--critical');
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(sx(ox), sy(oy));
+        ctx.lineTo(sx(ox + dirX * expected), sy(oy + dirY * expected));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (read) {
+          // the reading: a tick across the beam
+          const mx = sx(ox + dirX * beam.m);
+          const my = sy(oy + dirY * beam.m);
+          const nx = -dirY * 6;
+          const ny = -dirX * 6;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(mx - nx, my - ny);
+          ctx.lineTo(mx + nx, my + ny);
+          ctx.stroke();
+        }
+      }
+    }
+
+    if (layers.raw && Number.isFinite(loc.rawX)) {
+      // raw odometry: a dashed ghost, and the correction from it to the pose the motions drive by
+      const rx = sx(loc.rawX);
+      const ry = sy(loc.rawY);
+      const half = (ROBOT_IN / 2) * scale;
+      ctx.save();
+      ctx.translate(rx, ry);
+      ctx.rotate((v.heading * Math.PI) / 180);
+      ctx.strokeStyle = token('--series-2');
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(-half, -half, 2 * half, 2 * half);
+      ctx.setLineDash([]);
+      ctx.restore();
+      if (Math.hypot(v.px - rx, v.py - ry) > 3) {
+        ctx.strokeStyle = token('--series-2');
+        ctx.fillStyle = token('--series-2');
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(rx, ry);
+        ctx.lineTo(v.px, v.py);
+        ctx.stroke();
+        const a = Math.atan2(v.py - ry, v.px - rx);
+        ctx.beginPath();
+        ctx.moveTo(v.px, v.py);
+        ctx.lineTo(v.px - 7 * Math.cos(a - 0.4), v.py - 7 * Math.sin(a - 0.4));
+        ctx.lineTo(v.px - 7 * Math.cos(a + 0.4), v.py - 7 * Math.sin(a + 0.4));
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  }
+
+  /** The Localizer panel's readout at one moment. */
+  function renderLocalizer(box, loc) {
+    clear(box);
+    if (!loc) {
+      box.append(h('p', { class: 'muted' }, 'No update here (it logs only while enabled).'));
+      return;
+    }
+    const reasons = loc.state ? A.blockedReasons(loc.state.blocked).map((r) => r.short) : [];
+    box.append(h('div', { class: `loc-status ${loc.correcting ? 'ok' : 'off'}` },
+      loc.correcting ? 'Correcting' : 'Not correcting', loc.correcting ? null :
+        h('span', { class: 'muted' }, reasons.length ? ` · ${reasons.join(', ')}` : ' · holding')));
+    const list = h('dl', { class: 'kv' });
+    const kv = (k, v, title) => list.append(h('dt', { title }, k), h('dd', null, v));
+    kv('Drift', `${fmt(Math.hypot(loc.corrX, loc.corrY), 2)} in`, 'How far raw odometry is off: the correction it eases toward');
+    kv('Spread', `${fmt(loc.spread, 2)} in · ${fmt((100 * loc.neff) / loc.info.particles, 0)}% effective`,
+      `RMS distance of the particles from the estimate; corrects only under ${loc.info.maxCorrectionSpreadIn} in`);
+    kv('Sensors', `${fmt(loc.agree, 0)} of ${fmt(loc.used, 0)} agree`,
+      `Readings within ${loc.info.agreementSigmas}σ of the map; corrects with ${loc.info.minAgreeingSensors} or more`);
+    if (loc.state) {
+      kv('Fit', `${fmt(loc.state.fit, 2)} · ${fmt(loc.state.fitRatio, 2)} of usual`,
+        'How well the particles explain the readings (1 is perfect), and against its slow average: recovery starts low');
+      if (loc.state.recovered > 0) kv('Recovery', `${fmt(loc.state.recovered, 0)} particles scattered`);
+    }
+    if (Number.isFinite(loc.us) && loc.us > 0) {
+      kv('Update', `${fmt(loc.us, 0)} µs · ${fmt(loc.us / (10 * loc.info.periodMs), 1)}%`,
+        `Wall time of one update, and its share of the brain every ${loc.info.periodMs} ms`);
+    }
+    box.append(list);
+    if (loc.beams.length) {
+      const rows = loc.beams.map((beam) => {
+        const read = Number.isFinite(beam.m);
+        const off = read && Number.isFinite(beam.e) && beam.e <= loc.info.maxRangeIn ? beam.m - beam.e : NaN;
+        return h('tr', null, h('td', null, beam.name), h('td', null, read ? fmt(beam.m, 1) : '-'),
+          h('td', null, Number.isFinite(beam.e) && beam.e <= loc.info.maxRangeIn ? fmt(beam.e, 1) : 'none'),
+          h('td', { class: !read ? 'muted' : beam.agrees ? 'good' : 'bad' },
+            Number.isFinite(off) ? `${off >= 0 ? '+' : ''}${fmt(off, 1)}` : '-'));
+      });
+      box.append(h('table', { class: 'beam-table' },
+        h('thead', null, h('tr', null, h('th', null, 'in'), h('th', null, 'reads'), h('th', null, 'map'), h('th', null, 'off'))),
+        h('tbody', null, rows)));
+    }
   }
 
   /** The lift's side view at time `t`. */
@@ -388,6 +698,30 @@
 
       // Stage.
       const field = h('canvas', { class: 'field-canvas', role: 'img', 'aria-label': 'Robot on the field' });
+      const hasLocalizer = !!run.get('mcl');
+      const layers = Object.assign({}, DEFAULT_LAYERS);
+      let zoom = 1;
+      const zoomSeg = h('div', { class: 'segments small', role: 'group', 'aria-label': 'Zoom' },
+        [[1, 'Field'], [4, 'Follow ×4']].map(([z, label]) => h('button', { type: 'button', 'aria-pressed': String(z === 1),
+          onclick: (e) => {
+            zoom = z;
+            for (const b of zoomSeg.children) b.setAttribute('aria-pressed', String(b === e.currentTarget));
+            update();
+          } }, label)));
+      const layerToggles = h('div', { class: 'layer-toggles' }, zoomSeg, hasLocalizer ?
+        [['raw', 'Raw odometry', 'Tracking wheels and IMU alone (dashed), and the correction to the pose'],
+          ['particles', 'Particles', 'A sample of 24, picked by weight'],
+          ['ellipse', 'Ellipse', '2σ of the particle cloud'],
+          ['beams', 'Beams', 'Dashed to where the map says the wall is, a tick at the reading. Green agrees, red ' +
+            'doesn\'t, grey read nothing']].map(([key, label, title]) => {
+          const input = h('input', { type: 'checkbox', checked: true });
+          input.addEventListener('change', () => {
+            layers[key] = input.checked;
+            update();
+          });
+          return h('label', { title }, input, label);
+        }) : null);
+      const locBox = h('div', { class: 'loc-box' });
       const liftCanvas = lift ? h('canvas', { class: 'lift-canvas', role: 'img', 'aria-label': `${lift.name} position` }) : null;
       const liftInfo = h('dl', { class: 'kv' });
       const motorGrid = h('div', { class: 'motor-grid' });
@@ -395,9 +729,12 @@
       const driver = h('div');
       const now = h('div', { class: 'now-list' });
       section.append(h('div', { class: 'stage' },
-        h('section', { class: 'panel' }, h('header', null, h('h3', null, 'Field'),
-          h('span', { class: 'hint' }, 'From odometry. Dots are drive motors, colored by temperature; ✕ is unplugged.')),
-        field, SA.ui.heatLegend()),
+        h('div', { class: 'side-stack' },
+          h('section', { class: 'panel' }, h('header', null, h('h3', null, 'Field'),
+            h('span', { class: 'hint', title: 'Drive motors are the dots, colored by temperature; ✕ is unplugged' },
+              'corrected pose · inches')),
+          layerToggles, field, SA.ui.heatLegend()),
+          hasLocalizer ? h('section', { class: 'panel' }, h('header', null, h('h3', null, 'Localizer')), locBox) : null),
         lift ? h('section', { class: 'panel' }, h('header', null, h('h3', null, lift.name[0].toUpperCase() + lift.name.slice(1))),
           liftCanvas, liftInfo) : h('section', { class: 'panel' }, h('p', { class: 'muted' }, 'No mechanism channel (X.act) in this log.')),
         h('div', { class: 'side-stack motors-panel' },
@@ -424,7 +761,7 @@
       const stack = h('div', { class: 'chart-stack' });
       section.append(h('section', { class: 'panel' },
         h('header', null, h('h3', null, 'Around this moment'),
-          h('span', { class: 'hint' }, 'Click a chart to jump there; drag across one to zoom; double-click to zoom out.')),
+          h('span', { class: 'hint' }, 'click: jump · drag: zoom · double-click: zoom out')),
         stack));
       const group = new SA.charts.ChartGroup({
         full: [t0, t1],
@@ -458,6 +795,21 @@
         addChart('Drivetrain PID error', err.map((ch, k) => ({ label: ch.name, color: `--series-${k + 1}`, t: ch.t,
           y: ch.cols.err })));
       }
+      const mcl = run.get('mcl');
+      if (mcl) {
+        const drift = mcl.cols.corr_x.map((x, i) => Math.hypot(x, mcl.cols.corr_y[i]));
+        const series = [
+          { label: 'drift', color: '--series-2', t: mcl.t, y: drift, unit: 'in' },
+          { label: 'spread', color: '--series-1', t: mcl.t, y: mcl.cols.spread, unit: 'in' },
+        ];
+        const odom = run.get('odom');
+        if (odom && odom.has('raw_x')) {
+          series.push({ label: 'applied', color: '--series-3', t: odom.t, unit: 'in',
+            y: odom.cols.x.map((x, i) => Math.hypot(x - odom.cols.raw_x[i], odom.cols.y[i] - odom.cols.raw_y[i])) });
+        }
+        const info = A.localizerInfo(run);
+        addChart('Localizer (in)', series, { guides: [{ y: info.maxCorrectionSpreadIn, label: 'spread limit' }] });
+      }
       const batt = run.get('batt');
       if (batt) {
         addChart('Battery (V)', [{ label: 'volts', color: '--series-1', t: batt.t, y: batt.cols.volts, unit: 'V' }]);
@@ -472,7 +824,8 @@
         timeline.setAttribute('aria-valuenow', t.toFixed(2));
         timeline.setAttribute('aria-valuetext', app.label(t));
         drawTimeline();
-        drawField(field, app, t);
+        drawField(field, app, t, { layers, zoom });
+        if (hasLocalizer) renderLocalizer(locBox, localizerAt(run, t));
         if (lift) {
           drawLift(liftCanvas, app, t, lift);
           clear(liftInfo);
@@ -677,5 +1030,5 @@
     },
   };
 
-  root.SA.replay = { drawField, drawLift, fieldOrigin };
+  root.SA.replay = { drawField, drawLift, fieldOrigin, fieldFrame, localizerAt };
 })();

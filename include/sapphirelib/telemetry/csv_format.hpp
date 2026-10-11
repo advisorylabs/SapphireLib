@@ -49,6 +49,8 @@ struct WriterStats {
     std::uint32_t resyncs = 0;
     std::uint32_t breaks = 0;
     std::uint32_t faults = 0;
+    std::uint32_t samplerUs = 0;
+    std::uint32_t formatUs = 0;
 };
 
 /**
@@ -81,6 +83,14 @@ std::size_t formatNumber(char* out, std::size_t size, double value, int decimals
  * @brief Format the header block: "#SLT,1" then the #meta lines
  */
 std::size_t formatHeader(char* out, std::size_t size, const FileHeader& header);
+
+/**
+ * @brief Format one "#meta,<key>,<value>" line, for a key the program adds (Logger::addMeta())
+ *
+ * The key keeps letters, digits, '_', '.', and '-' (anything else becomes '_'), at most 63 of
+ * them; the value is printable ASCII, cut to 63 characters
+ */
+std::size_t formatMeta(char* out, std::size_t size, const char* key, const char* value);
 
 /**
  * @brief Format a channel's #chan line

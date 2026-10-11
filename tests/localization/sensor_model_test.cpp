@@ -5,6 +5,7 @@
 // Build & run:
 //   g++ -std=c++20 -Iinclude tests/localization/sensor_model_test.cpp src/sapphirelib/localization/sensor_model.cpp -o sensor_model_test && ./sensor_model_test
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -108,6 +109,43 @@ void testLatencyCompensation() {
 
 } // namespace
 
+void testScorerMatchesTheExactLikelihood() {
+    // ReadingScorer replaces readingLogLikelihood()'s exp() and log() with a lookup table: within
+    // 1e-5 everywhere, including seeing nothing, no outliers, and nothing but outliers
+    double worst = 0.0;
+    for (const double outliers : {0.0, 0.001, 0.1, 0.5, 1.0}) {
+        for (const double sigma : {0.05, 0.6, 2.0, 5.0}) {
+            const BeamModel beam{.outlierProbability = outliers};
+            for (double measured = 1.0; measured < 80.0; measured += 7.3) {
+                const ReadingScorer scorer(measured, sigma, beam);
+                for (double expected = 0.0; expected < 90.0; expected += 0.37) {
+                    const double exact = readingLogLikelihood(measured, expected, sigma, beam);
+                    const double fast = scorer.logLikelihood(expected);
+                    if (exact < -700.0) {
+                        // with no outliers, exp() goes subnormal and then 0 far from the reading,
+                        // and readingLogLikelihood() loses its precision; the scorer works in
+                        // logs there, and is just as hopeless
+                        assert(fast < -690.0);
+                        continue;
+                    }
+                    worst = std::max(worst, std::fabs(fast - exact));
+                }
+                const double inf = std::numeric_limits<double>::infinity();
+                const double exactNothing = readingLogLikelihood(measured, inf, sigma, beam);
+                if (std::isinf(exactNothing)) {
+                    assert(scorer.logLikelihood(inf) < -690.0);
+                } else {
+                    expectNear(scorer.logLikelihood(inf), exactNothing, "seeing nothing", 1e-12);
+                }
+            }
+        }
+    }
+    std::printf("  scorer within %.1e of readingLogLikelihood()\n", worst);
+    assert(worst < 1e-5);
+    // a default scorer gives everything 0
+    expectNear(ReadingScorer().logLikelihood(12.0), 0.0, "default scorer");
+}
+
 int main() {
     testSensorRayAtHeadingZero();
     testSensorRayRotatesWithTheRobot();
@@ -115,6 +153,7 @@ int main() {
     testLikelihoodPeaksAtTheExpectedDistance();
     testReadingConversion();
     testLatencyCompensation();
+    testScorerMatchesTheExactLikelihood();
     std::printf("sensor_model_test: all tests passed\n");
     return 0;
 }
