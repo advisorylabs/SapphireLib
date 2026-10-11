@@ -15,6 +15,7 @@
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/holonomic_drivetrain.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
+#include "sapphirelib/chassis/orbit_math.hpp"
 #include "sapphirelib/chassis/tank_drivetrain.hpp"
 #include "sapphirelib/chassis/thermal_math.hpp"
 #include "sapphirelib/control/feedforward.hpp"
