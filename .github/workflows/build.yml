@@ -77,6 +77,7 @@ jobs:
             # "Build & run" comment.
             extra=""
             case "$test" in
+              tests/chassis/orbit_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/control/heading_hold_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/localization/particle_filter_test.cpp)
                 extra="src/sapphirelib/localization/field_map.cpp src/sapphirelib/localization/sensor_model.cpp" ;;
