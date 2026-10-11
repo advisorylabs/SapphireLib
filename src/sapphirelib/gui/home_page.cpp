@@ -1,13 +1,29 @@
 #include "sapphirelib/gui/home_page.hpp"
 
 #include <cstdio>
+#include <utility>
 
 #include "pros/misc.hpp"
 #include "sapphirelib/telemetry/logger.hpp"
 
 namespace sapphirelib::gui {
 
+namespace {
+
+// a mode left on should be hard to miss
+constexpr std::uint32_t kToggleOnBgColor = 0xdc2626;
+constexpr std::int32_t kToggleWidthPx = 160;
+constexpr std::int32_t kToggleHeightPx = 34;
+
+} // namespace
+
 HomePage::HomePage(sensors::Imu* imu) : imu_(imu) {}
+
+void HomePage::addToggle(std::string name, std::function<bool()> isOn,
+                         std::function<void(bool)> setOn) {
+    toggles_.push_back(std::make_unique<Toggle>(
+        Toggle{.name = std::move(name), .isOn = std::move(isOn), .setOn = std::move(setOn)}));
+}
 
 void HomePage::setTelemetry(const telemetry::Logger* logger) {
     // only stored here. The row is created in build(), or by the next update() on the GUI's task,
@@ -28,6 +44,16 @@ void HomePage::build(lv_obj_t* container) {
     if (imu_) headingLabel_ = lv_label_create(container);
     if (logger_.load(std::memory_order_acquire) != nullptr) {
         telemetryLabel_ = lv_label_create(container);
+    }
+
+    for (const std::unique_ptr<Toggle>& toggle : toggles_) {
+        toggle->button = lv_button_create(container);
+        lv_obj_set_size(toggle->button, kToggleWidthPx, kToggleHeightPx);
+        lv_obj_set_style_bg_color(toggle->button, lv_color_hex(kToggleOnBgColor), LV_STATE_CHECKED);
+        toggle->label = lv_label_create(toggle->button);
+        lv_obj_center(toggle->label);
+        lv_obj_add_event_cb(toggle->button, &HomePage::toggleClicked, LV_EVENT_CLICKED,
+                            toggle.get());
     }
 
     update();
@@ -79,6 +105,26 @@ void HomePage::update() {
         }
         setLabelText(telemetryLabel_, text);
     }
+
+    for (const std::unique_ptr<Toggle>& toggle : toggles_) {
+        if (toggle->button == nullptr) continue;
+        const bool on = toggle->isOn();
+        std::snprintf(buf, sizeof(buf), "%s: %s", toggle->name.c_str(), on ? "ON" : "OFF");
+        setLabelText(toggle->label, buf);
+        // only on a change, for the same reason as setLabelText()
+        if (lv_obj_has_state(toggle->button, LV_STATE_CHECKED) != on) {
+            if (on) {
+                lv_obj_add_state(toggle->button, LV_STATE_CHECKED);
+            } else {
+                lv_obj_remove_state(toggle->button, LV_STATE_CHECKED);
+            }
+        }
+    }
+}
+
+void HomePage::toggleClicked(lv_event_t* e) {
+    Toggle* toggle = static_cast<Toggle*>(lv_event_get_user_data(e));
+    toggle->setOn(!toggle->isOn());
 }
 
 } // namespace sapphirelib::gui
