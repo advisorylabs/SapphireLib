@@ -34,8 +34,8 @@ HolonomicDrivetrain& drivetrain() {
     // straight-facing 5th/6th center wheel pair (middle-left/middle-right)
     // that add power during forward/backward driving and correct forward/
     // back drift while strafing, see AsteriskConfig and setDriftSource()
-    // in initDevices(). All right-side motors are physically mounted
-    // reversed.
+    // in initDevices(). The two sides' motors are mounted mirrored, so one
+    // side's ports are reversed in config.hpp.
     static HolonomicDrivetrain instance(
         ports::kFrontLeft, ports::kFrontRight, ports::kBackLeft, ports::kBackRight, Gearset::green,
         ports::kImu,
@@ -86,12 +86,14 @@ RotationTrackingWheel& verticalWheel() {
     // Dedicated tracking wheels on their own rotation sensors, the "IMU +
     // both wheels" odometry config (see Odometry's class comment).
     //
-    // Vertical is reversed (negative port): on this chassis, the sensor's
-    // raw positive direction is backward, confirmed by driving forward and
-    // watching Y decrease instead of increase on the Odom page, so this
-    // negation isn't a stylistic choice, it's required for Odometry's
-    // forward/backward sign to actually match the chassis's forward
-    // direction. If you re-mount or swap this sensor, re-check this.
+    // Vertical is reversed (negative port): on the test chassis, the
+    // sensor's raw positive direction was backward, confirmed by driving
+    // forward and watching Y decrease instead of increase on the Odom page,
+    // so this negation isn't a stylistic choice, it's required for
+    // Odometry's forward/backward sign to actually match the chassis's
+    // forward direction. The competition robot keeps it until checked the
+    // same way (see config.hpp); re-check it whenever this sensor is
+    // re-mounted or swapped.
     static RotationTrackingWheel instance(ports::kVerticalTracking, kTrackingWheelDiameterIn);
     return instance;
 }

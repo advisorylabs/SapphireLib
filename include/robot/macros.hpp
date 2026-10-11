@@ -1,36 +1,54 @@
 /**
  * \file robot/macros.hpp
  *
- * Driver macros for the intake, claw, and lift, built on SapphireLib's
+ * Driver macros for the intake, roller claw, and lift, built on SapphireLib's
  * input/, mechanism/, and util/ primitives. Robot-specific, so it sits
  * outside include/sapphirelib and is kept out of the library archive (see
  * EXCLUDE_SRC_FROM_LIB in the Makefile).
  *
- * Controls:
- *   R1 (hold)  Intake: spins the intake and claw in, and resets the lift to
- *              stowed (claw piston retracted, lift at level 0).
- *   Y (hold)   Claw-only intake: spins just the claw in (intake idle), with
- *              the claw piston deployed and the lift halfway between levels
- *              0 and 1. On release, lowers to level 0, re-seats the piece by
- *              retracting the piston briefly and redeploying it, then leaves
- *              the claw to hold the piece on its own.
- *   R2         Score. At level 0: deploys the claw piston if needed, then
- *              outtakes the claw and intake for as long as R2 is held,
- *              starting once the piston has had time to deploy. Above
- *              level 0: dips halfway to the level below, outtakes the claw
- *              for a moment, then raises the lift one level.
- *   L1         Up one notch. The first press only deploys the claw piston
- *              (level 0); after that, each press raises the lift a level.
- *   L2         Down one notch, stopping at level 0.
- *   RIGHT      Cycle scoring mode (ALLIANCE, MEDIUM, CENTER), each with its
- *              own level heights and level count.
- *   LEFT       Toggle the controller's bottom two lines between the claw and
- *              lift position readout and the lift motors' volts, current,
- *              and temperature.
+ * The robot starts stowed: claw piston retracted, lift at the bottom (where
+ * it intakes from, below level 1). Scoring beats every other macro, and
+ * nothing interrupts a score once it's started.
  *
- * The claw also spins in on its own whenever its distance sensor sees a
- * piece, to keep hold of it. The lift holds each level on a PID loop around
+ * Controls:
+ *   R1 (hold)  Intake. Stows first, retracting the claw and bringing the
+ *              lift to the bottom, and only once it's there spins the intake
+ *              and roller claw in. Waits for a score to finish rather than
+ *              interrupting it.
+ *   R2         Stowed: reverses the intake and roller claw for as long as
+ *              it's held. Deployed: scores (dips halfway to the level below,
+ *              outtakes the roller claw for a moment, then raises the lift a
+ *              level), and reverses the intake while held.
+ *   L1         Stowed: deploys the claw and raises the lift to level 1.
+ *              Deployed: up a level. Hold to keep stepping up.
+ *   L2         Down a level, stopping at level 1. Hold to keep stepping
+ *              down. Only intaking stows.
+ *   Y (hold)   Claw intake: deploys the claw at level 1 and spins the roller
+ *              claw in (intake idle). On release, the lift drops all the way
+ *              to the bottom and comes back up to level 1, the roller claw
+ *              still spinning in.
+ *   RIGHT      Cycle goal (ALLIANCE, MEDIUM, CENTER), each with its own
+ *              level heights and level count. The lift keeps its level,
+ *              moving to the new goal's height for it.
+ *   LEFT       Cycle the controller's bottom line: lift position and target,
+ *              then each lift motor's volts, current, and temperature.
+ *
+ * The roller claw also spins in on its own whenever its distance sensor sees
+ * a pin, to keep hold of it. The lift holds each level on a PID loop around
  * its rotation sensor.
+ *
+ * Debug mode (the Home page's Debug button), for bringing the lift up: the
+ * lift ignores its levels, and L1 and L2 power its motors directly, up and
+ * down for as long as they're held, braking wherever it's let go, sensor or
+ * no sensor. Nothing else moves the lift: R1 intakes at once (retracting the
+ * claw), R2 only reverses the intake and roller claw (it never scores), Y
+ * deploys the claw and spins the roller claw in, and releasing Y doesn't
+ * dip. Leaving debug mode puts the lift back on its level (level 1 or up with
+ * the claw deployed, the bottom with it retracted), so expect it to move.
+ *
+ * Controller screen: line 0 is the goal and level ("STOW" when stowed, or
+ * "DEBUG" and the claw in debug mode), line 2 the readout LEFT picks. Line 1
+ * belongs to driver.cpp.
  *
  * Team 96671H: Hitmen
  */
@@ -53,13 +71,14 @@ namespace robot::macros {
 void initialize();
 
 /// Call every opcontrol() loop tick, right after controller.update(). Reads
-/// the controller and drives the intake, claw, and lift, then sends the
-/// tick's status line to the controller screen (at most one write).
+/// the controller and drives the intake, roller claw, and lift, and sets the
+/// controller screen's lines 0 and 2; opcontrol() flushes the screen once at
+/// the end of the tick.
 void update(sapphirelib::input::Controller& controller);
 
 /// Stops the claw and intake and brakes the lift, right away. For disabled(),
 /// and for just before something runs a blocking routine from opcontrol()
-/// (driver.cpp's B+DOWN): nothing calls update() until that routine ends, and
+/// (driver.cpp's X+UP): nothing calls update() until that routine ends, and
 /// every motor would otherwise keep its last command for the whole routine,
 /// a lift climbing at 12V would stay at 12V into its hard stop.
 ///
@@ -67,8 +86,17 @@ void update(sapphirelib::input::Controller& controller);
 /// scoring mode are kept, and the next update() commands everything from
 /// them again, with the lift back on its PID loop at its current level. (After
 /// a pause long enough to count as a restart, update() also drops any
-/// half-finished score or re-seat, as it always has.)
+/// half-finished sequence, as it always has.)
 void stop();
+
+/// Turns debug mode (see the file comment) on or off. Safe from any task; the
+/// Home page's button calls it from the GUI's. update() picks it up on its
+/// next tick, dropping whatever sequence was running.
+void setDebug(bool on);
+
+/// Whether debug mode is on (or about to be, on update()'s next tick). Safe
+/// from any task.
+bool debug();
 
 /// Logs the lift to `logger`: its PID's every step (channel "lift") and
 /// what each update actually commanded (channel "lift.act": target and

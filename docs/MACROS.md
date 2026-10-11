@@ -15,7 +15,8 @@ machine.
 
 [`examples/macros.cpp`](../examples/macros.cpp) is the complete example this guide builds up to, and
 it's [at the end](#a-complete-example) too. [`src/robot/macros.cpp`](../src/robot/macros.cpp) is
-96671H's real one: three scoring modes, a claw with a distance sensor, and two sequences.
+96671H's real one: three goals' worth of levels, a roller claw with a distance sensor, and three
+sequences.
 
 Contents: [The primitives](#the-primitives) · [The per-tick pattern](#the-per-tick-pattern) ·
 [Where things live](#where-things-live-namespace-scope) · [Mechanisms](#mechanisms) ·
@@ -113,7 +114,7 @@ Four rules make this work:
 **Never block in the per-tick function.** `waitUntil()`, `moveTo()` and `runBlocking()` are for
 autonomous: called from opcontrol they freeze every other macro and the drive until they return. If
 a development shortcut really must run something blocking from opcontrol (96671H's runs the selected
-autonomous with B+DOWN, off the field only), stop the mechanisms first; nothing updates them until it
+autonomous with X+UP, off the field only), stop the mechanisms first; nothing updates them until it
 returns, and `resumed()` will report the gap afterwards.
 
 ## Where things live: namespace scope

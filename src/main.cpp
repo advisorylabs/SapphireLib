@@ -110,14 +110,20 @@ void opcontrol() {
         // routine.
         robot::macros::update(controller);
 
-        // Skip driving from the sticks while a GUI routine (the Odom page's
-        // offset calibration, or a PID tuner test or Auto-Tune run) is
-        // driving the chassis on its own, see robot::screenBusy().
+        // Skip driving from the sticks (and B/DOWN, the drive modes) while a
+        // GUI routine (the Odom page's offset calibration, or a PID tuner
+        // test or Auto-Tune run) is driving the chassis on its own, see
+        // robot::screenBusy().
         if (!robot::screenBusy()) robot::drive(controller);
 
-        // A resets field-centric "forward"; B+DOWN runs the selected auton,
-        // off the field only. Every tick, busy or not, see shortcuts().
+        // X+UP runs the selected auton, off the field only. Every tick, busy
+        // or not, see shortcuts().
         robot::shortcuts(controller);
+
+        // The macros set the controller screen's lines 0 and 2 and drive()
+        // line 1; this sends at most one changed line, at most every 60ms
+        // (see ControllerConfig::screenIntervalMs in driver.cpp).
+        controller.flushScreen();
 
         pros::delay(robot::kDriverLoopMs);
     }
