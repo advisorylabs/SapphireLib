@@ -126,11 +126,8 @@ void startTelemetry() {
     log.motor("motor.mr", ports::kMiddleRight);
     log.motor("motor.liftA", ports::kLiftA);
     log.motor("motor.liftB", ports::kLiftB);
-    // Placeholder ports today (see config.hpp): until they're real these log
-    // NaN, which the analyzer reports as "never answered", a reminder, not a
-    // fault.
     log.motor("motor.intake", ports::kIntake);
-    log.motor("motor.claw", ports::kClawMotor);
+    log.motor("motor.claw", ports::kClawMotor); // the roller claw
 
     // The driver's sticks and buttons, recorded by logDriver() each opcontrol
     // tick. Capacity 128 is 2.5s at 20ms.

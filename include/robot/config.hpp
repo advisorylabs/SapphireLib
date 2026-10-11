@@ -19,45 +19,53 @@ namespace robot::ports {
 
 // --- Drivetrain (see devices.cpp) ---
 // The four mecanum/X-drive corners, plus the Asterisk's straight-facing
-// center pair.
-constexpr std::int8_t kFrontLeft = -3;
-constexpr std::int8_t kFrontRight = 8;
-constexpr std::int8_t kBackLeft = -17;
-constexpr std::int8_t kBackRight = 10;
-constexpr std::int8_t kMiddleLeft = -2;
-constexpr std::int8_t kMiddleRight = 9;
-constexpr std::uint8_t kImu = 7;
+// center pair. The right side is reversed: with the left reversed instead,
+// as on the test chassis, the whole drive ran backward. With the wheels off
+// the ground, full forward on the left stick must spin all six forward; if
+// one wheel doesn't, flip just its sign.
+constexpr std::int8_t kFrontLeft = 3;
+constexpr std::int8_t kFrontRight = -15;
+constexpr std::int8_t kBackLeft = 14;
+constexpr std::int8_t kBackRight = -6;
+constexpr std::int8_t kMiddleLeft = 5;
+constexpr std::int8_t kMiddleRight = -20;
+constexpr std::uint8_t kImu = 19;
 
 // --- Odometry tracking wheels (rotation sensors) ---
-// Vertical is reversed on purpose; see its constructor in devices.cpp before
-// changing the sign.
-constexpr std::int8_t kVerticalTracking = -13;
-constexpr std::int8_t kHorizontalTracking = 14;
+// Vertical is reversed, as it had to be on the test chassis; see its
+// constructor in devices.cpp. TODO: confirm both on this robot: on the Odom
+// page, driving forward must raise Y and strafing right must raise X.
+// Negate whichever one goes the wrong way.
+constexpr std::int8_t kVerticalTracking = -11;
+constexpr std::int8_t kHorizontalTracking = 1;
 
-// --- Intake, claw, and lift (macros.cpp) ---
-// TODO: only the lift motor ports are real (the same winch motors the Lift
-// Testing auton uses). Every other port here is a placeholder; set it to
-// where that device is actually plugged in, then uncomment its entry in the
-// Diagnostics page's list (screen.cpp).
-constexpr std::int8_t kIntake = -18;   // reversed, so intaking (+) spins it counterclockwise
-constexpr std::int8_t kClawMotor = 15; // intaking (+) spins it clockwise
-constexpr std::int8_t kLiftA = -20;
-constexpr std::int8_t kLiftB = 19;
+// --- Intake, roller claw, and lift (macros.cpp) ---
+// Intaking (+) spins the intake and the roller claw "clockwise" in the
+// driver's sense of it; the intake's port is reversed so that's +. If either
+// spins outward on R1, negate its port.
+constexpr std::int8_t kIntake = -21;
+constexpr std::int8_t kClawMotor = 17; // the roller claw
+// The two lift motors are geared straight to each other, so they spin
+// opposite ways: A clockwise going up, B counterclockwise. B is reversed so
+// + is up for both; with both the same sign they fight each other and lock
+// up. If L1 in debug mode drives the lift down, negate both.
+constexpr std::int8_t kLiftA = 16;
+constexpr std::int8_t kLiftB = -9;
 // Negate this if the sensor's reading goes down as the lift goes up.
-constexpr std::int8_t kLiftSensor = 16;
-constexpr std::uint8_t kClawDistance = 5;
-constexpr char kClawPiston = 'A'; // a 3-wire port on the brain, not a smart port
+constexpr std::int8_t kLiftSensor = 7;
+// Sees a pin in the roller claw.
+constexpr std::uint8_t kClawDistance = 12;
+// TODO: the claw's solenoid wasn't in the competition robot's port list;
+// 'A' is the test chassis's. A 3-wire port on the brain, not a smart port.
+constexpr char kClawPiston = 'A';
 
 // --- Localization distance sensors (devices.cpp) ---
-// One per side, for Monte Carlo localization. TODO: these are placeholders on
-// free ports; set each to where that sensor is really plugged in, then
-// uncomment its entry in the Diagnostics page's list (screen.cpp). A port with
-// no distance sensor on it just reads nothing, and the localizer leaves
-// odometry alone without readings, so a wrong port is harmless, only useless.
-constexpr std::uint8_t kDistanceFront = 1;
-constexpr std::uint8_t kDistanceRight = 4;
-constexpr std::uint8_t kDistanceBack = 6;
-constexpr std::uint8_t kDistanceLeft = 11;
+// One per side, for Monte Carlo localization. The team calls them by
+// compass point, with north the robot's front.
+constexpr std::uint8_t kDistanceFront = 8;  // north
+constexpr std::uint8_t kDistanceRight = 10; // east
+constexpr std::uint8_t kDistanceBack = 18;  // south
+constexpr std::uint8_t kDistanceLeft = 2;   // west
 
 } // namespace robot::ports
 
@@ -72,10 +80,13 @@ constexpr double kDriveWheelDiameterIn = 4.0;
 constexpr double kTrackingWheelDiameterIn = 2.75;
 
 // Each tracking wheel's mounting offset from the tracking center, in inches
-// (see OdometryConfig). TODO: re-check these whenever a wheel is remounted,
-// measure them, or use the Odom page's "Calibrate Offsets", which applies
-// what it measures to the running odometry and shows the numbers, but
-// doesn't change this file: copy them in here to keep them.
+// (see OdometryConfig). TODO: these are the test chassis's numbers, so they're
+// wrong for the competition robot until it's measured: run the Odom page's
+// "Calibrate Offsets", which applies what it measures to the running odometry
+// and shows the numbers, but doesn't change this file: copy them in here to
+// keep them. Orbit mode (driver.cpp) leans on these too: they're how the
+// tracking wheels tell turning from moving, so wrong ones make every turn of
+// an orbit read as drifting off the circle, and the radius hold "corrects" it.
 //
 // Mind the vertical wheel's sign, which is the opposite of what you'd guess
 // (see OdometryConfig): positive is LEFT of center. A vertical wheel on the

@@ -19,6 +19,7 @@
 #include "robot/autons.hpp"
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
+#include "robot/macros.hpp"
 #include "robot/telemetry.hpp"
 #include "robot/tuning.hpp"
 #include "sapphirelib/diag/sensor_check.hpp"
@@ -74,6 +75,10 @@ void buildScreen() {
     auto homePage = std::make_unique<HomePage>(&drivetrain().imu());
     // An "SD:" row, so a missing or pulled card is noticed in the pits.
     homePage->setTelemetry(&logger());
+    // The macros' debug mode: L1/L2 power the lift directly, no levels (see
+    // macros.hpp). Red while on.
+    homePage->addToggle(
+        "Debug", [] { return macros::debug(); }, [](bool on) { macros::setDebug(on); });
     gui.addPage(std::move(homePage));
 
     auto autonSelectorPage = std::make_unique<AutonSelectorPage>();
@@ -100,18 +105,14 @@ void buildScreen() {
             check("Horizontal tracking wheel", ports::kHorizontalTracking, DeviceKind::rotation),
             check("Lift motor A", ports::kLiftA, DeviceKind::motor),
             check("Lift motor B", ports::kLiftB, DeviceKind::motor),
-            // TODO: uncomment each of these once its port in config.hpp is
-            // the real one. They're placeholders today, and a check on a
-            // wrong port would put a red warning banner across every tab for
-            // the whole match.
-            // check("Intake motor", ports::kIntake, DeviceKind::motor),
-            // check("Claw motor", ports::kClawMotor, DeviceKind::motor),
-            // check("Lift rotation sensor", ports::kLiftSensor, DeviceKind::rotation),
-            // check("Claw distance sensor", ports::kClawDistance, DeviceKind::distance),
-            // check("Front distance sensor", ports::kDistanceFront, DeviceKind::distance),
-            // check("Right distance sensor", ports::kDistanceRight, DeviceKind::distance),
-            // check("Back distance sensor", ports::kDistanceBack, DeviceKind::distance),
-            // check("Left distance sensor", ports::kDistanceLeft, DeviceKind::distance),
+            check("Lift rotation sensor", ports::kLiftSensor, DeviceKind::rotation),
+            check("Intake motor", ports::kIntake, DeviceKind::motor),
+            check("Roller claw motor", ports::kClawMotor, DeviceKind::motor),
+            check("Pin distance sensor", ports::kClawDistance, DeviceKind::distance),
+            check("North distance sensor", ports::kDistanceFront, DeviceKind::distance),
+            check("East distance sensor", ports::kDistanceRight, DeviceKind::distance),
+            check("South distance sensor", ports::kDistanceBack, DeviceKind::distance),
+            check("West distance sensor", ports::kDistanceLeft, DeviceKind::distance),
         },
         &gui));
 

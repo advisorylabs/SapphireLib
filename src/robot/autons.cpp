@@ -3,7 +3,7 @@
  *
  * Every autonomous routine, and registerAutons(), which lists them on the
  * brain screen. autonomous() runs whichever one is picked there (see
- * runSelectedAuton() in screen.cpp); so does B+DOWN off the field.
+ * runSelectedAuton() in screen.cpp); so does X+UP off the field.
  *
  * Team 96671H: Hitmen
  */
@@ -30,8 +30,11 @@ pros::Motor winch2(ports::kLiftB);
 void liftTesting() {
     winch.set_encoder_units_all(pros::v5::MotorUnits::degrees);
     winch2.set_encoder_units_all(pros::v5::MotorUnits::degrees);
-    // winch is reversed (port -20), so its position counts UP while moving at
-    // +127. Zero it so the thresholds are relative to where the lift starts.
+    // + is up for both lift motors (see config.hpp), so winch's position
+    // counts UP while moving at +127. Zero it so the thresholds are relative
+    // to where the lift starts. TODO: 1000 motor degrees of travel was the
+    // test chassis's lift; check this one's before running it, or the up
+    // stroke drives into the top hard stop and never ends.
     winch.tare_position();
     winch2.tare_position();
     for (int i = 0; i < 18; i++) {
