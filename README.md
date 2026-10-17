@@ -61,6 +61,9 @@ PID tuning is still per-robot work you'll do after pulling it in. See
 - **Tuning loop** ([`docs/TUNING.md`](docs/TUNING.md)): the simulator auto-tunes the localizer (on a
   world calibrated from the robot's own logs), the analyzer refines the PIDs, and both write
   `TUNE.CFG`, which the robot loads from its SD card at startup: no rebuild between rounds.
+- **New chassis** ([`docs/NEW_CHASSIS.md`](docs/NEW_CHASSIS.md)): every calibration, from the IMU's
+  scale to the localizer's settings, in the order each depends on the last, and where each number
+  goes in the code.
 - **Simulator** ([`tools/sim/`](tools/sim/)): open `index.html` in a browser (no install) to drive a
   simulated 96671H around a field running the library's own odometry, localizer, motions and
   Auto-Tune gain design. Bump the robot, add a defender, wear out its tracking wheels, and watch MCL
