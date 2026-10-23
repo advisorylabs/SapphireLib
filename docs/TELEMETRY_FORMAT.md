@@ -256,6 +256,16 @@ volts that hold it against gravity.
   with the mount the localizer uses from then on, or `mount_calibration,failed,<why>` if the spin
   didn't finish. A file's `#meta mcl.sensorN` lines record the mounts the program started with, so
   after one of these the events are what's current.
+- `teach`: teach mode (`src/robot/teach.cpp`, `docs/TEACH.md`). `start` and
+  `stop,ms=<recorded ms>,samples=<n>` around a recording in driver control; once it's on the card,
+  `saved,bytes=<n>,ms=<write and read-back ms>,verified=<1|0>` (0: it didn't read back as written)
+  or `save_failed`; and `replay,ms=<planned ms>,scale=<fraction of the driver's speed>` as the
+  Taught Route auton starts (its `followTrajectory` follows).
+- `sdtest`: the SD Stress Test auton's result,
+  `rounds=<n>,verified=<n>,bytes=<n>,avg_ms=<ms>,max_ms=<ms>,dropped=<rows>,logger=<ok|faulted>`:
+  how many rounds of writing a full-size taught drive read back as written while this file was
+  being logged, how long each took, the rows the logger dropped meanwhile, and whether it kept
+  logging to this file.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button), `macro`.
 
 ## Channels on 96671H's robot

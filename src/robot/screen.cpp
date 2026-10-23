@@ -20,6 +20,7 @@
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
+#include "robot/teach.hpp"
 #include "robot/telemetry.hpp"
 #include "robot/tune.hpp"
 #include "robot/tuning.hpp"
@@ -84,6 +85,14 @@ void buildScreen() {
     // macros.hpp). Top right of the page, red while on.
     homePage->addToggle(
         "Debug", [] { return macros::debug(); }, [](bool on) { macros::setDebug(on); });
+    // Teach mode (teach.hpp): what's taught, and a button that starts and
+    // stops recording, like X+A, red while recording.
+    homePage->addRow(&teach::statusText);
+    homePage->addToggle(
+        "Teach", [] { return teach::recording(); },
+        [](bool on) {
+            if (on != teach::recording()) teach::requestToggle();
+        });
     gui.addPage(std::move(homePage));
 
     auto autonSelectorPage = std::make_unique<AutonSelectorPage>();

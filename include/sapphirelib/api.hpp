@@ -44,6 +44,7 @@
 #include "sapphirelib/motion/motion_queue.hpp"
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
+#include "sapphirelib/motion/recorded_trajectory.hpp"
 #include "sapphirelib/motion/trajectory.hpp"
 #include "sapphirelib/motion/trajectory_config.hpp"
 #include "sapphirelib/motion/trajectory_generator.hpp"
@@ -52,6 +53,7 @@
 #include "sapphirelib/sensors/imu.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 
+#include "sapphirelib/input/button_playback.hpp"
 #include "sapphirelib/input/button_tracker.hpp"
 #include "sapphirelib/input/controller.hpp"
 #include "sapphirelib/input/controller_screen.hpp"
