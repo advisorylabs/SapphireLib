@@ -15,6 +15,7 @@
 #include "pros/version.h"
 #include "sapphirelib/telemetry/csv_format.hpp"
 #include "sapphirelib/telemetry/file_naming.hpp"
+#include "sapphirelib/telemetry/sd_card.hpp"
 #include "sapphirelib/util/clock.hpp"
 #include "sapphirelib/util/log.hpp"
 #include "sapphirelib/version.hpp"
@@ -63,6 +64,11 @@ constexpr std::uint32_t kMaxFaults = 8;
 
 // the card's root, the fallback for a missing folder
 constexpr const char* kRootDirectory = "/usd";
+
+// the longest the writer waits for the card (SdCardLock) before using it anyway. Others hold it a
+// chunk at a time, milliseconds; this long means a task was deleted holding it, and waiting on
+// would end logging for the rest of the run
+constexpr std::uint32_t kCardLockWaitMs = 1000;
 
 // the Logger the free telemetry::event() logs to: the last one started
 std::atomic<Logger*> activeLogger{nullptr};
@@ -446,6 +452,17 @@ void Logger::writerLoop() {
 }
 
 void Logger::writerPass() {
+    // the card for the whole pass: every SD call the logger makes is in here, so no other task's
+    // file (teach mode's TEACH.TXT) is ever written in the middle of one of ours. Taken before the
+    // pass's clock starts, so waiting for it isn't counted as formatting
+    const SdCardLock card(kCardLockWaitMs);
+    if (!card.held() && !warnedCardLock_) {
+        warnedCardLock_ = true;
+        SAPPHIRELIB_LOG_WARN("telemetry",
+                             "the SD card has been held for %lu ms; writing anyway (was a task "
+                             "deleted holding SdCardLock?)",
+                             static_cast<unsigned long>(kCardLockWaitMs));
+    }
     const std::uint64_t passStartUs = sapphirelib::micros();
     passWriteUs_ = 0;
     const std::size_t count = channelCount_.load(std::memory_order_acquire);

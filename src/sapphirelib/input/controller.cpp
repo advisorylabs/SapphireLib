@@ -53,6 +53,15 @@ void Controller::update() {
     }
 }
 
+void Controller::replay(ButtonMask heldMask, const std::array<double, 4>& axes) {
+    now_ = sapphirelib::millis();
+    resumed_ = gap_.update(now_);
+    if (resumed_) screen_.invalidate();
+    connected_ = true;
+    buttons_.update(heldMask, now_);
+    for (std::size_t i = 0; i < axes_.size(); ++i) axes_[i] = std::clamp(axes[i], -1.0, 1.0);
+}
+
 std::uint32_t Controller::now() const { return now_; }
 
 bool Controller::resumed() const { return resumed_; }

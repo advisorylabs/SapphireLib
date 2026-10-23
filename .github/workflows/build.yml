@@ -88,8 +88,11 @@ jobs:
               tests/motion/trajectory_path_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/motion/trajectory_generator_test.cpp)
                 extra="src/sapphirelib/motion/trajectory.cpp src/sapphirelib/motion/trajectory_path.cpp src/sapphirelib/motion/holonomic_feedforward.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/util/angle.cpp" ;;
+              tests/input/button_playback_test.cpp) extra="src/sapphirelib/input/button_tracker.cpp" ;;
               tests/motion/boomerang_math_test.cpp)
                 extra="src/sapphirelib/motion/exit_tracker.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/util/angle.cpp" ;;
+              tests/motion/recorded_trajectory_test.cpp)
+                extra="src/sapphirelib/motion/holonomic_tracking.cpp src/sapphirelib/motion/holonomic_feedforward.cpp src/sapphirelib/motion/trajectory_generator.cpp src/sapphirelib/motion/trajectory.cpp src/sapphirelib/motion/trajectory_path.cpp src/sapphirelib/motion/pure_pursuit_math.cpp src/sapphirelib/motion/path.cpp src/sapphirelib/motion/exit_tracker.cpp src/sapphirelib/input/button_playback.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/util/angle.cpp" ;;
               tests/motion/holonomic_tracking_test.cpp)
                 extra="src/sapphirelib/motion/holonomic_feedforward.cpp src/sapphirelib/motion/trajectory_generator.cpp src/sapphirelib/motion/trajectory.cpp src/sapphirelib/motion/trajectory_path.cpp src/sapphirelib/motion/pure_pursuit_math.cpp src/sapphirelib/motion/path.cpp src/sapphirelib/motion/exit_tracker.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/util/angle.cpp" ;;
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
@@ -118,6 +121,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/telemetry/slt_read.py --selftest
 
+      # PROS's file functions go straight to VEXos with no lock between tasks, so the program
+      # holds telemetry::SdCardLock for every SD card call (the logger's writer, teach mode,
+      # TUNE.CFG). This fails if one turns up without it.
+      - name: Check every SD card access holds SdCardLock
+        if: ${{ !cancelled() }}
+        run: |
+          python tools/telemetry/check_sd_access.py --selftest
+          python tools/telemetry/check_sd_access.py
 
       # The telemetry analyzer (tools/analyzer) is plain browser JavaScript
       # with no dependencies; its parser, analysis, and tuning math run under

@@ -29,6 +29,9 @@ Contents: [Drawing a path](#drawing-a-path) · [In autons.cpp](#in-autonscpp) ·
 [How it's followed](#how-its-followed) · [Tuning](#tuning) · [Reading a run](#reading-a-run) ·
 [The code](#the-code)
 
+To drive a route by hand and replay it as a routine, see [teach mode](TEACH.md): it replays
+through the same follower.
+
 ## Drawing a path
 
 Open Sapphire Sim (`tools/sim/index.html`) and its **Paths** tab.

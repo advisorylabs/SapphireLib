@@ -16,6 +16,7 @@
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
 #include "robot/screen.hpp"
+#include "robot/teach.hpp"
 #include "sapphirelib/chassis/orbit_math.hpp"
 #include "sapphirelib/control/joystick_curve.hpp"
 #include "sapphirelib/util/timing.hpp"
@@ -152,7 +153,11 @@ void driveOrbit(const Controller& controller) {
 // nearly every tick while the radius moves and, with one line sent per 60ms
 // lowest first, starve the lift readout below it.
 void showDriveMode(Controller& controller) {
-    if (orbit.active) {
+    // Teaching takes the line while it records, so the driver can see it is;
+    // the drive mode comes back when it stops.
+    if (teach::recording()) {
+        controller.screen().setLine(1, "TEACH REC: X+A"); // 15 columns at most
+    } else if (orbit.active) {
         controller.screen().setLine(1, "%s %.0fin", inverted ? "ORBIT INV" : "ORBIT",
                                     orbit.targetRadiusIn);
     } else {

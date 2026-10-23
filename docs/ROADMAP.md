@@ -461,6 +461,14 @@ defaults shipped here.
       Sapphire Sim has a Branch at speed routine on its front distance sensor. Unit-tested in
       `trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (a branch golden case shared with
       the sim) and `holonomic_tracking_test.cpp` (closed loop through the junction).
+- [x] Teach mode: X+A in driver control records a drive (odometry's pose and the held buttons every
+      tick) to TEACH.TXT, and the Taught Route auton replays it: `motion::trajectoryFromRecording()`
+      trims, smooths and differentiates the drive into a time-based trajectory, slowed evenly to fit
+      the voltage budget, and `input::ButtonPlayback` plays the buttons into the macros through
+      `Controller::replay()` on the plan's clock, never dropping a press. Guide in
+      [`docs/TEACH.md`](TEACH.md); unit-tested in `recorded_trajectory_test.cpp` (a replay followed in
+      closed loop, a turn in place, the file format) and `button_playback_test.cpp`. **Not yet run on
+      the robot.**
 - [x] Pathing bug fixes from a review: a motion on a `MotionQueue`'s task outlived `autonomous()`
       and drove on into driver control until it timed out (every drivetrain motion now ends
       `interrupted` when the competition mode changes under it, `motion::competitionModeChanged()`);
@@ -479,6 +487,13 @@ defaults shipped here.
       to the final heading. On a simulated tank driving to 300 random poses it settles 299 (69
       before), and 297 or more with odometry noise (12 to 29 before). In
       `tests/motion/boomerang_math_test.cpp`. **Not yet run on a tank.**
+- [x] One task at the SD card at a time: PROS's SD driver calls the VEX SDK's file functions bare,
+      with no lock between tasks, so teach mode saving while the logger wrote was up to VEXos. Every
+      card call now holds `telemetry::SdCardLock`: the logger for each writer pass, teach mode and
+      TUNE.CFG a 4 KB chunk at a time (`readCardFile()`/`writeCardFile()`), and a saved drive is
+      read back to verify it. `tools/telemetry/check_sd_access.py`, in CI, fails on any card call
+      made without it (proven against three deliberate breaks). The SD Stress Test auton checks it
+      on the brain, which hasn't been done yet.
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware**; tab bar height has been bumped twice in response to that

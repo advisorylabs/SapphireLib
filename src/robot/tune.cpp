@@ -14,6 +14,7 @@
 #include "pros/misc.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
+#include "sapphirelib/telemetry/sd_card.hpp"
 #include "sapphirelib/util/log.hpp"
 
 namespace robot {
@@ -23,6 +24,8 @@ using sapphirelib::PIDGains;
 using sapphirelib::chassis::HolonomicAxisModels;
 using sapphirelib::localization::LocalizerConfig;
 using sapphirelib::localization::LocalizerSetting;
+using sapphirelib::telemetry::cardInserted;
+using sapphirelib::telemetry::readCardFile;
 using sapphirelib::tuning::kMaxTuneFileBytes;
 using sapphirelib::tuning::parseTuneProfile;
 using sapphirelib::tuning::TuneProfile;
@@ -45,32 +48,21 @@ TuneSchema schema() {
     };
 }
 
-// The whole file, or false if there's none (or it's too big to be ours).
-bool readFile(const char* path, std::string& text) {
-    std::FILE* file = std::fopen(path, "r");
-    if (file == nullptr) return false;
-    text.clear();
-    char buffer[512];
-    std::size_t read = 0;
-    while ((read = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        text.append(buffer, read);
-        // one byte past the limit is enough for the parser to say "too big"
-        if (text.size() > kMaxTuneFileBytes) break;
-    }
-    std::fclose(file);
-    return true;
-}
+// How long to wait for the SD card (telemetry::SdCardLock). Read at startup,
+// before the logger writes anything, so it's free at once.
+constexpr std::uint32_t kCardWaitMs = 2000;
 
 TuneStatus load() {
     TuneStatus status;
-    if (pros::usd::is_installed() == 0) {
+    if (!cardInserted(kCardWaitMs)) {
         status.state = TuneStatus::State::noCard;
         SAPPHIRELIB_LOG_INFO("tune", "no SD card: running the code's tuning");
         return status;
     }
     std::string text;
     for (const char* path : kTuneFilePaths) {
-        if (!readFile(path, text)) continue;
+        // one byte past the limit is enough for the parser to say "too big"
+        if (!readCardFile(path, text, kMaxTuneFileBytes, kCardWaitMs)) continue;
         status.path = path;
         status.result = parseTuneProfile(text, schema());
         if (status.result.ok) {

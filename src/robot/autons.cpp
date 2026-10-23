@@ -18,6 +18,7 @@
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
+#include "robot/teach.hpp"
 #include "sapphirelib/motion/motion_queue.hpp"
 #include "sapphirelib/motion/trajectory_generator.hpp"
 #include "sapphirelib/telemetry/event.hpp"
@@ -258,6 +259,10 @@ void registerAutons(AutonSelectorPage& selector) {
     selector.addRoutine("Trajectory Test", &trajectoryTestAuton);
     selector.addRoutine("Branch Test", &branchTestAuton);
     selector.addRoutine("Branch At Speed", &branchAtSpeedAuton);
+    // replays the drive taught last (teach.cpp): X+A in driver control
+    selector.addRoutine("Taught Route", &teach::replayAuton);
+    // bench only: teach mode's SD writes against the logger's (teach.hpp)
+    selector.addRoutine("SD Stress Test", &teach::sdStressAuton);
 }
 
 } // namespace robot
