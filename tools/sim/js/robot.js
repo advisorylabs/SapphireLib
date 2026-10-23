@@ -448,8 +448,32 @@
       bestPoint = { xIn: p1.xIn + d.x * t2, yIn: p1.yIn + d.y * t2 };
       bestIndex = i;
     }
-    if (!found) return { point: points[points.length - 1], segmentIndex: points.length - 1 };
-    return { point: bestPoint, segmentIndex: bestIndex };
+    if (found) return { point: bestPoint, segmentIndex: bestIndex };
+    // the rest of the path ends inside the circle: head for the end
+    const last = points[points.length - 1];
+    if (Math.hypot(last.xIn - xIn, last.yIn - yIn) <= lookaheadIn || startIndex + 1 >= points.length) {
+      return { point: last, segmentIndex: points.length - 1 };
+    }
+    // it never comes within reach (it starts elsewhere, or the robot was knocked off it): back to
+    // the nearest point of what's left
+    let nearest = points[startIndex];
+    let nearestIndex = startIndex;
+    let nearestSq = Infinity;
+    for (let i = startIndex; i + 1 < points.length; ++i) {
+      const p1 = points[i];
+      const d = { x: points[i + 1].xIn - p1.xIn, y: points[i + 1].yIn - p1.yIn };
+      const lengthSq = d.x * d.x + d.y * d.y;
+      const t = lengthSq < 1e-9 ? 0.0
+        : Math.min(1.0, Math.max(0.0, ((xIn - p1.xIn) * d.x + (yIn - p1.yIn) * d.y) / lengthSq));
+      const point = { xIn: p1.xIn + d.x * t, yIn: p1.yIn + d.y * t };
+      const distanceSq = (point.xIn - xIn) ** 2 + (point.yIn - yIn) ** 2;
+      if (distanceSq < nearestSq) {
+        nearestSq = distanceSq;
+        nearest = point;
+        nearestIndex = i;
+      }
+    }
+    return { point: nearest, segmentIndex: nearestIndex };
   }
 
   function reachedFinalApproach(distanceToFinalIn, finalApproachIn, segmentIndex, waypointCount) {
@@ -617,8 +641,9 @@
       // setAxisModels(): the sim's are the world's own, as if Auto-Tune measured them perfectly
       this.axisModels = null;
       this.applied = { forward: 0, strafe: 0, turn: 0 };
-      // trajectoryProgress()
-      this.progress = { running: false, section: 0, distanceIn: 0, timeS: 0, paused: false };
+      // trajectoryProgress(), and the number of the followTrajectory() it's from
+      this.progress = { running: false, section: 0, distanceIn: 0, timeS: 0, paused: false, piece: 0 };
+      this.progressMotion = 0;
       // setTrajectoryObserver(): { onTrajectoryStart(trajectory), onTrackingTick(tick) }
       this.trajectoryObserver = null;
       // for the visualizer: what the running motion is aiming at
@@ -640,7 +665,7 @@
     }
 
     trajectoryProgress() {
-      return Object.assign({}, this.progress);
+      return Object.assign({}, this.progress, { motion: this.progressMotion });
     }
 
     setTrajectoryObserver(observer) {
@@ -809,6 +834,8 @@
       const follower = new TrajectoryFollower(this.trackingPIDs.forward, this.trackingPIDs.strafe,
         this.trackingPIDs.turn);
       follower.begin(trajectory, models, config, this.clock());
+      this.progress = follower.progress;
+      this.progressMotion++;
       // the config too, and an end: the robot's drivetrain logs its motion events itself, the
       // simulator's recorder does it from these
       if (this.trajectoryObserver) this.trajectoryObserver.onTrajectoryStart(trajectory, follower.config);

@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/chassis/competition_watch.hpp"
 #include "sapphirelib/chassis/drift_math.hpp"
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
@@ -365,7 +366,8 @@ public:
      * the end of the last one
      *
      * @note needs the axis models (setAxisModels(), from Auto-Tune or TUNE.CFG). The trajectory
-     * must outlive the motion. Cut short by a competition state change, trajectoryProgress() keeps
+     * must outlive the motion. Like every motion, it ends (interrupted) if the competition mode
+     * changes under it. Cut short by a competition state change, trajectoryProgress() keeps
      * its last values
      *
      * @param trajectory the plan
@@ -412,16 +414,23 @@ public:
      * @brief Get how far along the trajectory being followed is
      *
      * Safe to call from any task, e.g. to start a mechanism as the robot enters a section
-     * without stopping. The values are separate atomics, so a read can mix two consecutive ticks
+     * without stopping. The values are separate atomics, so a read can mix two consecutive ticks.
+     * Until a queued trajectory's motion starts they're still the last one's: check motion, which
+     * numbers the followTrajectory() calls, to know they're from the one you queued
      *
-     * @return motion::TrajectoryProgress running, section, distance, the plan's clock, paused
+     * @return motion::TrajectoryProgress running, section, distance, the plan's clock, paused,
+     * the piece of a chain, and which motion
      *
      * @b Example
      * @code {.cpp}
      * static sapphirelib::motion::MotionQueue queue;
-     * queue.enqueue([] { drivetrain().followTrajectory(rush.trajectory); });
+     * const std::uint32_t rush = drivetrain().trajectoryProgress().motion + 1; // the next to start
+     * queue.enqueue([] { drivetrain().followTrajectory(rushPlan.trajectory); });
      * queue.run();
-     * sapphirelib::waitUntil([] { return drivetrain().trajectoryProgress().section >= 1; }, 3000);
+     * sapphirelib::waitUntil([rush] {
+     *     const auto p = drivetrain().trajectoryProgress();
+     *     return p.motion == rush && p.section >= 1;
+     * }, 3000);
      * intake().spin(); // as the robot enters section 1
      * queue.waitUntilDone();
      * @endcode
@@ -573,6 +582,7 @@ private:
     std::atomic<double> progressTimeS_{0.0};
     std::atomic<bool> progressPaused_{false};
     std::atomic<std::size_t> progressPiece_{0};
+    std::atomic<std::uint32_t> progressMotion_{0};
 
     std::atomic<DriverInputMode> driverInputMode_{DriverInputMode::voltage};
     mutable pros::MutexVar<HolonomicAxisModels> axisModels_;
@@ -639,7 +649,8 @@ private:
     // moveToPoint() holding a given heading, so followPath() can keep its starting heading
     // through the final approach. Logs no events of its own
     motion::MotionResult moveToPointHolding(double xIn, double yIn, double holdHeadingDeg,
-                                            const odom::Odometry& odometry, ExitConditions exit);
+                                            const odom::Odometry& odometry, ExitConditions exit,
+                                            const CompetitionWatch& watch);
 
     // advance the held heading one tick and return the heading hold PID's output, in volts
     double headingHoldTurnVolts(double turnInput);

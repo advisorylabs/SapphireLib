@@ -88,6 +88,8 @@ jobs:
               tests/motion/trajectory_path_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/motion/trajectory_generator_test.cpp)
                 extra="src/sapphirelib/motion/trajectory.cpp src/sapphirelib/motion/trajectory_path.cpp src/sapphirelib/motion/holonomic_feedforward.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/util/angle.cpp" ;;
+              tests/motion/boomerang_math_test.cpp)
+                extra="src/sapphirelib/motion/exit_tracker.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/util/angle.cpp" ;;
               tests/motion/holonomic_tracking_test.cpp)
                 extra="src/sapphirelib/motion/holonomic_feedforward.cpp src/sapphirelib/motion/trajectory_generator.cpp src/sapphirelib/motion/trajectory.cpp src/sapphirelib/motion/trajectory_path.cpp src/sapphirelib/motion/pure_pursuit_math.cpp src/sapphirelib/motion/path.cpp src/sapphirelib/motion/exit_tracker.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/tuning/gain_design.cpp src/sapphirelib/util/angle.cpp" ;;
               tests/odom/odometry_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;

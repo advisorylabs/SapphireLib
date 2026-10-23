@@ -10,6 +10,7 @@ const char* exitReasonName(ExitReason reason) {
         case ExitReason::settled: return "settled";
         case ExitReason::timedOut: return "timeout";
         case ExitReason::aborted: return "aborted";
+        case ExitReason::interrupted: return "interrupted";
     }
     return "unknown"; // only reachable by casting an out-of-range value
 }

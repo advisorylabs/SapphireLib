@@ -97,14 +97,21 @@ trajectory, no odometry, or no axis models.
 is, and whether it's waiting, from any task. Run the trajectory on a `MotionQueue` and wait on it:
 
 ```cpp
+const std::uint32_t motion = drivetrain().trajectoryProgress().motion + 1; // the next to start
 queue.enqueue([] { drivetrain().followTrajectory(rush.trajectory); });
 queue.run();
-sapphirelib::waitUntil([] { return drivetrain().trajectoryProgress().section >= 1; }, 3000);
+sapphirelib::waitUntil([motion] {
+    const auto progress = drivetrain().trajectoryProgress();
+    return progress.motion == motion && progress.section >= 1;
+}, 3000);
 intake().spin(); // as the robot enters section 1, without slowing down
 queue.waitUntilDone();
 ```
 
 A section starts at its first point, so `section >= 1` comes true as the robot reaches the junction.
+Until the queue's task starts the motion, the progress is still the last trajectory's, which may
+well be past section 1; `motion` numbers the `followTrajectory()` calls, so the wait only counts
+this one.
 `examples/trajectory.cpp` is a complete routine; `src/robot/autons.cpp` has a **Trajectory Test**
 routine for checking it on the robot (it needs about 40 in ahead and 30 in to the right).
 

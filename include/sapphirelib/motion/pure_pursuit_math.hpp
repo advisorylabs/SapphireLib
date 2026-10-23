@@ -42,8 +42,10 @@ struct LookaheadResult {
  * Intersects a circle of radius lookaheadIn around the robot with each path segment from
  * fromIndex on, and keeps the furthest along the stretch of path the circle reaches: once the
  * path has left the circle, a later segment that comes back within reach (a closed lap's last
- * side, beside its first) isn't skipped ahead to. Once the robot is within lookaheadIn of every
- * remaining segment, returns the last waypoint
+ * side, beside its first) isn't skipped ahead to. Once the rest of the path ends inside the circle,
+ * returns the last waypoint. If the circle doesn't reach the rest of the path at all (it starts
+ * somewhere else, or the robot was knocked more than lookaheadIn off it), returns the nearest
+ * point of it, so the robot goes back to the path instead of skipping it
  *
  * @param xIn robot x, in inches
  * @param yIn robot y, in inches

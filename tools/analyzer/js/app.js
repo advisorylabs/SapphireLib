@@ -766,8 +766,10 @@
         group.redraw();
       };
       const rows = list.map((m) => {
+        // interrupted, like cut short, is the period ending under it: not the motion's fault
         const result = m.reason === 'settled' ? h('span', { class: 'pill ok' }, 'settled')
-          : m.reason ? h('span', { class: 'pill bad' }, m.reason) : h('span', { class: 'pill' }, 'cut short');
+          : m.reason === 'interrupted' ? h('span', { class: 'pill' }, 'interrupted')
+            : m.reason ? h('span', { class: 'pill bad' }, m.reason) : h('span', { class: 'pill' }, 'cut short');
         const row = h('tr', { class: 'clickable', tabindex: '0' },
           h('td', { class: 'data' }, app.shortLabel(m.start)),
           h('td', null, m.kind),

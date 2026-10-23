@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/chassis/competition_watch.hpp"
 #include "sapphirelib/chassis/thermal_math.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
@@ -111,12 +112,16 @@ void HolonomicDrivetrain::setTrajectoryObserver(motion::TrajectoryObserver* obse
 }
 
 motion::TrajectoryProgress HolonomicDrivetrain::trajectoryProgress() const {
+    // the motion first: its start publishes the fresh progress before its number, so the rest is
+    // at least that fresh
+    const std::uint32_t motion = progressMotion_.load();
     return motion::TrajectoryProgress{.running = progressRunning_.load(),
                                       .section = progressSection_.load(),
                                       .distanceIn = progressDistanceIn_.load(),
                                       .timeS = progressTimeS_.load(),
                                       .paused = progressPaused_.load(),
-                                      .piece = progressPiece_.load()};
+                                      .piece = progressPiece_.load(),
+                                      .motion = motion};
 }
 
 void HolonomicDrivetrain::publishProgress(const motion::TrajectoryProgress& progress) {
@@ -365,6 +370,7 @@ void HolonomicDrivetrain::resetFieldHeading() { fieldHeadingZeroDeg_ = rotationH
 motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn,
                                                       const odom::Odometry& odometry,
                                                       ExitConditions exit) {
+    const CompetitionWatch watch;
     const double holdHeadingDeg = odometry.getPose().headingDeg;
     telemetry::event("motion",
                      "start,moveToPoint,x=%.3f,y=%.3f,hold_deg=%.3f,threshold=%.3f,settle_ms=%u,"
@@ -373,7 +379,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn,
                      static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
     return finishMotion("moveToPoint",
-                        moveToPointHolding(xIn, yIn, holdHeadingDeg, odometry, exit));
+                        moveToPointHolding(xIn, yIn, holdHeadingDeg, odometry, exit, watch));
 }
 
 motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn, ExitConditions exit) {
@@ -384,7 +390,8 @@ motion::MotionResult HolonomicDrivetrain::moveToPoint(double xIn, double yIn, Ex
 motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double yIn,
                                                              double holdHeadingDeg,
                                                              const odom::Odometry& odometry,
-                                                             ExitConditions exit) {
+                                                             ExitConditions exit,
+                                                             const CompetitionWatch& watch) {
     drivePID_.reset();
     turnPID_.reset();
 
@@ -409,6 +416,11 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
         holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
 
         finalErrorIn = distanceIn;
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(distanceIn <= exit.errorThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -430,6 +442,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
                      exit.headingErrorThresholdDeg, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
 
+    const CompetitionWatch watch;
     drivePID_.reset();
     turnPID_.reset();
 
@@ -455,6 +468,11 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
         const bool withinThreshold = distanceIn <= exit.positionErrorThresholdIn &&
                                      std::fabs(headingError) <= exit.headingErrorThresholdDeg;
         finalErrorIn = distanceIn;
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(withinThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -484,6 +502,7 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
                      static_cast<unsigned>(path.waypoints().size()), config.lookaheadIn,
                      config.cruiseVoltage, static_cast<unsigned>(config.timeoutMs));
 
+    const CompetitionWatch watch;
     std::size_t segmentIndex = 0;
     const motion::Waypoint& finalPoint = path.waypoints().back();
     const double holdHeadingDeg = odometry.getPose().headingDeg;
@@ -510,6 +529,13 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
                                                      .finalError = distToFinalIn,
                                                      .elapsedMs = pursuitMs});
         }
+        if (watch.changed()) {
+            stop();
+            return finishMotion("followPath",
+                                motion::MotionResult{.reason = motion::ExitReason::interrupted,
+                                                     .finalError = distToFinalIn,
+                                                     .elapsedMs = pursuitMs});
+        }
 
         const motion::LookaheadResult lookahead =
             motion::findLookaheadPoint(pose.xIn, pose.yIn, path, config.lookaheadIn, segmentIndex);
@@ -530,7 +556,7 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
 
     // keep holding the path's starting heading through the final approach
     motion::MotionResult result = moveToPointHolding(finalPoint.xIn, finalPoint.yIn, holdHeadingDeg,
-                                                     odometry, config.finalExit);
+                                                     odometry, config.finalExit, watch);
     // the final approach decides how the path ended, but the time covers the whole path
     result.elapsedMs = pros::millis() - startMs;
     return finishMotion("followPath", result);
@@ -564,8 +590,13 @@ motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Traject
                      static_cast<unsigned>(std::ceil(trajectory.durationS() * 1000.0)),
                      static_cast<unsigned>(config.overtimeMs));
 
+    const CompetitionWatch watch;
+    bool interrupted = false;
     motion::TrajectoryFollower follower(trackingForwardPID_, trackingStrafePID_, trackingTurnPID_);
     follower.begin(trajectory, models, config, pros::millis());
+    // this motion's progress from the start, numbered so nobody mistakes the last one's for it
+    publishProgress(follower.progress());
+    progressMotion_.store(progressMotion_.load() + 1);
     if (trajectoryObserver_ != nullptr) trajectoryObserver_->onTrajectoryStart(trajectory);
 
     while (true) {
@@ -603,11 +634,26 @@ motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Traject
         }
         if (trajectoryObserver_ != nullptr) trajectoryObserver_->onTrackingTick(tick);
         if (follower.reason() != motion::ExitReason::running) break;
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            interrupted = true;
+            break;
+        }
         pros::delay(kLoopDelayMs);
     }
 
     stop();
-    return finishMotion("followTrajectory", follower.result());
+    motion::MotionResult result = follower.result();
+    if (interrupted) {
+        result.reason = motion::ExitReason::interrupted;
+        // the follower still thinks it's running; nobody else will say otherwise
+        publishProgress(motion::TrajectoryProgress{.running = false,
+                                                   .section = follower.progress().section,
+                                                   .distanceIn = follower.progress().distanceIn,
+                                                   .timeS = follower.progress().timeS,
+                                                   .piece = follower.progress().piece});
+    }
+    return finishMotion("followTrajectory", result);
 }
 
 motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Trajectory& trajectory,
@@ -638,6 +684,7 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
 
     // measure from where the encoders read now instead of taring them. A tare would also zero
     // any MotorGroupTrackingWheel on these motors and make odometry jump
+    const CompetitionWatch watch;
     const double startDegrees = cornerAverageDegrees();
     drivePID_.reset();
 
@@ -661,6 +708,11 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
         setWheelVoltages(mix.frontLeft, mix.frontRight, mix.backLeft, mix.backRight);
 
         finalErrorIn = std::fabs(error);
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(std::fabs(error) <= exit.errorThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -680,6 +732,7 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
                      headingDeg, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
 
+    const CompetitionWatch watch;
     turnPID_.reset();
 
     motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
@@ -697,6 +750,11 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
         setWheelVoltages(mix.frontLeft, mix.frontRight, mix.backLeft, mix.backRight);
 
         finalErrorDeg = std::fabs(error);
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(std::fabs(error) <= exit.errorThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 

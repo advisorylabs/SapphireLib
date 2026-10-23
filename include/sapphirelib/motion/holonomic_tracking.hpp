@@ -167,7 +167,13 @@ public:
  * @b Example
  * @code {.cpp}
  * // start the intake as the robot enters the trajectory's second section
- * sapphirelib::waitUntil([] { return drivetrain().trajectoryProgress().section >= 1; }, 3000);
+ * const std::uint32_t rush = drivetrain().trajectoryProgress().motion + 1; // the next to start
+ * queue.enqueue([] { drivetrain().followTrajectory(rushPlan.trajectory); });
+ * queue.run();
+ * sapphirelib::waitUntil([rush] {
+ *     const auto p = drivetrain().trajectoryProgress();
+ *     return p.motion == rush && p.section >= 1;
+ * }, 3000);
  * @endcode
  */
 struct TrajectoryProgress {
@@ -186,6 +192,12 @@ struct TrajectoryProgress {
     bool paused = false;
     /** which trajectory of a chain the plan is on: 0 for the first, 1 once it carries on */
     std::size_t piece = 0;
+    /**
+     * which followTrajectory() call this is from: they're numbered from 1 as they start, 0 before
+     * any has. Until a queued motion's first tick the progress is still the last one's, so a
+     * routine waiting on its own trajectory checks this too (HolonomicDrivetrain fills it in)
+     */
+    std::uint32_t motion = 0;
 };
 
 /**

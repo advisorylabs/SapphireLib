@@ -32,6 +32,31 @@ void testReasonNames() {
     assert(std::strcmp(exitReasonName(ExitReason::settled), "settled") == 0);
     assert(std::strcmp(exitReasonName(ExitReason::timedOut), "timeout") == 0);
     assert(std::strcmp(exitReasonName(ExitReason::aborted), "aborted") == 0);
+    assert(std::strcmp(exitReasonName(ExitReason::interrupted), "interrupted") == 0);
+}
+
+void testCompetitionModeChanges() {
+    using sapphirelib::motion::competitionModeChanged;
+    using sapphirelib::motion::kCompetitionAutonomous;
+    using sapphirelib::motion::kCompetitionConnected;
+    using sapphirelib::motion::kCompetitionDisabled;
+    constexpr std::uint8_t kAuton = kCompetitionConnected | kCompetitionAutonomous;
+    constexpr std::uint8_t kDriver = kCompetitionConnected;
+    constexpr std::uint8_t kDisabled = kCompetitionConnected | kCompetitionDisabled;
+    // a match: started in autonomous, then the period ends
+    assert(!competitionModeChanged(kAuton, kAuton));
+    assert(competitionModeChanged(kAuton, kAuton | kCompetitionDisabled));
+    assert(competitionModeChanged(kAuton, kDriver));
+    // the tether pulled after the match: no competition at all any more
+    assert(competitionModeChanged(kAuton, 0));
+    // driver control ending in a disable
+    assert(competitionModeChanged(kDriver, kDisabled));
+    assert(!competitionModeChanged(kDriver, kDriver | (1 << 3))); // field vs switch doesn't matter
+    // on the bench nothing interrupts, not even plugging a switch in mid-motion
+    assert(!competitionModeChanged(0, 0));
+    assert(!competitionModeChanged(0, kDisabled));
+    assert(!competitionModeChanged(0, kAuton));
+    static_assert(competitionModeChanged(kAuton, kDriver), "usable at compile time");
 }
 
 void testSettlesAfterTheSettleTime() {
@@ -315,6 +340,7 @@ void testMatchesTheOldInlineLoop() {
 
 int main() {
     testReasonNames();
+    testCompetitionModeChanges();
     testSettlesAfterTheSettleTime();
     testLeavingTheThresholdResetsTheSettleTime();
     testTimesOut();

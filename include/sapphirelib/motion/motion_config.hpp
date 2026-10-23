@@ -37,6 +37,14 @@ struct PoseExitConditions {
      * a tighter curve into the final heading, larger a wider one. Must be above 0. 0.6 by default
      */
     double boomerangLeadPct = 0.6;
+
+    /**
+     * how close a tank stops curving in and settles, in inches: it heads for the point itself to
+     * take out what the curve left to the side, then turns in place to the final heading once
+     * within half of positionErrorThresholdIn (see motion::boomerangStep()). TankDrivetrain only.
+     * 3 by default; 0 never settles, and nothing turns it to the final heading
+     */
+    double settleRadiusIn = 3.0;
 };
 
 /**

@@ -461,6 +461,24 @@ defaults shipped here.
       Sapphire Sim has a Branch at speed routine on its front distance sensor. Unit-tested in
       `trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (a branch golden case shared with
       the sim) and `holonomic_tracking_test.cpp` (closed loop through the junction).
+- [x] Pathing bug fixes from a review: a motion on a `MotionQueue`'s task outlived `autonomous()`
+      and drove on into driver control until it timed out (every drivetrain motion now ends
+      `interrupted` when the competition mode changes under it, `motion::competitionModeChanged()`);
+      `trajectoryProgress()` still showed the last trajectory's progress until a queued one's first
+      tick, so `waitUntil(section >= 1)` could fire at once on a second trajectory (it now numbers
+      the motions, `TrajectoryProgress::motion`); and pure pursuit, with the robot farther than the
+      lookahead from the whole remaining path, headed straight for the last waypoint and skipped the
+      rest (`findLookaheadPoint()` now goes back to the nearest point of the path).
+- [x] `TankDrivetrain::moveToPose()` settles on its final heading: the boomerang picked forward or
+      reverse afresh every tick, so a carrot swinging past 90 degrees had it back in facing the wrong
+      way, and it steered on the bearing to its carrot right to the end (noise within an inch), with
+      nothing turning it to the final heading its exit requires. The steering is now pure and tested
+      (`motion::boomerangStep()`): the direction is picked once (the carrot goes in front of the
+      target when backing in), it turns before driving when facing well away, and within
+      `PoseExitConditions::settleRadiusIn` (3 in) it heads for the point itself, then turns in place
+      to the final heading. On a simulated tank driving to 300 random poses it settles 299 (69
+      before), and 297 or more with odometry noise (12 to 29 before). In
+      `tests/motion/boomerang_math_test.cpp`. **Not yet run on a tank.**
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware**; tab bar height has been bumped twice in response to that

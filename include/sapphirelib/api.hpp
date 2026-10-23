@@ -36,6 +36,7 @@
 #include "sapphirelib/localization/particle_filter.hpp"
 #include "sapphirelib/localization/sensor_model.hpp"
 
+#include "sapphirelib/motion/boomerang_math.hpp"
 #include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/holonomic_feedforward.hpp"
 #include "sapphirelib/motion/holonomic_tracking.hpp"
