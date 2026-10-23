@@ -780,6 +780,11 @@
     return { dxIn: remainingXIn * scale, dyIn: remainingYIn * scale };
   }
 
+  function velocityFromDelta(delta, dHeadingDeg, dtS) {
+    if (!(dtS > 0.0)) return { xInPerS: 0, yInPerS: 0, headingDegPerS: 0 };
+    return { xInPerS: delta.dxIn / dtS, yInPerS: delta.dyIn / dtS, headingDegPerS: dHeadingDeg / dtS };
+  }
+
   return {
     kPi,
     kDegToRad,
@@ -805,5 +810,6 @@
     sampleParticles,
     computeOdometryDelta,
     correctionStep,
+    velocityFromDelta,
   };
 });

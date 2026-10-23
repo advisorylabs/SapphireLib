@@ -82,7 +82,7 @@
 
   /** What 96671H's robot accepts besides mcl.*: schema() in src/robot/tune.cpp. */
   const ROBOT_SCHEMA = {
-    pids: ['drive', 'turn', 'hold', 'lift'],
+    pids: ['drive', 'turn', 'hold', 'lift', 'trackFwd', 'trackStrafe', 'trackTurn'],
     models: ['fwd', 'strafe', 'turn'],
     values: [
       { key: 'lift.gravityVolts', min: -12, max: 12, whole: false },

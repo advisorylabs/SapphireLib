@@ -97,6 +97,34 @@ test('motions: pairing across a phase change, with nesting and orphans', () => {
   assert.equal(paired[2].reason, 'aborted');
 });
 
+test('trajectories: each followTrajectory with its plan burst and its traj rows, cut short too', () => {
+  const log = slt.parse(
+    '#SLT,1\n' +
+    '#chan,2,traj.plan,samples,3,t_plan,x,y,hdg,v,sec,stop\n' +
+    '#chan,3,traj,samples,3,ref_t,ref_x,ref_y,ref_hdg,ref_vf,ref_vs,ref_w,ff_f,ff_s,ff_t,lag,paused,sec\n' +
+    'E,1000000,phase,autonomous,comp=1,field=1\n' +
+    'E,2000000,motion,start,followTrajectory,sections=2,samples=3,length_in=10.000,duration_ms=1000,overtime_ms=1500\n' +
+    'S,2,2000010,0,0,0,0,0,0,1\nS,2,2000010,0.5,0,5,0,10,1,0\nS,2,2000010,1,0,10,0,0,1,1\n' +
+    'S,3,2000020,0,0,0,0,0,0,0,0,0,0,0,0,0\nS,3,2010020,0.01,0,0.1,0,10,0,0,0,0,0,0.1,0,0\n' +
+    'E,3500000,motion,end,followTrajectory,reason=settled,error=0.200,ms=1500\n' +
+    // a second one, with no plan rows, cut short by the end of autonomous
+    'E,4000000,motion,start,followTrajectory,sections=1,samples=9,length_in=4.000,duration_ms=800,overtime_ms=1500\n' +
+    'S,3,4000020,0,1,1,90,0,0,0,0,0,0,0,0,0\nS,3,4010020,0.01,1.1,1,90,10,0,0,0,0,0,0,0,0\n' +
+    'E,4500000,phase,disabled,comp=1,field=1\n' +
+    'S,3,4600000,0,0,0,0,0,0,0,0,0,0,0,0,0\n');
+  const [first, second] = slt.trajectories(log);
+  assert.equal(first.motion.reason, 'settled');
+  assert.deepEqual(Array.from(first.plan.y), [0, 5, 10]);
+  assert.deepEqual(Array.from(first.plan.stop), [1, 0, 1]);
+  assert.equal(first.plan.durationS, 1);
+  assert.deepEqual(first.rows, [0, 2]);
+  assert.equal(second.motion.end, null);
+  assert.equal(second.plan, null);
+  // its rows end where the phase change cut it, not at the row after
+  assert.deepEqual(second.rows, [2, 4]);
+  assert.equal(slt.trajectories(log), slt.trajectories(log), 'worked out once per log');
+});
+
 test('bad lines are counted and skipped; other versions refused', () => {
   const messy = slt.parse('#SLT,1\n#chan,2,x,samples,2,a,b\nS,2,1,1\nS,9,2,1,2\nG,2,3\nS,2,4,1,2\n' +
     'Q,future,row\n#future,directive\n');

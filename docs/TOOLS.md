@@ -55,6 +55,15 @@ Driving stops a running routine. Hover a label or slider for what it means.
 - **Drive**: run a routine (`js/routines.js`, written like `src/robot/autons.cpp`), drive it
   yourself, switch the motions between odometry + MCL and odometry alone
   (`setCorrectionEnabled()`), Auto-Tuned or hand-set PID gains.
+- **Paths**: draw a `followTrajectory()` chain on the field. Click to add a point (on the path to
+  insert one), drag to move, right-click or `Del` to remove, drag a point's handle to set where it
+  faces (`Shift`: 15° steps). **Split** ends a section at a point; each section has its own voltage
+  budget, per-axis caps and **Stop at its end**. The path is colored by the planned speed, with the
+  robot's footprint along it; under it the duration, each section's start, the peaks per axis, and
+  a chart of speed and the worst wheel's volts. **Run** drives it in the simulator. **Copy C++**
+  writes the chain for `autons.cpp`; **Paste C++** reads one back. Plans with the Robot tab's
+  chassis model, or with the models in the TUNE.CFG open in the Tune tab, which is what the robot
+  plans with. Drafts stay in this browser. The guide: [`TRAJECTORIES.md`](TRAJECTORIES.md).
 - **Show**: which layers the field draws.
 - **Events**: bump (6 in, wheels don't see it), pick up and put down, relocalize globally, the
   defender (sensors see it, the map doesn't), field elements in the world and/or the map, and
@@ -92,11 +101,17 @@ Pick the run and the match at the top; **Whole run** shows everything.
   moment. Motor temperatures and a motor table below.
 - **Replay**: the match played back: the field (with the localizer, below), the lift, motors,
   battery, controller and what was happening, over synced charts. ▼ on the timeline are findings.
+  During a `followTrajectory()` the field also draws its plan (**Trajectory plan** toggle): the
+  path colored by planned speed, rings where sections end, squares where it stops, red dots where
+  the plan waited for the robot, and the reference it was chasing (dashed, orange) joined to the
+  robot.
 - **Charts**: any column of any channel on one time axis, with presets (motors, PIDs, battery,
   odometry, **Localizer**, **Distance sensors**). The table under the charts shows values at the
   cursor; the visible range copies out as CSV.
 - **PID responses**: every step response, its overshoot and settle time, and P/I/D terms.
-- **Motions**: every drivetrain motion, its result, its path and its PIDs' error.
+- **Motions**: every drivetrain motion, its result, its path and its PIDs' error. A trajectory also
+  shows its plan on the path, how far off the plan it was (distance, behind, sideways, heading)
+  with the waits shaded, and its time against the plan.
 - **Tune**: refit a system's model from an Auto-Tune run or match driving, design gains the way the
   robot does, replay this log's targets with old and new gains, copy the C++.
 - **Refine**: fine-tune the drive and turn PIDs from every logged motion; **Save TUNE.CFG**. Run

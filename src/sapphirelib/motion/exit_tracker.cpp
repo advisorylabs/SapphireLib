@@ -39,4 +39,8 @@ ExitReason ExitTracker::update(bool withinThreshold, std::uint32_t nowMs) {
 
 std::uint32_t ExitTracker::elapsedMs() const { return elapsedMs_; }
 
+void ExitTracker::extendTimeout(std::uint32_t extraMs) {
+    if (timeoutMs_ > 0) timeoutMs_ += extraMs;
+}
+
 } // namespace sapphirelib::motion

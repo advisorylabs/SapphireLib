@@ -21,8 +21,10 @@ namespace robot {
 /// and the Home page says so.
 sapphirelib::telemetry::Logger& logger();
 
-/// Registers every channel this robot logs: the drivetrain's three PIDs
-/// ("drive", "turn", "hold"), the odometry pose ("odom"), the drivetrain's
+/// Registers every channel this robot logs: the drivetrain's six PIDs
+/// ("drive", "turn", "hold", and the trajectory follower's "trackFwd",
+/// "trackStrafe", "trackTurn"), followTrajectory()'s plan and reference
+/// ("traj.plan", "traj"), the odometry pose ("odom"), the drivetrain's
 /// applied axis volts ("chassis"), the battery ("batt"), every motor's health
 /// ("motor.*"), the driver's controller ("driver", see logDriver()), and the
 /// macros' channels (macros::attachTelemetry(): "lift", "lift.act", "mech"),

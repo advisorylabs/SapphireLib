@@ -179,6 +179,29 @@ public:
     double update(double target, double measurement, double dtS);
 
     /**
+     * @brief Update the PID with an error rate the caller measured, instead of differencing the
+     * error
+     *
+     * For loops that measure velocity directly, like a trajectory follower. The D term is
+     * kD * errorRate from the first call on, and Config::derivativeOnMeasurement is ignored.
+     * Everything else (integral, anti-windup, slew, clamping, the observer) works as in update()
+     *
+     * @param target where the system should be
+     * @param measurement where the system is, in the same units as target
+     * @param errorRate how fast target minus measurement is changing, in units per second
+     * @param dtS time since the last call, in seconds. A bad value falls back to nominalDtS
+     * @return double the output, clamped and slew limited per Config
+     *
+     * @b Example
+     * @code {.cpp}
+     * // position error from where the reference is, D term from the velocity error
+     * double volts = pid.updateWithRate(referenceIn, positionIn, referenceInPerS - velocityInPerS,
+     *                                   0.01);
+     * @endcode
+     */
+    double updateWithRate(double target, double measurement, double errorRate, double dtS);
+
+    /**
      * @brief Reset the integral, the derivative, and the previous output. Call this before
      * reusing the PID for a new motion
      */
@@ -236,6 +259,9 @@ private:
     bool hasPrev_ = false;
     PidStep lastStep_;
     PidObserver* observer_ = nullptr;
+
+    // one update. With hasErrorRate, errorRate is the derivative instead of a difference
+    double step(double target, double measurement, double dtS, bool hasErrorRate, double errorRate);
 };
 
 } // namespace sapphirelib

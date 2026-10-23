@@ -100,6 +100,14 @@ public:
      */
     std::uint32_t elapsedMs() const;
 
+    /**
+     * @brief Give the loop longer before it times out, for a motion whose work grew while it ran
+     * (a trajectory carrying on into the next of a chain). Does nothing with no timeout
+     *
+     * @param extraMs how much longer, in milliseconds
+     */
+    void extendTimeout(std::uint32_t extraMs);
+
 private:
     std::uint32_t settleTimeMs_;
     std::uint32_t timeoutMs_;

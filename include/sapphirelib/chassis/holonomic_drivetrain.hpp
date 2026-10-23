@@ -12,8 +12,11 @@
 #include "sapphirelib/control/heading_hold.hpp"
 #include "sapphirelib/control/pid.hpp"
 #include "sapphirelib/motion/exit_tracker.hpp"
+#include "sapphirelib/motion/holonomic_tracking.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/motion/trajectory.hpp"
+#include "sapphirelib/motion/trajectory_config.hpp"
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
 #include "sapphirelib/sensors/imu.hpp"
@@ -347,6 +350,97 @@ public:
     motion::MotionResult followPath(const motion::Path& path, motion::PursuitConfig config);
 
     /**
+     * @brief Follow a planned trajectory (see motion::generateTrajectory())
+     *
+     * Drives the plan with feedforward from the axis models plus a PD per axis on the robot-frame
+     * error (trackingForwardPID(), trackingStrafePID(), trackingTurnPID()), so strafing, turning
+     * and driving each get their own gains. Stops in a chain are planned through without a
+     * settle. While the robot is more than config.maxLagIn behind, the plan waits for it. At the
+     * end it settles on the last point, or times out config.overtimeMs past the plan's duration.
+     * Start it from the trajectory's first point (see Odometry::setPose())
+     *
+     * A trajectory planned to end moving (TrajectoryOptions::endSpeedInPerS) carries on without
+     * stopping into the one config.next picks as it gets there: a branch on a sensor, with every
+     * branch planned beforehand from its end (TrajectoryOptions::from). The motion then lasts to
+     * the end of the last one
+     *
+     * @note needs the axis models (setAxisModels(), from Auto-Tune or TUNE.CFG). The trajectory
+     * must outlive the motion. Cut short by a competition state change, trajectoryProgress() keeps
+     * its last values
+     *
+     * @param trajectory the plan
+     * @param odometry where to read the pose and velocity from
+     * @param config thresholds, overtime, and maxLagIn
+     * @return motion::MotionResult how the motion ended. finalError is the distance to the last
+     * point. Aborted for an empty trajectory or unmeasured axis models
+     */
+    motion::MotionResult followTrajectory(const motion::Trajectory& trajectory,
+                                          const odom::Odometry& odometry,
+                                          motion::TrajectoryFollowConfig config = {});
+
+    /**
+     * @brief Follow a planned trajectory, using the odometry from setOdometry()
+     *
+     * @param trajectory the plan
+     * @param config thresholds, overtime, and maxLagIn
+     * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
+     *
+     * @b Example
+     * @code {.cpp}
+     * void rushAuton() {
+     *     // plan at the start of the routine, from the measured models
+     *     static const auto rush =
+     *         sapphirelib::motion::generateTrajectory(kRush, drivetrain().axisModels());
+     *     if (!rush.ok) return; // the terminal and SD log say why
+     *     odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 0});
+     *     drivetrain().followTrajectory(rush.trajectory);
+     * }
+     *
+     * // a branch at speed: the trunk ends at 30in/s and each branch carries on from its end
+     * trunk = generateTrajectory(kTrunk, drivetrain().axisModels(), {.endSpeedInPerS = 30});
+     * left = generateTrajectory(kLeft, drivetrain().axisModels(), {.from = &trunk.trajectory});
+     * right = generateTrajectory(kRight, drivetrain().axisModels(), {.from = &trunk.trajectory});
+     * drivetrain().followTrajectory(trunk.trajectory, {.next = [](const Trajectory&) {
+     *     return seesPin() ? &left.trajectory : &right.trajectory;
+     * }});
+     * @endcode
+     */
+    motion::MotionResult followTrajectory(const motion::Trajectory& trajectory,
+                                          motion::TrajectoryFollowConfig config = {});
+
+    /**
+     * @brief Get how far along the trajectory being followed is
+     *
+     * Safe to call from any task, e.g. to start a mechanism as the robot enters a section
+     * without stopping. The values are separate atomics, so a read can mix two consecutive ticks
+     *
+     * @return motion::TrajectoryProgress running, section, distance, the plan's clock, paused
+     *
+     * @b Example
+     * @code {.cpp}
+     * static sapphirelib::motion::MotionQueue queue;
+     * queue.enqueue([] { drivetrain().followTrajectory(rush.trajectory); });
+     * queue.run();
+     * sapphirelib::waitUntil([] { return drivetrain().trajectoryProgress().section >= 1; }, 3000);
+     * intake().spin(); // as the robot enters section 1
+     * queue.waitUntilDone();
+     * @endcode
+     */
+    motion::TrajectoryProgress trajectoryProgress() const;
+
+    /**
+     * @brief Attach an observer that receives every trajectory and every tick of following it
+     *
+     * This is how the robot's telemetry records the plan and the reference
+     *
+     * @note not synchronized: attach it before any motion runs. The observer must outlive the
+     * attachment
+     *
+     * @param observer the observer. nullptr detaches
+     */
+    void setTrajectoryObserver(motion::TrajectoryObserver* observer);
+
+    /**
      * @brief Drive straight forward or backward a distance
      *
      * Uses the drive encoders, with IMU heading correction. Forward axis only; there's no closed
@@ -421,6 +515,24 @@ public:
     PID& headingHoldPID();
 
     /**
+     * @brief Get the forward PID followTrajectory() corrects with, in volts per inch of error.
+     * Starts with the drive PID's settings
+     */
+    PID& trackingForwardPID();
+
+    /**
+     * @brief Get the strafe PID followTrajectory() corrects with, in volts per inch of error.
+     * Starts with the drive PID's settings
+     */
+    PID& trackingStrafePID();
+
+    /**
+     * @brief Get the turn PID followTrajectory() corrects with, in volts per degree of error.
+     * Starts with the turn PID's settings
+     */
+    PID& trackingTurnPID();
+
+    /**
      * @brief Set the tracking wheel the Asterisk wheels use to detect drift while strafing
      *
      * Does nothing without an asterisk config. See AsteriskConfig::driftCorrectionKP
@@ -447,6 +559,20 @@ private:
     PID drivePID_;
     PID turnPID_;
     PID headingHoldPID_;
+    PID trackingForwardPID_;
+    PID trackingStrafePID_;
+    PID trackingTurnPID_;
+
+    // see setTrajectoryObserver()
+    motion::TrajectoryObserver* trajectoryObserver_ = nullptr;
+
+    // see trajectoryProgress(). Atomics for the same reason as the applied volts below
+    std::atomic<bool> progressRunning_{false};
+    std::atomic<std::size_t> progressSection_{0};
+    std::atomic<double> progressDistanceIn_{0.0};
+    std::atomic<double> progressTimeS_{0.0};
+    std::atomic<bool> progressPaused_{false};
+    std::atomic<std::size_t> progressPiece_{0};
 
     std::atomic<DriverInputMode> driverInputMode_{DriverInputMode::voltage};
     mutable pros::MutexVar<HolonomicAxisModels> axisModels_;
@@ -497,6 +623,9 @@ private:
 
     // publish one tick's axis volts for appliedAxisVolts()
     void recordAppliedVolts(double forwardVolts, double strafeVolts, double turnVolts);
+
+    // publish the follower's progress for trajectoryProgress()
+    void publishProgress(const motion::TrajectoryProgress& progress);
 
     // rotate a field-relative (throttle, strafe) into the chassis's frame
     void fieldToRobot(double& throttle, double& strafe);

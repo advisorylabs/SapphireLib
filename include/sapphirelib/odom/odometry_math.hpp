@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sapphirelib/odom/pose.hpp"
+
 namespace sapphirelib::odom {
 
 /**
@@ -54,5 +56,15 @@ double calibrateTrackingWheelOffsetIn(double wheelDistanceIn, double rotatedRadi
  * @return PoseDelta the step, straight toward the target and no longer than maxStepIn
  */
 PoseDelta correctionStep(double remainingXIn, double remainingYIn, double maxStepIn);
+
+/**
+ * @brief Work out the robot's velocity over one odometry update
+ *
+ * @param delta the update's movement on the field (computeOdometryDelta())
+ * @param dHeadingDeg the update's change in heading, in degrees, unwrapped
+ * @param dtS the time the update covers, in seconds
+ * @return Velocity field velocity and turn rate. All zero when dtS isn't above 0
+ */
+Velocity velocityFromDelta(PoseDelta delta, double dHeadingDeg, double dtS);
 
 } // namespace sapphirelib::odom

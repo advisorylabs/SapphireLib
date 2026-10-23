@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 
 #include "sapphirelib/odom/odometry_math.hpp"
@@ -17,6 +18,7 @@
 using sapphirelib::odom::calibrateTrackingWheelOffsetIn;
 using sapphirelib::odom::computeOdometryDelta;
 using sapphirelib::odom::correctionStep;
+using sapphirelib::odom::velocityFromDelta;
 
 namespace {
 
@@ -231,6 +233,27 @@ void testCorrectionStep() {
     }
 }
 
+void testVelocityFromDelta() {
+    // 0.3in east, 0.4in north and 1.5 degrees clockwise over a 10ms update.
+    auto velocity = velocityFromDelta({.dxIn = 0.3, .dyIn = 0.4}, 1.5, 0.01);
+    expectNear(velocity.xInPerS, 30.0, "velocity: x");
+    expectNear(velocity.yInPerS, 40.0, "velocity: y");
+    expectNear(velocity.headingDegPerS, 150.0, "velocity: turn rate");
+
+    // Heading change is unwrapped, so crossing 0/360 isn't a 358 degree spin.
+    velocity = velocityFromDelta({}, -2.0, 0.01);
+    expectNear(velocity.headingDegPerS, -200.0, "velocity: counterclockwise turn");
+
+    // No time between updates (the first update, or a clock hiccup): no velocity rather than
+    // infinity.
+    for (double dtS : {0.0, -0.01, std::nan("")}) {
+        velocity = velocityFromDelta({.dxIn = 1.0, .dyIn = 1.0}, 1.0, dtS);
+        expectNear(velocity.xInPerS, 0.0, "no time: x");
+        expectNear(velocity.yInPerS, 0.0, "no time: y");
+        expectNear(velocity.headingDegPerS, 0.0, "no time: turn rate");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -242,6 +265,7 @@ int main() {
     testCalibrateTrackingWheelOffset();
     testOffsetSignsMatchWhereTheWheelsAre();
     testCorrectionStep();
+    testVelocityFromDelta();
     std::puts("odometry_math_test: all assertions passed");
     return 0;
 }

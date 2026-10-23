@@ -128,7 +128,8 @@
       const work = loc.work;
 
       if (view.trails) this.drawTrails(sim);
-      if (view.target) this.drawTarget(robot.drivetrain.target);
+      if (view.pathEditor) this.drawPathEditor(view.pathEditor, sim.options.world);
+      if (view.target) this.drawTarget(robot.drivetrain.target, sim.options.world);
 
       // the real robot underneath, so the particles and beams show over it
       this.drawRobot(truth, sim.options.world, { outline: c['robot-line'], fill: c['robot-fill'], details: view.mounts });
@@ -268,10 +269,16 @@
       ctx.globalAlpha = 1;
     }
 
-    drawTarget(target) {
+    drawTarget(target, settings) {
       if (!target) return;
       const ctx = this.ctx;
       const c = this.colors;
+      if (target.kind === 'trajectory') {
+        // the plan, and where it has the robot right now (a dashed outline the robot chases)
+        this.polyline(target.trajectory.samples.map((s) => ({ x: s.xIn, y: s.yIn })), c['series-4'], 2, [2, 4], 0.9);
+        if (target.reference) this.drawRobot(target.reference, settings, { outline: c['series-4'], dash: [3, 3], ghost: true });
+        return;
+      }
       if (target.kind === 'path') {
         this.polyline(target.points.map((p) => ({ x: p.xIn, y: p.yIn })), c['series-4'], 2, [2, 4], 0.9);
         const [lx, ly] = this.toPx(target.lookahead.xIn, target.lookahead.yIn);
@@ -299,6 +306,93 @@
         ctx.lineTo(x + Math.sin(r) * 18, y - Math.cos(r) * 18);
         ctx.stroke();
       }
+    }
+
+    /**
+     * The Paths tab's path: the plan colored by speed (slow grey, fast sapphire, fastest amber),
+     * faint footprints of the robot along it, the points in their sections' colors (squares
+     * where a section ends, filled where the robot stops), and each heading's handle.
+     */
+    drawPathEditor(editor, settings) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      const { doc, plan, selected, handlePx } = editor;
+      const points = doc.waypoints;
+      const sectionColors = root.SIM.pathview.SECTION_COLORS;
+      const colorOf = (j) => c[sectionColors[editor.sectionOf(j) % sectionColors.length]];
+
+      if (plan && plan.ok) {
+        const trajectory = plan.trajectory;
+        const samples = trajectory.samples;
+        // footprints first, under the line
+        const every = Math.max(0.35, trajectory.durationS() / 14);
+        ctx.globalAlpha = 0.22;
+        for (let t = 0; t <= trajectory.durationS() + 1e-9; t += every) {
+          this.drawRobot(trajectory.sample(t), settings, { outline: c['ink-2'], ghost: true });
+        }
+        this.drawRobot(samples[samples.length - 1], settings, { outline: c['ink-2'], ghost: true });
+        ctx.globalAlpha = 1;
+        const top = Math.max(1, ...samples.map((s) => s.speedInPerS));
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        for (let k = 1; k < samples.length; ++k) {
+          const a = samples[k - 1];
+          const b = samples[k];
+          if (b.sIn === a.sIn) continue;
+          const [x0, y0] = this.toPx(a.xIn, a.yIn);
+          const [x1, y1] = this.toPx(b.xIn, b.yIn);
+          ctx.strokeStyle = rgba(rampColor(c, (0.5 * (a.speedInPerS + b.speedInPerS)) / top), 0.95);
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+        }
+        ctx.lineCap = 'butt';
+      } else if (points.length >= 2) {
+        // can't be planned: the straight lines between the points, in red
+        this.polyline(points.map((w) => ({ x: w.xIn, y: w.yIn })), c.critical, 2, [6, 4], 0.9);
+      }
+
+      points.forEach((w, j) => {
+        const [x, y] = this.toPx(w.xIn, w.yIn);
+        const color = colorOf(j);
+        const sectionEnd = doc.breaks.indexOf(j);
+        const stops = j === points.length - 1 || (sectionEnd >= 0 && doc.sections[sectionEnd].stopAtEnd);
+        if (w.headingDeg !== null) {
+          const a = w.headingDeg * kDegToRad;
+          const hx = x + Math.sin(a) * handlePx;
+          const hy = y - Math.cos(a) * handlePx;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(hx, hy);
+          ctx.stroke();
+          ctx.fillStyle = c.surface;
+          ctx.beginPath();
+          ctx.arc(hx, hy, 5, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.fillStyle = stops ? color : c.surface;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        if (sectionEnd >= 0 || j === points.length - 1) ctx.rect(x - 6, y - 6, 12, 12);
+        else ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        if (j === selected) {
+          ctx.strokeStyle = c.ink;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(x, y, 11, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+        ctx.fillStyle = c['ink-2'];
+        ctx.font = '600 11px system-ui, sans-serif';
+        ctx.fillText(String(j), x + 9, y + 15);
+      });
     }
 
     drawParticles(filter, view) {

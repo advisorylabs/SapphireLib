@@ -98,6 +98,11 @@ void setDebug(bool on);
 /// from any task.
 bool debug();
 
+/// Whether the roller claw's distance sensor sees a pin: what an autonomous
+/// routine branches on (autons.cpp's Branch routines). Reads the sensor, so
+/// it's current; safe from any task, including a trajectory's next.
+bool pinInClaw();
+
 /// Logs the lift to `logger`: its PID's every step (channel "lift") and
 /// what each update actually commanded (channel "lift.act": target and
 /// position in degrees, the volts sent after gravity feedforward and the

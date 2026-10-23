@@ -35,6 +35,12 @@ PID tuning is still per-robot work you'll do after pulling it in. See
 - **Motion**: `moveToPoint()`, `moveToPose()` (boomerang on tank), and pure-pursuit `followPath()` on
   both drivetrains, plus `MotionQueue`. Every blocking motion returns a `MotionResult`, so a routine
   can tell a motion that settled from one that timed out against something.
+- **Trajectories** (holonomic): `generateTrajectory()` plans a chain of sections through waypoints,
+  with headings and each section's own limits, as fast as the measured axis models allow within a
+  voltage budget, and `followTrajectory()` drives it with feedforward plus a PD per axis, waiting for
+  the robot when it's blocked. Draw them in Sapphire Sim's Paths tab and paste the C++. Trajectories
+  planned separately chain together to branch mid-routine on a sensor, with a stop or at speed. See
+  [`docs/TRAJECTORIES.md`](docs/TRAJECTORIES.md).
 - **GUI**: a tab-based brain-screen UI with home/status, autonomous selector, live odometry, sensor
   diagnostics, and a PID tuner. Opt-in, and your own pages plug into the same `addPage()`.
 - **Tuning**: manual PID tuning from the brain screen, and Auto-Tune, which measures each drive axis's

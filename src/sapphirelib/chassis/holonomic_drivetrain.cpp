@@ -75,7 +75,8 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
     : frontLeft_({frontLeftPort}, gearset), frontRight_({frontRightPort}, gearset),
       backLeft_({backLeftPort}, gearset), backRight_({backRightPort}, gearset),
       imu_(imuPort, imuHeadingScale), config_(config), drivePID_(drivePIDConfig),
-      turnPID_(turnPIDConfig), headingHoldPID_(turnPIDConfig), asterisk_(asterisk) {
+      turnPID_(turnPIDConfig), headingHoldPID_(turnPIDConfig), trackingForwardPID_(drivePIDConfig),
+      trackingStrafePID_(drivePIDConfig), trackingTurnPID_(turnPIDConfig), asterisk_(asterisk) {
     if (asterisk_) {
         const std::initializer_list<std::int8_t> middleLeftPorts{asterisk_->middleLeftPort};
         const std::initializer_list<std::int8_t> middleRightPorts{asterisk_->middleRightPort};
@@ -98,6 +99,34 @@ PID& HolonomicDrivetrain::drivePID() { return drivePID_; }
 PID& HolonomicDrivetrain::turnPID() { return turnPID_; }
 
 PID& HolonomicDrivetrain::headingHoldPID() { return headingHoldPID_; }
+
+PID& HolonomicDrivetrain::trackingForwardPID() { return trackingForwardPID_; }
+
+PID& HolonomicDrivetrain::trackingStrafePID() { return trackingStrafePID_; }
+
+PID& HolonomicDrivetrain::trackingTurnPID() { return trackingTurnPID_; }
+
+void HolonomicDrivetrain::setTrajectoryObserver(motion::TrajectoryObserver* observer) {
+    trajectoryObserver_ = observer;
+}
+
+motion::TrajectoryProgress HolonomicDrivetrain::trajectoryProgress() const {
+    return motion::TrajectoryProgress{.running = progressRunning_.load(),
+                                      .section = progressSection_.load(),
+                                      .distanceIn = progressDistanceIn_.load(),
+                                      .timeS = progressTimeS_.load(),
+                                      .paused = progressPaused_.load(),
+                                      .piece = progressPiece_.load()};
+}
+
+void HolonomicDrivetrain::publishProgress(const motion::TrajectoryProgress& progress) {
+    progressSection_.store(progress.section);
+    progressDistanceIn_.store(progress.distanceIn);
+    progressTimeS_.store(progress.timeS);
+    progressPaused_.store(progress.paused);
+    progressPiece_.store(progress.piece);
+    progressRunning_.store(progress.running);
+}
 
 void HolonomicDrivetrain::setDriverInputMode(DriverInputMode mode) { driverInputMode_.store(mode); }
 
@@ -511,6 +540,80 @@ motion::MotionResult HolonomicDrivetrain::followPath(const motion::Path& path,
                                                      motion::PursuitConfig config) {
     if (odometry_ == nullptr) return abortMotion("followPath", kNoOdometry);
     return followPath(path, *odometry_, config);
+}
+
+motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Trajectory& trajectory,
+                                                           const odom::Odometry& odometry,
+                                                           motion::TrajectoryFollowConfig config) {
+    if (trajectory.empty()) {
+        return abortMotion("followTrajectory",
+                           "empty trajectory - check generateTrajectory()'s result.error");
+    }
+    // read once: Auto-Tune finishing mid-motion shouldn't change the plan's feedforward under it
+    const HolonomicAxisModels models = axisModels();
+    if (!models.forward.valid() || !models.strafe.valid() || !models.turn.valid()) {
+        return abortMotion("followTrajectory",
+                           "no axis models - run Auto-Tune, or setAxisModels() / TUNE.CFG");
+    }
+
+    telemetry::event("motion",
+                     "start,followTrajectory,sections=%u,samples=%u,length_in=%.3f,"
+                     "duration_ms=%u,overtime_ms=%u",
+                     static_cast<unsigned>(trajectory.sectionCount()),
+                     static_cast<unsigned>(trajectory.samples().size()), trajectory.lengthIn(),
+                     static_cast<unsigned>(std::ceil(trajectory.durationS() * 1000.0)),
+                     static_cast<unsigned>(config.overtimeMs));
+
+    motion::TrajectoryFollower follower(trackingForwardPID_, trackingStrafePID_, trackingTurnPID_);
+    follower.begin(trajectory, models, config, pros::millis());
+    if (trajectoryObserver_ != nullptr) trajectoryObserver_->onTrajectoryStart(trajectory);
+
+    while (true) {
+        // the pose to correct toward the plan, and the velocity from the tracking wheels alone, so
+        // a localizer correction easing in isn't mistaken for motion
+        const odom::Odometry::Snapshot snapshot = odometry.snapshot();
+        const motion::TrackingTick tick =
+            follower.update(snapshot.pose, snapshot.rawVelocity, pros::millis());
+        holonomicVolts(tick.volts.forward, tick.volts.strafe, tick.volts.turn);
+        publishProgress(follower.progress());
+        if (tick.chain == motion::ChainEvent::continued) {
+            // a junction a tick at most, so the event's formatting is no cost to the loop
+            const motion::Trajectory& next = follower.trajectory();
+            telemetry::event("motion",
+                             "continue,followTrajectory,piece=%u,sections=%u,samples=%u,"
+                             "length_in=%.3f,duration_ms=%u,start_ms=%u",
+                             static_cast<unsigned>(tick.piece),
+                             static_cast<unsigned>(next.sectionCount()),
+                             static_cast<unsigned>(next.samples().size()), next.lengthIn(),
+                             static_cast<unsigned>(std::ceil(next.durationS() * 1000.0)),
+                             static_cast<unsigned>(std::lround(follower.pieceStartS() * 1000.0)));
+            if (trajectoryObserver_ != nullptr) {
+                trajectoryObserver_->onTrajectoryContinue(next, follower.pieceStartS(),
+                                                          follower.pieceFirstSection());
+            }
+        } else if (tick.chain != motion::ChainEvent::none) {
+            const char* why = tick.chain == motion::ChainEvent::noNext
+                                  ? "it ended moving and next gave nothing to carry on into"
+                                  : "next's trajectory doesn't start where it ended (plan it "
+                                    "with TrajectoryOptions::from)";
+            SAPPHIRELIB_LOG_WARN("motion", "followTrajectory: settling from speed: %s", why);
+            telemetry::event("motion", "nocontinue,followTrajectory,piece=%u,why=%s",
+                             static_cast<unsigned>(tick.piece),
+                             tick.chain == motion::ChainEvent::noNext ? "none" : "mismatched");
+        }
+        if (trajectoryObserver_ != nullptr) trajectoryObserver_->onTrackingTick(tick);
+        if (follower.reason() != motion::ExitReason::running) break;
+        pros::delay(kLoopDelayMs);
+    }
+
+    stop();
+    return finishMotion("followTrajectory", follower.result());
+}
+
+motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Trajectory& trajectory,
+                                                           motion::TrajectoryFollowConfig config) {
+    if (odometry_ == nullptr) return abortMotion("followTrajectory", kNoOdometry);
+    return followTrajectory(trajectory, *odometry_, config);
 }
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {

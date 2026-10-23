@@ -424,6 +424,43 @@ defaults shipped here.
       live heading). They now hold the heading the motion started with through the turn PID, the same
       way `moveToPose()` holds its target, and `followPath()` carries its starting heading through the
       final `moveToPoint()` approach.
+- [x] Holonomic trajectories: `motion::generateTrajectory()` plans a chain of `TrajectorySection`s
+      (waypoints, optional headings, per-section `TrajectoryConstraints`, optional `stopAtEnd`) and
+      `HolonomicDrivetrain::followTrajectory()` drives it. The path is a C2 cubic spline through the
+      waypoints (split at stops, so the robot may turn sharply at rest), the heading eases between the
+      waypoints that have one (smootherstep over arc length). The speed plan respects the wheel mix:
+      the forward, strafe and turn volts the measured axis models need must add up to the voltage
+      budget, since that sum is the worst corner after mixing, which is what slows diagonals, corners
+      and turning while driving. Static friction is shared between the axes by their share of the
+      motion (`frictionVolts()`), so a barely-moving axis doesn't jump to its full kS. The follower
+      (`motion::TrajectoryFollower`, pure; the drivetrain is a shell around it) drives
+      `trajectoryFeedforward()` plus a PD per axis on the robot-frame error, with the velocity error
+      from the new `Odometry::Snapshot::rawVelocity` as the D term (`PID::updateWithRate()`). The
+      plan pauses while the robot is more than `maxLagIn` behind it. `trajectoryProgress()` lets a
+      routine start a mechanism as the robot enters a section, without stopping. The three tracking
+      PIDs are on the PID page as Track F/S/T, designed by Auto-Tune from their own axes, persisted in
+      TUNE.CFG (`pid.trackFwd`...), and logged with the plan (`traj.plan`) and the reference (`traj`).
+      Sapphire Sim ports all of it (`tools/sim/js/trajectory.js`) and adds a Paths tab to draw, chain,
+      preview, run and export trajectories as C++. The analyzer overlays the plan on replays and
+      reports tracking error, time spent waiting, and time against the plan. Unit-tested in
+      `tests/motion/trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (including the
+      closed-form voltage-limited profile and golden values shared with the sim) and
+      `holonomic_tracking_test.cpp` (closed loop on a simulated chassis with delay); guide in
+      [`docs/TRAJECTORIES.md`](TRAJECTORIES.md). **Not yet driven on the robot**: it depends on the
+      axis models from Auto-Tune and on odometry, neither verified on the real chassis yet (see
+      Phase 2).
+- [x] Branching between trajectories planned separately, on a sensor mid-routine: with a stop (the
+      trunk settles, the routine reads the sensor and follows a branch) or at speed. A trajectory can
+      start where another ends, at its speed and in its direction of travel
+      (`TrajectoryOptions::from`, a spline clamped to that direction), and end moving
+      (`endSpeedInPerS`); `TrajectoryFollowConfig::next` picks the trajectory to carry on into at
+      each junction, and the follower drives straight through it, the clock running on and the
+      feedback untouched. A branch that can't take the junction speed fails to plan, saying so. Logged
+      as one motion (`motion,continue` events, a `traj.plan` burst per piece), read that way by the
+      analyzer. The robot has Branch Test and Branch At Speed routines on the claw's pin sensor;
+      Sapphire Sim has a Branch at speed routine on its front distance sensor. Unit-tested in
+      `trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (a branch golden case shared with
+      the sim) and `holonomic_tracking_test.cpp` (closed loop through the junction).
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware**; tab bar height has been bumped twice in response to that
@@ -440,11 +477,11 @@ robot (default `1.0` is a no-op); the new `DiagnosticsPage`/`PidTunerPage` widge
 specifically, haven't had on-hardware time yet the way the rest of the GUI has. The identification and
 gain-design math is verified against a simulated axis (including delay and sensor noise), but the
 characterization voltages/travel in `src/robot/tuning.cpp` are unmeasured starting points, and how the fit holds
-up against real odometry noise, wheel slip, and backlash hasn't been checked. Still to come on the tuning
-side: motion profiles with feedforward and measured-velocity feedback in `moveToPoint()`/`followPath()`
-(per-axis gains, so strafing stops borrowing the forward axis's), and an automated path-tracking
-validation run, for which the SD telemetry now records the data (see above), though it hasn't run
-against a real card yet. The lift's Auto-Tune and the new telemetry are verified on the host
+up against real odometry noise, wheel slip, and backlash hasn't been checked. Motion profiles with
+feedforward, measured-velocity feedback and per-axis gains now exist as `followTrajectory()` (above);
+`moveToPoint()`/`followPath()` are unchanged and still share the forward axis's gains for strafing. Still
+to come on the tuning side: an automated path-tracking validation run, for which the SD telemetry now
+records the data (`traj` against `odom`, see above), though it hasn't run against a real card yet. The lift's Auto-Tune and the new telemetry are verified on the host
 (simulated axes, fake clock) and compile-checked only; the analyzer has been run against simulated
 logs, not a real match's.
 
