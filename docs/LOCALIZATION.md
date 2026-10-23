@@ -123,50 +123,79 @@ makes the localizer expect a wall that isn't, which is worse. The simulator's Ev
 
 The Odom page's **Calibrate Sensors** button finds where each sensor really sits, the way
 **Calibrate Offsets** finds the tracking wheels. Calibrate the wheel offsets first: this one trusts
-odometry's record of the spin.
+odometry's record of the spin. It needs **one wall, or two meeting at a right angle** (a corner):
+a couple of field perimeter pieces on the tiles will do, and so will a flat wall of the room.
 
-1. Set the robot on the field on the **line halfway between two opposite walls**, within about a
-   foot of it, anywhere along it, facing any way. Clear anything that would block the sensors' view
-   of the walls.
-2. Tap **Calibrate Sensors**. The robot spins one turn each way at about 45°/s (under 20 s) while
+1. **Measure the spacing between opposite sensors**, face to face, across the robot: front to back
+   and right to left. From a wall or a corner this is the one length the robot can't measure
+   itself (see below), so the configured mounts have to add up to it: the front sensor's
+   `forwardIn` minus the back one's should be the front-to-back distance, and the right sensor's
+   `rightIn` minus the left one's the right-to-left distance. Where the tracking center sits between
+   them can be a few inches off; the robot finds that.
+2. Set the robot with its tracking center **1 to 3 ft from the wall**, or from both walls of the
+   corner, facing any way, with room to spin. A corner is better than one wall. Keep the walls'
+   view clear: nothing between the robot and them.
+3. Tap **Calibrate Sensors**. The robot spins one turn each way at about 45°/s (under 20 s) while
    it reads every sensor against odometry.
-3. The status line shows each calibrated sensor's forward and right offsets, already applied to the
+4. The status line shows each calibrated sensor's forward and right offsets, already applied to the
    running localizer. The terminal logs each one as a `{.forwardIn = ..., .rightIn = ...,
    .facingDeg = ...}` to copy into your code (96671H's: the `k*Sensor*In` constants in
    `config.hpp`). Like Calibrate Offsets, nothing is saved, and a restart goes back to the code's
    mounts.
 
+**On a full field** it works from the line halfway between two opposite walls (within about a foot
+of it, anywhere along it) too, and there the field's width stands in for step 1, so the spacing is
+fitted as well.
+
 **How it works.** As the robot turns, each sensor's face circles the tracking center, and what it
 reads from a wall depends on where the robot is, which way it faces, and where the sensor sits. The
-fit (`localization::fitSensorMounts()`) solves for all of them at once against the map's four
-perimeter walls: the robot's position and heading when the spin started, and each sensor's offset
-along its beam and sideways from it. It searches the starting heading on a grid, so the robot can
-face any way, then refines with Levenberg-Marquardt. It uses only readings that hit a wall within
-20° of square on, because a slanted beam's cone can read short. Readings off anything that isn't a
-wall drop out as the fit goes (Tukey's biweight).
+fit (`localization::fitSensorMounts()`) solves for all of them at once: the robot's position and
+heading when the spin started, and each sensor's offset along its beam and sideways from it. It
+searches the starting heading on a grid, so the robot can face any way, then refines with
+Levenberg-Marquardt. It uses only readings that hit a wall within 20° of square on, because a
+slanted beam's cone can read short. Readings off anything that isn't a wall drop out as the fit
+goes (Tukey's biweight).
 
-**Why the halfway line.** From walls on one side only, a robot an inch nearer the wall with a sensor
-an inch further back reads exactly the same. The field's known width separates the two, so at least
-one sensor has to see *both* walls of an opposite pair during the spin. The sensors reach 78 in and
-the walls are 70 in from the middle, so anywhere within about a foot of the halfway line, every
-sensor sees both. Started in a corner, every sensor is left as it was ("no two opposite walls seen").
+**The one length it can't measure.** From walls on one or two sides, a robot an inch nearer them
+with every sensor an inch further out reads exactly the same. Everything else, the readings pin,
+including where the tracking center sits among the sensors: moving it lengthens one sensor's
+offset and shortens the opposite one's, and the two read the same wall half a turn apart. What's
+left is how far apart opposite sensors are, and that comes from the configured mounts. With a
+sensor on each side, the fit holds their average along-beam offset where your mounts put it, which
+is the same as holding front-to-back plus right-to-left; their difference it finds. On a full field
+from the halfway line, a sensor sees both walls of an opposite pair, and the field's known width
+separates the two instead. The log says which it used ("spacing kept from the mounts").
 
 **What it finds, and what it leaves.**
 
 - **Along the beam: always fitted.** This is the offset that decides what a sensor reads from a wall
-  it faces. In simulated spins with the simulator's sensor noise it lands within about 0.1 in (its
-  reported standard error matches its real error). Each sensor needs 30 readings matching a wall, a
-  standard error under 0.25 in, and a change under 6 in, or it's left as it was.
+  it faces. In simulated spins with the simulator's sensor noise it lands within about 0.05 in of
+  where your spacing puts it from a wall or corner (closer walls read quieter), and within about
+  0.1 in from a full field; its reported standard error matches its real error. Each sensor needs
+  30 readings matching a wall, a standard error under 0.25 in, and a change under 6 in, or it's
+  left as it was.
 - **Sideways: only when it's pinned down.** A sideways offset shows only in slanted readings, and
   every sensor shifted sideways the same way looks almost exactly like the robot facing a little
-  differently. The two separate only when the walls are at quite different distances, as they are
-  near a wall with quiet sensors. Otherwise the configured offset is kept.
+  differently. The two separate only when the walls are at quite different distances, as in a
+  corner or near a wall with quiet sensors. Otherwise the configured offset is kept.
 - **Facing: never.** A sensor's facing and the robot's heading can't be told apart, and a degree of
   facing error barely changes a square-on reading.
 
-Something flat parked right in front of a wall, square to it, can look like the wall itself. When
-it hides the whole wall, the fit can take it for that wall. The mounts still come out right while
-the other pair of walls pins them, but keep the view clear.
+**The rest of the room.** Within 3 ft of the walls, the robot can't reach anything 140 in away, so
+whatever is around the room only makes readings that match no wall, and those drop out. In
+simulated classrooms (a wall or a corner, and eight to twelve pieces of furniture turned every
+which way within the sensors' reach, but out of the walls' view) at the simulator's sensor noise,
+nothing came out more than 0.4 in off, and about 1 room in 100 was left uncalibrated. From one
+wall, the fit's walls square to it are
+free to sit anywhere and can come to rest on something flat across the room; one that's more than
+3° out of square with the wall is left out. A flat thing lined up about 140 in from the wall, as
+from 5 ft away, could pass for a field, so the field's width may move the spacing at most 3 in
+(`maxSpacingChangeIn`); the sensors are left as they were rather than moved further.
+
+Something flat parked right in front of a wall, square to it, can look like the wall itself, so
+keep the view clear. With only two adjacent sensors (front and right, say) seeing walls, there's
+no spacing to keep: any growth is the tracking center sitting elsewhere, and every sensor is left
+as it was ("no two opposite sensors saw a wall").
 
 To run it from code instead of the screen, use `localizer().calibrateSensorMounts(setSpin)` on its
 own task, with nothing else driving the chassis. `setSensorMounts()` applies mounts you already
@@ -292,7 +321,7 @@ but real sensors, real walls and real wheel slip are what count. Before trusting
 | `ParticleFilter`: predict, weigh, resample, recovery, `sampleParticles()` | `localization/particle_filter.hpp` | `tests/localization/particle_filter_test.cpp`: unit checks, the exact model the tables replaced, plus closed-loop runs on a simulated field against biased odometry, a blocked sensor and a bump |
 | `Rng`: seeded xoshiro128**, and `fastGaussian()` (a ziggurat) | `util/random.hpp` | `tests/util/random_test.cpp` |
 | `LookupTable`: a function sampled and interpolated | `util/lookup_table.hpp` | `tests/util/lookup_table_test.cpp` |
-| `fitSensorMounts()`: each sensor's mount, from readings taken while spinning | `localization/mount_calibration.hpp` | `tests/localization/mount_calibration_test.cpp`: simulated spins with known mounts, from exact readings to noisy ones with outliers, a hidden wall, the halfway line, and a corner it must refuse |
+| `fitSensorMounts()`: each sensor's mount, from readings taken while spinning | `localization/mount_calibration.hpp` | `tests/localization/mount_calibration_test.cpp`: simulated spins with known mounts, from exact readings to noisy ones with outliers, a hidden wall, the halfway line; one wall and corners, in empty and furnished rooms, a cabinet askew, something lined up across the room, and two adjacent sensors it must refuse |
 | `MonteCarloLocalizer`: sensors, gating, the correction, the mount calibration's spin | `localization/monte_carlo_localizer.hpp` | on the robot; its logic runs in the simulator |
 | Odometry's correction: `snapshot()`, `setPositionCorrection()`, the ease-in | `odom/odometry.hpp`, `odom/odometry_math.hpp` | `tests/odom/odometry_math_test.cpp` (`correctionStep()`) |
 

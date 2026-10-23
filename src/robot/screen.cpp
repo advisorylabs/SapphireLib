@@ -148,12 +148,12 @@ void buildScreen() {
         drivetrain().imu(), &verticalWheel(), &horizontalWheel(),
         [](double turn) { drivetrain().holonomicVolts(0.0, 0.0, turn * 12.0); });
     // "Calibrate Sensors" button: spins one turn each way at ~45 deg/s with
-    // the robot on the field's halfway line, fits where each localization
-    // distance sensor really sits against the walls, and applies the ones it
-    // pinned down straight to the running localizer, as Calibrate Offsets
-    // does for odometry. The terminal logs each mount ready to copy into
-    // config.hpp's k*Sensor*In to keep it. Run Calibrate Offsets first: the
-    // fit trusts odometry's record of the spin.
+    // the robot within 3 ft of a wall or a corner, fits where each
+    // localization distance sensor really sits against the walls, and applies
+    // the ones it pinned down straight to the running localizer, as Calibrate
+    // Offsets does for odometry. The terminal logs each mount ready to copy
+    // into config.hpp's k*Sensor*In to keep it. Run Calibrate Offsets first:
+    // the fit trusts odometry's record of the spin.
     odometryPage->enableSensorCalibration(
         localizer(), [](double turn) { drivetrain().holonomicVolts(0.0, 0.0, turn * 12.0); });
     gui.addPage(std::move(odometryPage));

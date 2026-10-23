@@ -302,22 +302,24 @@ public:
      * those mounts from the next update on
      *
      * Spins one turn one way and one back (MountCalibrationConfig::turns) at about 45 deg/s,
-     * reading every sensor against odometry's record of the spin, then fits the robot's place on
-     * the field and each sensor's offset along its beam (and sideways, when the readings pin it
-     * down) against the map's perimeter walls: fitSensorMounts(). Every calibrated sensor's
+     * reading every sensor against odometry's record of the spin, then fits the robot's place
+     * against the walls and each sensor's offset along its beam (and sideways, when the readings
+     * pin it down): fitSensorMounts(). Every calibrated sensor's
      * mount is applied with setSensorMounts(), as Odometry::setConfig() applies a tracking wheel
      * offset calibration; the rest are left as they were. Nothing is saved: copy the logged
      * mounts into your code to keep them
      *
-     * Where to spin it: anywhere the walls are in reach and in view, but at least one sensor has to
-     * see both walls of a pair at some point in the spin, since that's what tells the robot's
-     * distance to the walls apart from a sensor's offset. The V5 Distance Sensor reaches 78 in and
-     * the walls are 70 in from the middle, so set the robot on the line halfway between two
-     * opposite walls, within about a foot of it, anywhere along it, facing any way. Keep the
-     * sensors' views of the walls clear: readings off anything else are thrown out, but a sensor
-     * that only ever sees something flat in front of a wall can't be told from one seeing the
-     * wall. Calibrate the tracking wheel offsets first: odometry's record of the spin is what the
-     * fit trusts for how the robot turned and drifted
+     * Where to spin it: within about 3 ft of one wall, or of two at a right angle (a corner),
+     * facing any way, with room to turn. From there the fit takes one length from the configured
+     * mounts: the spacing between opposite sensors' faces, which a robot that only sees walls on
+     * one or two sides can't tell from its distance to them (fitSensorMounts() says why). Measure
+     * that across the robot; where the tracking center sits between the sensors it finds itself.
+     * A corner beats one wall. On a full field, the line halfway between two opposite walls
+     * (within about a foot, anywhere along it) lets the field's width stand in for the spacing
+     * instead. Keep the sensors' views of the walls clear: readings off anything else are thrown
+     * out, but a sensor that only ever sees something flat in front of a wall can't be told from
+     * one seeing the wall. Calibrate the tracking wheel offsets first: odometry's record of the
+     * spin is what the fit trusts for how the robot turned and drifted
      *
      * Blocks for the whole spin, about 20 s, and the fit, under a second. Run it on its own task,
      * with nothing else driving the chassis. The localizer keeps running meanwhile

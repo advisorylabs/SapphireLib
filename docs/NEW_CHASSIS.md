@@ -289,59 +289,64 @@ sensor, paired with where raw odometry had the robot `sensorLatencyMs` (30 ms) e
 reading describes the robot as it was when the sensor measured. Turning both ways cancels most of
 the delay that's left.
 
-**The fit** (`localization::fitSensorMounts()`) solves for everything at once against the map's four
-perimeter walls: where the robot was and which way it faced when the spin started, and each sensor's
-offset **along its beam** and **sideways** from it. It uses only readings that hit a wall within 20° of
+**The fit** (`localization::fitSensorMounts()`) solves for everything at once against the walls in
+view: where the robot was and which way it faced when the spin started, and each sensor's offset
+**along its beam** and **sideways** from it. It uses only readings that hit a wall within 20° of
 square on (a slanted beam's cone reads short), and drops readings that match no wall as it goes.
 
 | | Fitted? | Why |
 |---|---|---|
-| Along the beam | always | it decides what the sensor reads from a wall it faces, and two opposite walls pin it down |
+| Along the beam | always | it decides what the sensor reads from a wall it faces. The readings pin each sensor's against the others; your spacing between opposite sensors (or a full field's width) pins the rest |
 | Sideways | only when pinned down | it shows only in slanted readings, and every sensor shifted sideways the same way looks like the robot facing a little differently. It stays near your measurement (within about an inch) unless the readings clearly say otherwise |
 | Facing | never | a sensor's facing and the robot's heading can't be told apart, and a degree of facing barely changes a square-on reading |
 
-**Why the halfway line.** From walls on one side only, a robot an inch nearer the wall with its sensor
-an inch further back reads exactly the same. The field's known width separates the two. A sensor that
-reads the left wall (`L`) and, half a turn later, the right wall (`R`), from the same spot, has
-`L + R = 140.5 − 2 × along`, wherever the robot is: its along-beam offset falls straight out. The fit
-needs that for at least one sensor and one pair of opposite walls (8 or more square-on readings of
-each). It pins where the robot is between those two walls, and then every sensor's readings off
-either of them pin its offset too.
+**The one length that's yours.** From walls on one or two sides, a robot an inch nearer them with
+every sensor an inch further out reads exactly the same. The readings pin everything else. Where
+the tracking center sits among the sensors shows up: moved forward, it shortens the front sensor's
+offset and lengthens the back one's, and the two read the same wall half a turn apart. What they
+can't show is how far apart opposite sensors are. So the fit keeps that from your mounts: their
+average along-beam offset stays where `config.hpp` puts it, which is the same as keeping
+front-to-back plus right-to-left, and it finds their difference and the rest. A tape measure across
+the robot gets that length to well under a quarter inch, which is the hard part (the tracking
+center) left to the robot.
+
+On a full field, from the halfway line, a sensor reads the left wall (`L`) and half a turn later
+the right wall (`R`) from the same spot: `L + R = 140.5 − 2 × along`, so there the field's width
+gives the spacing too. The fit uses it whenever a sensor sees both walls of a pair.
 
 ### Where to put the robot
 
 ```
-                     far wall
-            ┌────────────────┬────────────────┐
-            │                ┆                │
-            │                ┆                │
-            │                ┆                │
-  left wall ├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄●┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤ right wall
-            │                ┆                │
-            │                ┆                │
-            │                ┆                │
-            └────────────────┴────────────────┘
-                     near wall
+   a corner (best)                    one wall
 
-  ┆  halfway between the left and right walls
-  ┄  halfway between the near and far walls
-  ●  both: the middle of the field
+   ━━━━━━━━━━━━━━━━━━━━━━━━┓          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            ▲               ┃                         ▲
+          1–3 ft            ┃                       1–3 ft
+            ▼               ┃                         ▼
+            ●  ◀─ 1–3 ft ─▶ ┃                         ●
+                            ┃
+                            ┃          ● the tracking center, facing any way
 ```
 
-- **Best: the middle of the field (●), if it's clear.** Every sensor sees all four walls, so both
-  pairs pin it.
-- **Just as good in practice: anywhere along either center line** (┆ or ┄), facing any way. One pinned
-  pair is all the fit needs. On a 6-tile field each center line is the middle tile seam: put the
-  tracking center (marked in step 3c) on it. Pick the line clearest of game elements.
-- **How far off the line.** The far wall has to be in the sensor's 78 in range: off the line by `d`,
-  the far wall reads `70.25 + d − along`. With sensors about 7 in out from the tracking center, that's
-  about a foot. Closer is better: past 200 mm the sensor's noise is about 5% of the reading (3 in at
-  63 in), so the far readings are the noisy ones, and the fit averages hundreds of them.
-- **Where along it, and which way it faces, don't matter.** The fit solves for the robot's position
-  and heading itself; it uses odometry only for how far the robot turned and drifted during the spin.
-  No `setPose()` needed. Leave room to spin: at least a foot from the end wall.
-- **Not in a corner, nor near one wall off the lines**: no sensor sees an opposite pair, and every
-  sensor is left as it was ("no sensor saw two opposite walls").
+- **A corner beats one wall.** Two field perimeter pieces at a right angle on the tiles, or a corner
+  of the room. Twice the readings, and things around the room have nothing to pass for. Different
+  distances to the two walls (say 1½ ft from one and 2½ from the other) give the sideways offsets
+  their best chance of showing.
+- **1 to 3 ft from each wall** (the tracking center, marked in step 3c). Closer reads quieter, but
+  leave room to spin: the robot's corners sweep a circle. Past 3 ft the readings get noisier and the
+  rest of the room starts to come into the sensors' 78 in reach.
+- **Walls**: straight, flat, and long enough that a sensor 20° off square still hits them. At 2 ft,
+  4 ft of wall is plenty. They must be square to each other, as field perimeter corners are.
+- **The view of the walls clear**: nothing between the robot and them. A flat object square to a wall
+  can pass for the wall itself. The rest of the room doesn't matter much: the readings off it match
+  no wall and drop out, and one flat thing across the room that the fit takes for a second wall is
+  left out once it's more than 3° out of square with the first.
+- **Which way it faces doesn't matter.** The fit solves for the robot's position and heading itself;
+  it uses odometry only for how far the robot turned and drifted during the spin. No `setPose()`
+  needed.
+- **On a full field**, anywhere within about a foot of a center line works too (there every sensor
+  sees an opposite pair, and the field's width also checks your spacing). A corner of the full field
+  is just a corner.
 
 ### Before you run it
 
@@ -356,21 +361,27 @@ either of them pin its offset too.
   | Back | `kBackSensorForwardIn` | `kBackSensorRightIn` | 180 |
   | Left | `kLeftSensorForwardIn` | `kLeftSensorRightIn` | 270 |
 
-  How careful to be: the along-beam number (forward for the front and back sensors, right for the
-  side ones) can be a couple of inches off; the fit fixes up to 6. The sideways one is usually kept,
-  so measure it as well as you can. The facing (set in `devices.cpp`) must be the right side.
-- [ ] **Measure the field** you calibrate on, inside face to inside face of the walls, both ways.
-  `FieldMap::centered()` assumes 140.5 in, and the fit takes the field's width as known, so a wrong
-  width goes straight into the mounts: roughly half the error into each sensor of that pair. Off by
-  more than a quarter inch, pass the real size in `localizer()` in `devices.cpp`:
-  `FieldMap::centered(141.0)`.
+  How careful to be:
+  - **The spacing, carefully.** Measure front face to back face and right face to left face across
+    the robot. `kFrontSensorForwardIn − kBackSensorForwardIn` must be the first, and
+    `kRightSensorRightIn − kLeftSensorRightIn` the second. Each of them an eighth of an inch long puts
+    every sensor a sixteenth too far out.
+  - **Where the tracking center sits between them, roughly.** Within 2 or 3 in is fine: the fit finds
+    it. (The along-beam numbers on a full field can be off by up to 6.)
+  - **Sideways** is usually kept, so measure it as well as you can. The facing (set in `devices.cpp`)
+    must be the right side.
+- [ ] **On a full field only: measure it**, inside face to inside face of the walls, both ways.
+  `FieldMap::centered()` assumes 140.5 in, and from the halfway line the fit takes the field's width
+  as known, so a wrong width goes straight into the mounts: roughly half the error into each sensor
+  of that pair. Off by more than a quarter inch, pass the real size in `localizer()` in
+  `devices.cpp`: `FieldMap::centered(141.0)`. From a wall or a corner the size doesn't matter.
 - [ ] Rebuild.
 
 ### Run it
 
-1. [ ] Robot's tracking center on a center line, or in the middle of the field
-   ([Where to put the robot](#where-to-put-the-robot)), any heading. Nothing in front of the walls: a
-   flat object square to a wall can pass for the wall itself.
+1. [ ] Robot's tracking center 1 to 3 ft from a wall, or from both walls of a corner
+   ([Where to put the robot](#where-to-put-the-robot)), any heading. Nothing between it and the
+   walls.
 2. [ ] Home page: **Start log** (the results go in the log too), and `pros terminal` if you have a
    cable.
 3. [ ] Odom page: **Calibrate Sensors**. Under 20 s.
@@ -378,23 +389,29 @@ either of them pin its offset too.
 ### Read the result
 
 The status line: "Sensors, fwd,right in (applied):" then each sensor's numbers, `Front 7.12,0.00`, or
-`Front --` for one left as it was. The terminal has more, one line per sensor:
+`Front --` for one left as it was. The terminal has more: a summary, then one line per sensor.
 
 ```
+sensor mounts: 1193 readings, 476 used, from walls on one or two sides: spacing kept from the mounts
 sensor 0 (front, port 1): calibrated, {.forwardIn = 7.12, .rightIn = 0.00, .facingDeg = 0}, +0.12 in along the beam (+-0.04), sideways kept
 ```
 
-`+0.12 in along the beam` is how far the face moved from what you measured (positive is farther out),
-and `+-0.04` its standard error. The log has the same as `mcl,mount,...` events.
+"spacing kept from the mounts" says your spacing between opposite sensors stood in for a field's
+width (it's missing when a full field's width was used). `+0.12 in along the beam` is how far the face moved from what
+you measured (positive is farther out), and `+-0.04` its standard error. With the spacing kept, the
+four changes average to 0: the fit moved the tracking center between the sensors, not their span.
+The log has the same as `mcl,mount,...` events.
 
 | It says | Means | Do |
 |---|---|---|
 | calibrated | good to use | copy it |
 | no readings | the sensor never read anything usable | port, cable, or nothing in its 78 in range |
-| too few readings of a wall | under 30 readings hit a wall square on | something blocks it, or it only sees walls at a slant |
-| no two opposite walls seen | it couldn't separate the robot's position from its offset | start nearer the halfway line |
-| too uncertain | the along-beam offset's standard error is over 0.25 in | something moving in view, a wobbly mount. Run it again |
+| too few readings of a wall | under 30 readings hit a wall square on | something blocks it, it only sees walls at a slant, or its mount is several inches off |
+| no opposite sensor saw a wall | (whole run: "no two opposite sensors saw a wall") the sensors that saw a wall all face one or two neighboring ways, so there's no spacing to keep | check the sensors facing the other way: unplugged, blocked |
+| no two opposite walls seen | on a full field, other sensors saw a pair of walls, but this one only walls they didn't | start nearer the halfway line, or use a corner |
+| too uncertain | the along-beam offset's standard error is over 0.25 in | something moving in view, a wobbly mount, walls too far. Run it again, closer |
 | moved too far, view blocked? | over 6 in from your measurement | something in front of a wall fooled it, or your measurement is badly off |
+| (whole run) no sensor saw a wall | nothing matched a wall 30 times | start within 3 ft of a wall |
 | the spin didn't finish: blocked? | (whole run) a turn timed out | clear the robot, check the drive |
 
 ### Hardcode it
