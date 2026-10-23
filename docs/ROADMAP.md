@@ -848,6 +848,26 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       offset, so sideways is applied only when its standard error is under 0.25 in. Along-beam
       lands within about 0.1 in at the simulator's sensor noise; sensors that saw no pinned pair of
       walls are left alone.
+- [x] Mount calibration from one wall or a corner, for teams without a full field. From walls on
+      one or two sides only one length is missing (every sensor further out with the robot nearer
+      the walls reads the same), so `fitSensorMounts()` holds the configured mounts' spacing, as
+      the part of "every offset grows alike" that no shift of the tracking center explains
+      (`spacingWeights()`: the mean along-beam offset with a sensor on each side), and finds
+      everything else, the tracking center included. A sensor seeing an opposite pair lets the
+      field's width take over, as before. What stress runs over random rooms (a wall or a corner
+      1–4 ft away, up to twelve pieces of furniture in reach, mounts off by a few inches) taught:
+      the spacing has to be held from the first pass, or the fit slides every sensor out until the
+      walls it can't see land on furniture (mounts 30 in off, caught only by the 6 in limit);
+      letting the width take over needs a limit too (`maxSpacingChangeIn`, 3 in), or a flat thing
+      lined up across the room from 5 ft away passes for a field and moves every sensor 4 in; the
+      noise scale needs a ceiling (3× the beam model's while the mounts move, then 1×), or the
+      furniture's readings, most of the readings, pass for the sensors' noise and leave them too
+      uncertain (5–14% of rooms refused, against about 1%); and from one wall, the fit's walls
+      square to it float and settle on a cabinet's face, so a wall more than 3° out of square with
+      the others is left out (`skewedWall()`), which took one-wall errors past 0.4 in from 4% of
+      rooms to none within 3 ft. From a wall or corner within 3 ft, along-beam lands within about
+      0.05 in of where the spacing puts it, closer than from a full field, since every reading is
+      short.
 
 **Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
 in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts

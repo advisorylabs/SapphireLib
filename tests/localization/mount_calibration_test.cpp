@@ -70,6 +70,91 @@ std::vector<DistanceSensorMount> trueMounts() {
     };
 }
 
+// where they really are when the sensors were measured right but from the wrong spot: the
+// tracking center is really 2.4in behind and 1.8in right of where the configured mounts put it
+std::vector<DistanceSensorMount> trueMountsFromAnotherCenter() {
+    std::vector<DistanceSensorMount> mounts = configuredMounts();
+    for (DistanceSensorMount& mount : mounts) {
+        mount.forwardIn += 2.4;
+        mount.rightIn -= 1.8;
+    }
+    return mounts;
+}
+
+double alongOf(const DistanceSensorMount& mount) {
+    const double facing = mount.facingDeg * kDegToRad;
+    return mount.forwardIn * std::cos(facing) + mount.rightIn * std::sin(facing);
+}
+
+int wallsSeen(const SensorMountFit& sensor) {
+    int walls = 0;
+    for (int bit = 0; bit < 4; ++bit) walls += (sensor.walls >> bit) & 1;
+    return walls;
+}
+
+// how much further out than the truth the configured mounts' spacing says the sensors are, on
+// average, by the weights the fit holds the spacing with: with a sensor on each side, the mean of
+// their along-beam errors. From one wall or a corner, every sensor lands that much off
+double spacingError(const std::vector<DistanceSensorMount>& truth,
+                    const std::vector<double>& weights) {
+    const std::vector<DistanceSensorMount> configured = configuredMounts();
+    double error = 0.0;
+    for (std::size_t s = 0; s < weights.size(); ++s) {
+        error += weights[s] * (alongOf(configured[s]) - alongOf(truth[s]));
+    }
+    return error;
+}
+
+// a room far bigger than the sensors reach, with nothing in it but what the test adds
+FieldMap openRoom() { return FieldMap::centered(10000.0); }
+
+// one 4ft wall, 22in right of the tracking center at (0, 0)
+FieldMap oneWall() {
+    FieldMap world = openRoom();
+    world.addSegment({.x1In = 22.0, .y1In = -24.0, .x2In = 22.0, .y2In = 24.0});
+    return world;
+}
+
+// two 5ft walls meeting at a right angle: 20in right of the tracking center at (0, 0), and 30in
+// ahead of it
+FieldMap corner() {
+    FieldMap world = openRoom();
+    world.addSegment({.x1In = 20.0, .y1In = -30.0, .x2In = 20.0, .y2In = 30.0});
+    world.addSegment({.x1In = -40.0, .y1In = 30.0, .x2In = 20.0, .y2In = 30.0});
+    return world;
+}
+
+// the rest of a classroom around the corner, all in the sensors' reach: a table off to the left, a
+// cabinet behind, a cart off the corner, and a chair
+void furnish(FieldMap& world) {
+    world.addBox(-60.0, -20.0, -36.0, 18.0);
+    world.addBox(-25.0, -55.0, 30.0, -40.0);
+    world.addBox(30.0, 40.0, 48.0, 52.0);
+    world.addBox(-32.0, 34.0, -26.0, 40.0);
+}
+
+// a widthIn by depthIn box centered at (xIn, yIn), turned turnDeg clockwise: furniture that isn't
+// square to the walls
+void addTurnedBox(FieldMap& world, double xIn, double yIn, double widthIn, double depthIn,
+                  double turnDeg) {
+    const double c = std::cos(turnDeg * kDegToRad);
+    const double s = std::sin(turnDeg * kDegToRad);
+    const double halfX[4] = {-widthIn / 2, widthIn / 2, widthIn / 2, -widthIn / 2};
+    const double halfY[4] = {-depthIn / 2, -depthIn / 2, depthIn / 2, depthIn / 2};
+    double cornerX[4];
+    double cornerY[4];
+    for (int k = 0; k < 4; ++k) {
+        cornerX[k] = xIn + halfX[k] * c + halfY[k] * s;
+        cornerY[k] = yIn - halfX[k] * s + halfY[k] * c;
+    }
+    for (int k = 0; k < 4; ++k) {
+        world.addSegment({.x1In = cornerX[k],
+                          .y1In = cornerY[k],
+                          .x2In = cornerX[(k + 1) % 4],
+                          .y2In = cornerY[(k + 1) % 4]});
+    }
+}
+
 struct Spin {
     // what the sensors see: the walls, plus anything in the way
     FieldMap world = FieldMap::centered();
@@ -150,16 +235,19 @@ MountCalibrationResult fit(const std::vector<MountSample>& samples,
     return fitSensorMounts(samples, mounts, FieldMap::centered(), BeamModel{}, config);
 }
 
-// every sensor calibrated, within tolerance of where it really is
+// every sensor calibrated, within tolerance of where it really is, or of that plus alongOffIn
+// along the beam: how far a wrong spacing between the configured mounts moves every sensor from
+// one wall or a corner (spacingError())
 void expectFound(const MountCalibrationResult& result, double alongTolerance,
-                 double lateralTolerance, const char* label) {
+                 double lateralTolerance, const char* label,
+                 const std::vector<DistanceSensorMount>& truth = trueMounts(),
+                 double alongOffIn = 0.0) {
     char text[128];
     std::snprintf(text, sizeof(text), "%s: ok", label);
     if (!result.ok) {
         std::printf("FAIL %s (%s)\n", text, result.error);
         assert(false);
     }
-    const std::vector<DistanceSensorMount> truth = trueMounts();
     for (std::size_t s = 0; s < truth.size(); ++s) {
         const SensorMountFit& sensor = result.sensors[s];
         std::snprintf(text, sizeof(text), "%s: sensor %zu status", label, s);
@@ -175,7 +263,7 @@ void expectFound(const MountCalibrationResult& result, double alongTolerance,
         const double fitLateral =
             -sensor.mount.forwardIn * std::sin(facing) + sensor.mount.rightIn * std::cos(facing);
         std::snprintf(text, sizeof(text), "%s: sensor %zu along the beam", label, s);
-        expectNear(fitAlong, trueAlong, alongTolerance, text);
+        expectNear(fitAlong, trueAlong + alongOffIn, alongTolerance, text);
         // sideways only when it was pinned down, the configured one otherwise
         const double configuredFacing = configuredMounts()[s].facingDeg * kDegToRad;
         const double configuredLateral =
@@ -201,6 +289,8 @@ void testExactReadingsGiveTheExactMounts() {
     setup.startHeadingDeg = 17.0;
     const MountCalibrationResult result = fit(spin(setup, 1), {.lateralPriorIn = 1e4});
     expectFound(result, 1e-4, 1e-4, "exact");
+    // the field's width, not the configured spacing
+    assert(!result.spacingFromMounts);
     // the rest hit a wall too slanted, or were out of range
     assert(result.readingsUsed > result.readings / 2);
 
@@ -248,6 +338,7 @@ void testNoisyReadings() {
         const MountCalibrationResult result = fit(spin(setup, seed));
         // about 0.12in standard error at this noise: within 3.5 of them
         expectFound(result, 0.42, 0.6, "noisy");
+        assert(!result.spacingFromMounts);
         const std::vector<DistanceSensorMount> truth = trueMounts();
         for (std::size_t s = 0; s < truth.size(); ++s) {
             const double facing = truth[s].facingDeg * kDegToRad;
@@ -294,13 +385,10 @@ void testHalfwayLineNearAWall() {
     setup.millimeters = true;
     const MountCalibrationResult result = fit(spin(setup, 4));
     expectFound(result, 0.3, 0.6, "halfway line");
+    assert(!result.spacingFromMounts);
     // the far wall is out of range the whole time, so each sees three walls. Which bits they are
     // depends on which quarter turn of the start the fit landed on
-    for (const SensorMountFit& sensor : result.sensors) {
-        int walls = 0;
-        for (int bit = 0; bit < 4; ++bit) walls += (sensor.walls >> bit) & 1;
-        assert(walls == 3);
-    }
+    for (const SensorMountFit& sensor : result.sensors) assert(wallsSeen(sensor) == 3);
 }
 
 // Sideways offsets show only in slanted readings, and every sensor shifted sideways the same way
@@ -319,25 +407,329 @@ void testQuietSensorsPinTheSidewaysOffsets() {
     for (const SensorMountFit& sensor : result.sensors) assert(sensor.lateralFitted);
 }
 
-// Near a corner nothing reaches the far walls, so a robot an inch nearer the corner with sensors an
-// inch further back reads the same. Every sensor is left as it was
-void testCornerCannotPinTheOffsets() {
+// From one wall a robot an inch nearer it with every sensor an inch further out reads the same, so
+// the fit holds the configured mounts' spacing. They're 0.2in short of the truth on average, so
+// every sensor lands 0.2in in from where it really is: everything but that is found. The standard
+// error it reports is about the error it makes on top of that
+void testOneWall() {
+    Spin setup;
+    setup.world = oneWall();
+    setup.startHeadingDeg = 40.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.millimeters = true;
+    setup.headingLagDeg = 1.5;
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    expectNear(off, -0.2, 1e-12, "one wall: the configured spacing's error");
+    double squaredError = 0.0;
+    double stderrSum = 0.0;
+    int fits = 0;
+    for (std::uint32_t seed = 1; seed <= 8; ++seed) {
+        const MountCalibrationResult result = fit(spin(setup, seed));
+        assert(result.spacingFromMounts);
+        expectFound(result, 0.3, 0.6, "one wall", trueMounts(), off);
+        const std::vector<DistanceSensorMount> truth = trueMounts();
+        for (std::size_t s = 0; s < truth.size(); ++s) {
+            const double error = result.sensors[s].alongIn - (alongOf(truth[s]) + off);
+            squaredError += error * error;
+            stderrSum += result.sensors[s].alongStderrIn;
+            ++fits;
+            assert(wallsSeen(result.sensors[s]) == 1);
+            // every sensor shifted sideways alike looks like the robot facing a little differently
+            assert(!result.sensors[s].lateralFitted);
+        }
+    }
+    const double rmsError = std::sqrt(squaredError / fits);
+    const double meanStderr = stderrSum / fits;
+    std::printf("one wall: along-beam error %.3f in RMS over %d fits, standard error %.3f in\n",
+                rmsError, fits, meanStderr);
+    expectNear(rmsError / meanStderr, 1.0, 0.5, "one wall: standard error matches the error");
+}
+
+// Mounts measured right, from a tracking center that's really a couple of inches from there: the
+// readings see that, since it moves opposite sensors' offsets opposite ways, so one wall finds them
+// with nothing left over
+void testOneWallFindsTheTrackingCenter() {
+    Spin setup;
+    setup.world = oneWall();
+    setup.mounts = trueMountsFromAnotherCenter();
+    setup.startHeadingDeg = -70.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.millimeters = true;
+    const std::vector<double> evenly = {0.25, 0.25, 0.25, 0.25};
+    expectNear(spacingError(setup.mounts, evenly), 0.0, 1e-12, "tracking center: spacing right");
+    const MountCalibrationResult result = fit(spin(setup, 9));
+    assert(result.spacingFromMounts);
+    expectFound(result, 0.3, 0.6, "tracking center", setup.mounts);
+}
+
+// Exact readings from one wall: every sensor off by exactly the spacing's error, give or take the
+// little a slanted reading says about the robot's distance to the wall
+void testOneWallExactReadings() {
+    Spin setup;
+    setup.world = oneWall();
+    setup.startHeadingDeg = 12.0;
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    const MountCalibrationResult result = fit(spin(setup, 1));
+    assert(result.spacingFromMounts);
+    expectFound(result, 0.02, 0.6, "one wall exact", trueMounts(), off);
+}
+
+// A corner: two walls at a right angle, at different distances, so the sideways offsets can show
+// too. Same spacing as one wall
+void testCorner() {
+    Spin setup;
+    setup.world = corner();
+    setup.startHeadingDeg = 200.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.millimeters = true;
+    setup.headingLagDeg = 1.5;
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    const MountCalibrationResult result = fit(spin(setup, 10));
+    assert(result.spacingFromMounts);
+    expectFound(result, 0.25, 0.6, "corner", trueMounts(), off);
+    for (const SensorMountFit& sensor : result.sensors) assert(wallsSeen(sensor) == 2);
+}
+
+// A corner of a real field, the far walls out of reach, is the same thing
+void testFieldCorner() {
     Spin setup;
     setup.startXIn = -45.0;
     setup.startYIn = -45.0;
     setup.noiseFraction = 0.025;
     setup.noiseFloorIn = 0.3;
     const MountCalibrationResult result = fit(spin(setup, 5));
-    assert(!result.ok);
-    assert(std::strcmp(result.error, "no sensor saw two opposite walls") == 0);
-    const std::vector<DistanceSensorMount> configured = configuredMounts();
-    for (std::size_t s = 0; s < configured.size(); ++s) {
-        expectStatus(result.sensors[s].status, MountFitStatus::noOppositeWalls, "corner");
-        expectNear(result.sensors[s].mount.forwardIn, configured[s].forwardIn, 0.0,
-                   "corner: mount left as it was");
-        expectNear(result.sensors[s].mount.rightIn, configured[s].rightIn, 0.0,
-                   "corner: mount left as it was");
+    assert(result.spacingFromMounts);
+    expectFound(result, 0.25, 0.6, "field corner", trueMounts(),
+                spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25}));
+}
+
+// The corner in a classroom: a table, a cabinet, a cart and a chair in reach of the sensors when
+// they face away from the walls, and someone walking by. Their readings outnumber the walls', and
+// match nothing
+void testCornerInAClutteredRoom() {
+    Spin setup;
+    setup.world = corner();
+    furnish(setup.world);
+    setup.startHeadingDeg = 75.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.outlierChance = 0.05;
+    setup.millimeters = true;
+    setup.headingLagDeg = 1.5;
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    for (std::uint32_t seed = 11; seed <= 14; ++seed) {
+        const MountCalibrationResult result = fit(spin(setup, seed));
+        assert(result.spacingFromMounts);
+        expectFound(result, 0.3, 0.6, "cluttered corner", trueMounts(), off);
     }
+}
+
+// One wall in the same room, the furniture all around it
+void testOneWallInAClutteredRoom() {
+    Spin setup;
+    setup.world = oneWall();
+    furnish(setup.world);
+    setup.startHeadingDeg = -15.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.outlierChance = 0.05;
+    setup.millimeters = true;
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    for (std::uint32_t seed = 15; seed <= 18; ++seed) {
+        const MountCalibrationResult result = fit(spin(setup, seed));
+        assert(result.spacingFromMounts);
+        expectFound(result, 0.3, 0.6, "cluttered wall", trueMounts(), off);
+    }
+}
+
+// One wall, and a cabinet across the room turned 30 deg from square to it. The walls square to the
+// one seen are free to sit anywhere, and one comes to rest on the cabinet's face; the two can't
+// agree on the robot's heading, so the cabinet is left out and the wall alone calibrates
+void testOneWallWithACabinetAskew() {
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    for (std::uint32_t seed = 1; seed <= 6; ++seed) {
+        Spin setup;
+        setup.world = oneWall();
+        addTurnedBox(setup.world, -4.0, 36.0, 40.0, 12.0, 30.0);
+        setup.startHeadingDeg = 25.0 * seed;
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.millimeters = true;
+        setup.headingLagDeg = 1.5;
+        const MountCalibrationResult result = fit(spin(setup, seed));
+        assert(result.spacingFromMounts);
+        // within 0.25in of the truth with the cabinet in the fit too, but never this close
+        expectFound(result, 0.15, 0.6, "cabinet askew", trueMounts(), off);
+        for (const SensorMountFit& sensor : result.sensors) assert(wallsSeen(sensor) == 1);
+    }
+}
+
+// The robot 5ft from one wall, and a long flat face 73.5in the other way: a pair of walls to the
+// fit, but 132.5in apart, not the field's 140.5. Taking them for the field's width would move every
+// sensor out 4in, further than maxSpacingChangeIn, so the spacing stays held, and the readings,
+// which can't agree with both, leave every sensor as it was rather than 4in out
+void testSomethingLinedUpAcrossTheRoom() {
+    const double off = spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25});
+    for (std::uint32_t seed = 1; seed <= 4; ++seed) {
+        Spin setup;
+        setup.world = openRoom();
+        setup.world.addSegment({.x1In = 59.0, .y1In = -40.0, .x2In = 59.0, .y2In = 40.0});
+        setup.world.addSegment({.x1In = -73.5, .y1In = -40.0, .x2In = -73.5, .y2In = 40.0});
+        setup.startHeadingDeg = 30.0 * seed;
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.millimeters = true;
+        const MountCalibrationResult result = fit(spin(setup, seed));
+        assert(result.spacingFromMounts);
+        const std::vector<DistanceSensorMount> truth = trueMounts();
+        for (std::size_t s = 0; s < truth.size(); ++s) {
+            if (result.sensors[s].status != MountFitStatus::calibrated) continue;
+            expectNear(result.sensors[s].alongIn, alongOf(truth[s]) + off, 0.6, "lined up");
+        }
+    }
+}
+
+// Forty rooms: one wall or a corner, 14 to 36in away, and eight pieces of furniture turned every
+// which way, 20 to 75in out and in reach of the sensors, anywhere but the walls' view (nothing
+// within 40 deg of square on to a wall from the robot, nor within 4in of one). Nothing comes out
+// wrong, and the furniture's readings, though they outnumber the walls', don't pass for the
+// sensors' noise and leave them too uncertain: no more than one room in forty is left uncalibrated
+void testRandomClassrooms() {
+    Rng rng(2026);
+    int roomsLeft = 0;
+    for (std::uint32_t room = 0; room < 40; ++room) {
+        Spin setup;
+        setup.world = openRoom();
+        const bool isCorner = room % 2 == 0;
+        const double rightIn = 14.0 + 22.0 * rng.uniform();
+        const double aheadIn = 14.0 + 22.0 * rng.uniform();
+        setup.world.addSegment(
+            {.x1In = rightIn, .y1In = -36.0, .x2In = rightIn, .y2In = isCorner ? aheadIn : 36.0});
+        if (isCorner) {
+            setup.world.addSegment(
+                {.x1In = -48.0, .y1In = aheadIn, .x2In = rightIn, .y2In = aheadIn});
+        }
+        for (int piece = 0; piece < 8; ++piece) {
+            for (int tries = 0; tries < 50; ++tries) {
+                const double bearing = 2.0 * kPi * rng.uniform();
+                const double reach = 20.0 + 55.0 * rng.uniform();
+                const double x = reach * std::sin(bearing);
+                const double y = reach * std::cos(bearing);
+                const double width = 2.0 + 30.0 * rng.uniform();
+                const double depth = 2.0 + 30.0 * rng.uniform();
+                const double turn = 90.0 * rng.uniform();
+                // out of the walls' view, checked at points along its edges
+                const double c = std::cos(turn * kDegToRad);
+                const double s = std::sin(turn * kDegToRad);
+                const double halfX[4] = {-width / 2, width / 2, width / 2, -width / 2};
+                const double halfY[4] = {-depth / 2, -depth / 2, depth / 2, depth / 2};
+                bool clear = true;
+                for (int k = 0; k < 4 && clear; ++k) {
+                    const double x1 = x + halfX[k] * c + halfY[k] * s;
+                    const double y1 = y - halfX[k] * s + halfY[k] * c;
+                    const double x2 = x + halfX[(k + 1) % 4] * c + halfY[(k + 1) % 4] * s;
+                    const double y2 = y - halfX[(k + 1) % 4] * s + halfY[(k + 1) % 4] * c;
+                    for (int step = 0; step <= 8 && clear; ++step) {
+                        const double px = x1 + (x2 - x1) * step / 8.0;
+                        const double py = y1 + (y2 - y1) * step / 8.0;
+                        const bool inWallsView =
+                            (px > 0.0 && std::fabs(std::atan2(py, px)) < 40.0 * kDegToRad) ||
+                            (isCorner && py > 0.0 &&
+                             std::fabs(std::atan2(px, py)) < 40.0 * kDegToRad);
+                        clear = px < rightIn - 4.0 && (!isCorner || py < aheadIn - 4.0) &&
+                                std::hypot(px, py) >= 14.0 && !inWallsView;
+                    }
+                }
+                if (!clear) continue;
+                addTurnedBox(setup.world, x, y, width, depth, turn);
+                break;
+            }
+        }
+        // measured from a tracking center up to 3in off each way, each face to within half an inch
+        std::vector<DistanceSensorMount> truth = configuredMounts();
+        const double centerForwardIn = 3.0 * (2.0 * rng.uniform() - 1.0);
+        const double centerRightIn = 3.0 * (2.0 * rng.uniform() - 1.0);
+        for (DistanceSensorMount& mount : truth) {
+            mount.forwardIn += centerForwardIn + 0.5 * (2.0 * rng.uniform() - 1.0);
+            mount.rightIn += centerRightIn + 0.5 * (2.0 * rng.uniform() - 1.0);
+        }
+        setup.mounts = truth;
+        const double off = spacingError(truth, {0.25, 0.25, 0.25, 0.25});
+        setup.startHeadingDeg = 360.0 * rng.uniform();
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.outlierChance = 0.05;
+        setup.millimeters = true;
+        setup.headingLagDeg = 1.5;
+        const MountCalibrationResult result = fit(spin(setup, 100 + room));
+        bool left = false;
+        for (std::size_t s = 0; s < truth.size(); ++s) {
+            if (result.sensors[s].status != MountFitStatus::calibrated) {
+                left = true;
+                continue;
+            }
+            expectNear(result.sensors[s].alongIn, alongOf(truth[s]) + off, 0.4, "classroom");
+        }
+        roomsLeft += left ? 1 : 0;
+    }
+    std::printf("classrooms: %d of 40 left a sensor uncalibrated\n", roomsLeft);
+    assert(roomsLeft <= 1);
+}
+
+// Front, right and back sensors: what's left to hold is the front and back sensors' span, and the
+// right one follows from the readings
+void testThreeSensorsKeepTheirSpan() {
+    Spin setup;
+    setup.world = oneWall();
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.millimeters = true;
+    setup.plugged = {true, true, true, false};
+    const double off = spacingError(trueMounts(), {0.5, 0.0, 0.5, 0.0});
+    const MountCalibrationResult result = fit(spin(setup, 19));
+    assert(result.ok && result.spacingFromMounts);
+    expectStatus(result.sensors[3].status, MountFitStatus::noReadings, "three sensors: left");
+    const std::vector<DistanceSensorMount> truth = trueMounts();
+    for (const std::size_t s : {0u, 1u, 2u}) {
+        expectStatus(result.sensors[s].status, MountFitStatus::calibrated, "three sensors");
+        expectNear(result.sensors[s].alongIn, alongOf(truth[s]) + off, 0.3, "three sensors: along");
+    }
+}
+
+// Only the front and right sensors: every offset growing alike is then just the tracking center
+// sitting further back and further left, so there's no spacing to hold, and nothing to calibrate
+void testAdjacentSensorsCannotKeepASpacing() {
+    Spin setup;
+    setup.world = oneWall();
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.plugged = {true, true, false, false};
+    const MountCalibrationResult result = fit(spin(setup, 20));
+    assert(!result.ok && !result.spacingFromMounts);
+    assert(std::strcmp(result.error, "no two opposite sensors saw a wall") == 0);
+    const std::vector<DistanceSensorMount> configured = configuredMounts();
+    for (const std::size_t s : {0u, 1u}) {
+        expectStatus(result.sensors[s].status, MountFitStatus::noOppositeSensor, "adjacent");
+        expectNear(result.sensors[s].mount.forwardIn, configured[s].forwardIn, 0.0,
+                   "adjacent: mount left as it was");
+        expectNear(result.sensors[s].mount.rightIn, configured[s].rightIn, 0.0,
+                   "adjacent: mount left as it was");
+    }
+}
+
+// Nothing in reach: every reading is the room's clutter, which matches no wall
+void testNoWallInReach() {
+    Spin setup;
+    setup.world = openRoom();
+    setup.world.addBox(-32.0, 34.0, -26.0, 40.0);
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    const MountCalibrationResult result = fit(spin(setup, 21));
+    assert(!result.ok);
+    std::printf("no wall: %s\n", result.error);
 }
 
 // An unplugged sensor is reported, and the rest are still calibrated
@@ -369,8 +761,8 @@ void testNoReadings() {
 void testStatusText() {
     for (const MountFitStatus status :
          {MountFitStatus::calibrated, MountFitStatus::noReadings, MountFitStatus::tooFewReadings,
-          MountFitStatus::noOppositeWalls, MountFitStatus::uncertain,
-          MountFitStatus::implausible}) {
+          MountFitStatus::noOppositeWalls, MountFitStatus::noOppositeSensor,
+          MountFitStatus::uncertain, MountFitStatus::implausible}) {
         assert(std::strlen(mountFitStatusText(status)) > 0);
     }
 }
@@ -383,7 +775,19 @@ int main() {
     testSomethingInTheWay();
     testHalfwayLineNearAWall();
     testQuietSensorsPinTheSidewaysOffsets();
-    testCornerCannotPinTheOffsets();
+    testOneWall();
+    testOneWallFindsTheTrackingCenter();
+    testOneWallExactReadings();
+    testCorner();
+    testFieldCorner();
+    testCornerInAClutteredRoom();
+    testOneWallInAClutteredRoom();
+    testOneWallWithACabinetAskew();
+    testSomethingLinedUpAcrossTheRoom();
+    testRandomClassrooms();
+    testThreeSensorsKeepTheirSpan();
+    testAdjacentSensorsCannotKeepASpacing();
+    testNoWallInReach();
     testUnpluggedSensor();
     testNoReadings();
     testStatusText();
