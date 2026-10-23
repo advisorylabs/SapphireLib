@@ -140,6 +140,28 @@ test('PID: continuous-time gains, flags, anti-windup, derivative on measurement'
   assert.ok(dom.reset() && !dom.reset(), 'reset reports whether it cleared state');
 });
 
+test('PID.updateWithRate: the D term from the given rate, otherwise update()', () => {
+  const pid = new M.PID({ gains: { kP: 1, kD: 0.5 }, derivativeOnMeasurement: true });
+  close(pid.updateWithRate(10, 4, 8, 0.01), 6 + 4, 1e-12, 'kD * rate on the first step');
+  assert.equal(pid.lastStep.flags, M.FLAG.firstStep);
+  pid.updateWithRate(100, 4, 8, 0.01);
+  close(pid.lastStep.dTerm, 4, 1e-12, 'a target jump adds no kick');
+
+  // given update()'s own difference, the same bits (pid_test.cpp's case)
+  const a = new M.PID({ gains: { kP: 2, kI: 1, kD: 0.3 }, outputLimit: 12, slewRate: 1.5 });
+  const b = new M.PID({ gains: { kP: 2, kI: 1, kD: 0.3 }, outputLimit: 12, slewRate: 1.5 });
+  let prevError = 0;
+  for (let i = 0; i < 100; ++i) {
+    const target = i < 50 ? 20 : -5;
+    const measurement = Math.sin(i * 0.1) * 3;
+    const dtS = 0.01 + (i % 3) * 0.004;
+    const error = target - measurement;
+    const rate = i === 0 ? 0 : (error - prevError) / dtS;
+    prevError = error;
+    assert.equal(b.updateWithRate(target, measurement, rate, dtS), a.update(target, measurement, dtS));
+  }
+});
+
 // --- Mechanism law and thermal curve ---------------------------------------------
 
 test('position law: track with gravity, seat and rest at the floor, brake without a sensor', () => {

@@ -694,6 +694,17 @@
         if (m.kind === 'moveToPoint') return `to (${fmt(p.x, 1)}, ${fmt(p.y, 1)})`;
         if (m.kind === 'moveToPose') return `to (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) at ${fmt(p.heading_deg, 0)}°`;
         if (m.kind === 'followPath') return `${p.waypoints} waypoints`;
+        if (m.kind === 'followTrajectory') {
+          // a chain (a branch at speed): the whole chain as driven, from its plan
+          const tr = m.trajectory;
+          const pieces = tr && tr.pieces ? tr.pieces.length : 1;
+          if (pieces > 1 && tr.plan) {
+            const sections = tr.plan.sec.length ? tr.plan.sec[tr.plan.sec.length - 1] + 1 : p.sections;
+            return `${pieces} trajectories chained, ${sections} sections, ${fmt(tr.plan.durationS, 2)} s planned`;
+          }
+          return `${p.sections} section${p.sections === 1 ? '' : 's'}, ${fmt(p.length_in, 0)} in, ` +
+            `${fmt(p.duration_ms / 1000, 2)} s planned`;
+        }
         return '';
       };
       const show = (m) => {
@@ -709,12 +720,43 @@
         detail.append(h('section', { class: 'panel' }, stack));
         const group = new SA.charts.ChartGroup({ full: [m.start - 0.2, stop + 0.4],
           formatTime: (t) => `${(t - m.start).toFixed(2)}s` });
-        for (const name of ['drive', 'turn']) {
+        const k = m.tracking;
+        if (k) {
+          // how closely it tracked the plan, with the stretches the plan waited for the robot shaded
+          const s = k.series;
+          const waits = [];
+          for (let i = 0; i < s.t.length; ++i) {
+            if (!s.paused[i]) continue;
+            const last = waits[waits.length - 1];
+            if (last && s.t[i] - last.end < 0.05) last.end = s.t[i];
+            else waits.push({ start: s.t[i], end: s.t[i], fill: '--band-highlight' });
+          }
+          stack.append(h('p', { class: 'muted' }, `Worst ${fmt(k.worstIn, 2)} in off the plan (${fmt(k.rmsIn, 2)} RMS), ` +
+            `heading within ${fmt(k.worstHeadingDeg, 1)}°; ${fmt(k.actualS, 2)} s for a ${fmt(k.plannedS, 2)} s plan` +
+            (k.waitedS > 0 ? `, ${fmt(k.waitedS, 2)} s of it waiting (shaded)` : '') + '.'));
+          const tracking = new SA.charts.TimeChart(stack, {
+            title: 'Off the plan (in)', height: 150, bands: waits,
+            series: [
+              { label: 'distance', color: '--series-1', t: s.t, y: s.error, unit: 'in' },
+              { label: 'behind', color: '--series-4', t: s.t, y: s.along, unit: 'in' },
+              { label: 'right of path', color: '--series-3', t: s.t, y: s.cross, unit: 'in' },
+            ],
+          });
+          const heading = new SA.charts.TimeChart(stack, {
+            title: 'Heading off the plan (°)', height: 120, bands: waits,
+            series: [{ label: 'heading', color: '--series-2', t: s.t, y: s.heading, unit: '°' }],
+          });
+          group.add(tracking);
+          group.add(heading);
+          charts.push(tracking, heading);
+        }
+        const loops = m.kind === 'followTrajectory' ? ['trackFwd', 'trackStrafe', 'trackTurn'] : ['drive', 'turn'];
+        for (const name of loops) {
           const ch = app.run.get(name);
           if (!ch) continue;
           const chart = new SA.charts.TimeChart(stack, {
             title: `${name} PID error`, height: 150,
-            series: [{ label: `${name} error`, color: name === 'drive' ? '--series-1' : '--series-2', t: ch.t, y: ch.cols.err }],
+            series: [{ label: `${name} error`, color: `--series-${loops.indexOf(name) + 1}`, t: ch.t, y: ch.cols.err }],
             guides: m.params.threshold !== undefined ? [{ y: m.params.threshold, label: 'exit threshold' },
               { y: -m.params.threshold }] : [],
           });

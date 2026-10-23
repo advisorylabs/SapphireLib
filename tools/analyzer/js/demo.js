@@ -1224,6 +1224,131 @@
       }
       this.liftTestTarget = NaN;
       this.screenBusy = false;
+      yield 2;
+
+      // Trajectory Test (autons.cpp), planned from the axes Auto-Tune just measured: a curve
+      // (a quadratic Bezier, as straight pieces) up and to the right
+      const c = this.chassis;
+      const [p0, p1, p2] = [[c.x, c.y], [c.x + 20, c.y + 34], [c.x + 48, c.y + 34]];
+      const curve = [];
+      for (let k = 0; k <= 24; ++k) {
+        const u = k / 24;
+        curve.push([0, 1].map((i) => (1 - u) * (1 - u) * p0[i] + 2 * u * (1 - u) * p1[i] + u * u * p2[i]));
+      }
+      yield* this.followTrajectory(curve, models);
+    }
+
+    /**
+     * followTrajectory(), logged the way the robot logs it ("traj.plan" as it starts, "traj" and
+     * the three tracking PIDs every tick, the motion events), but planned simply: a trapezoid
+     * speed profile along the straight lines between the points, facing one way (the robot's
+     * planner fits a spline and budgets the volts). Tracked like the robot: the fitted models'
+     * feedforward plus a PD per axis, the plan waiting while the robot is 4in behind.
+     */
+    // vMax and aMax stand in for the real planner's voltage budget: low enough that a diagonal's
+    // forward and strafe volts fit in 12V together
+    *followTrajectory(points, models, { vMax = 24, aMax = 40, overtimeMs = 1500 } = {}) {
+      const w = this.w;
+      if (!this.ids.traj) {
+        // registered on first use, so only a log that drives one has these
+        const pidCols = ['target', 'meas', 'err', 'p', 'i', 'd', 'u_raw', 'out', 'dt', 'flags'];
+        this.ids.plan = w.chan('traj.plan', 'samples', 3, ['t_plan', 'x', 'y', 'hdg', 'v', 'sec', 'stop']);
+        this.ids.traj = w.chan('traj', 'samples', 3, ['ref_t', 'ref_x', 'ref_y', 'ref_hdg', 'ref_vf', 'ref_vs',
+          'ref_w', 'ff_f', 'ff_s', 'ff_t', 'lag', 'paused', 'sec']);
+        const design = (name) => M.designPositionGains(models[name].fit.model, M.responseSpec(0.4),
+          models[name].delayS).gains;
+        this.trackPIDs = ['Fwd', 'Strafe', 'Turn'].map((name) => new LoggedPID(w, w.chan(`track${name}`, 'pid', 4,
+          pidCols), { gains: design(name), outputLimit: 12, nominalDtS: 0.01 }));
+      }
+      const heading = this.chassis.heading;
+      const h = (heading * Math.PI) / 180;
+      const lengths = [0];
+      for (let k = 1; k < points.length; ++k) {
+        lengths.push(lengths[k - 1] + Math.hypot(points[k][0] - points[k - 1][0], points[k][1] - points[k - 1][1]));
+      }
+      const total = lengths[lengths.length - 1];
+      const vPeak = Math.min(vMax, Math.sqrt(total * aMax));
+      const ta = vPeak / aMax;
+      const tc = (total - vPeak * ta) / vPeak;
+      const duration = 2 * ta + tc;
+      const at = (t) => {
+        const tt = Math.min(Math.max(t, 0), duration);
+        let s;
+        let v;
+        let a;
+        if (tt < ta) [s, v, a] = [0.5 * aMax * tt * tt, aMax * tt, aMax];
+        else if (tt < ta + tc) [s, v, a] = [0.5 * vPeak * ta + vPeak * (tt - ta), vPeak, 0];
+        else {
+          const r = duration - tt;
+          [s, v, a] = [total - 0.5 * aMax * r * r, aMax * r, -aMax];
+        }
+        let k = 1;
+        while (k < lengths.length - 1 && lengths[k] < s) ++k;
+        const [x0, y0] = points[k - 1];
+        const [x1, y1] = points[k];
+        const span = lengths[k] - lengths[k - 1];
+        const f = span > 0 ? (s - lengths[k - 1]) / span : 0;
+        const ux = (x1 - x0) / span;
+        const uy = (y1 - y0) / span;
+        return { s, v, a, x: x0 + f * (x1 - x0), y: y0 + f * (y1 - y0), ux, uy };
+      };
+
+      this.event('motion', `start,followTrajectory,sections=1,samples=${Math.ceil(total / 0.5) + 1},` +
+        `length_in=${total.toFixed(3)},duration_ms=${Math.ceil(duration * 1000)},overtime_ms=${overtimeMs}`);
+      const start = this.t;
+      for (let t = 0; ; t = Math.min(duration, t + 2 / Math.max(vPeak, 1))) {
+        const p = at(t);
+        w.sample(this.ids.plan, this.us(), [t, p.x, p.y, heading, p.v, 0, t === 0 || t === duration ? 1 : 0]);
+        if (t === duration) break;
+      }
+      for (const pid of this.trackPIDs) pid.reset(this.t);
+      const axis = (m, v, a) => m.kS * Math.sign(v || a) + m.kV * v + m.kA * a;
+      let tRef = 0;
+      let lag = 0;
+      let within = null;
+      let reason = 'running';
+      let finalError = 0;
+      while (true) {
+        const paused = lag > 4;
+        if (this.t > start && !paused) tRef += 0.01;
+        const p = at(tRef);
+        const holding = tRef >= duration;
+        const pose = this.chassis.pose(0.003 * gaussian(this.rng));
+        const dx = p.x - pose.x;
+        const dy = p.y - pose.y;
+        const hNow = (pose.heading * Math.PI) / 180;
+        const forward = dx * Math.sin(hNow) + dy * Math.cos(hNow);
+        const lateral = dx * Math.cos(hNow) - dy * Math.sin(hNow);
+        lag = dx * p.ux + dy * p.uy;
+        // the plan's velocity and acceleration in the robot's frame
+        const v = holding ? 0 : p.v;
+        const a = holding ? 0 : p.a;
+        const vf = v * (p.ux * Math.sin(h) + p.uy * Math.cos(h));
+        const vs = v * (p.ux * Math.cos(h) - p.uy * Math.sin(h));
+        const af = a * (p.ux * Math.sin(h) + p.uy * Math.cos(h));
+        const as = a * (p.ux * Math.cos(h) - p.uy * Math.sin(h));
+        const ff = holding ? [0, 0, 0] : [axis(models.Fwd.fit.model, vf, af), axis(models.Strafe.fit.model, vs, as), 0];
+        const [fwdPID, strafePID, turnPID] = this.trackPIDs;
+        this.chassis.holonomicVolts(ff[0] + fwdPID.update(this.t, forward, 0),
+          ff[1] + strafePID.update(this.t + 0.00002, lateral, 0),
+          turnPID.update(this.t + 0.00004, wrap180(heading - pose.heading), 0));
+        w.sample(this.ids.traj, this.us() + 30, [tRef, p.x, p.y, heading, vf, vs, 0, ff[0], ff[1], ff[2], lag,
+          paused ? 1 : 0, 0]);
+        finalError = Math.hypot(points[points.length - 1][0] - pose.x, points[points.length - 1][1] - pose.y);
+        if (holding && finalError <= 1) {
+          if (within === null) within = this.t;
+        } else {
+          within = null;
+        }
+        if (within !== null && this.t - within >= 0.2) reason = 'settled';
+        else if ((this.t - start) * 1000 >= duration * 1000 + overtimeMs) reason = 'timeout';
+        if (reason !== 'running') break;
+        yield 0.01;
+      }
+      this.chassis.stop();
+      this.event('motion', `end,followTrajectory,reason=${reason},error=${finalError.toFixed(3)},` +
+        `ms=${Math.round((this.t - start) * 1000)}`);
+      return reason;
     }
 
     // --- The match ---

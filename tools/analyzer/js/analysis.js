@@ -56,6 +56,10 @@
     mclSilentShare: 0.5, // a sensor with nothing to report this often, with a wall in range
     mclLossIn: 2, // the correction jumping this far in half a second: odometry lost travel
     mclSlowUs: 5000, // an update this long is 10% of the brain at 20Hz
+    trajectoryErrorIn: 3, // followTrajectory() this far from its reference while the plan runs
+    trajectoryWaitS: 0.5, // the plan waiting for the robot this long in all
+    trajectorySlowShare: 0.15, // taking this much longer than planned, not counting the waiting...
+    trajectorySettleS: 0.3, // ...or a settle at the end
   };
 
   /**
@@ -124,6 +128,7 @@
     moveToPoint: ['drive', 'turn'],
     moveToPose: ['drive', 'turn'],
     followPath: ['drive', 'turn'],
+    followTrajectory: ['trackFwd', 'trackStrafe', 'trackTurn'],
   };
 
   /**
@@ -906,9 +911,89 @@
     return abs !== 0 && (abs < 0.01 || abs >= 1000) ? value.toExponential(2) : value.toFixed(3);
   }
 
+  function wrapDegrees180(degrees) {
+    const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
+    return wrapped === -180 ? 180 : wrapped;
+  }
+
+  /**
+   * How closely a followTrajectory() motion (an slt.trajectories() entry)
+   * tracked its plan. Per "traj" row: the distance from the reference, its
+   * sideways part (+ right of the path's direction, NaN where the plan is at
+   * rest), how far behind (the robot's own lag), the heading error, and
+   * whether the plan was waiting. Over the motion, while the plan ran (not
+   * the settle on its last point): the worst and RMS distance, the worst
+   * heading error, and the time spent waiting, plus the time taken against
+   * the plan. Null without "traj" and "odom".
+   */
+  function trajectoryTracking(log, tr) {
+    const traj = log.get('traj');
+    const odom = log.get('odom');
+    if (!tr || !tr.rows || !traj || !odom) return null;
+    const [a, b] = tr.rows;
+    const n = b - a;
+    const c = traj.cols;
+    const plannedS = tr.plan ? tr.plan.durationS
+      : (typeof tr.motion.params.duration_ms === 'number' ? tr.motion.params.duration_ms / 1000 : NaN);
+    const series = {
+      t: traj.t.subarray(a, b),
+      error: new Float64Array(n).fill(NaN),
+      cross: new Float64Array(n).fill(NaN),
+      along: c.lag.subarray(a, b),
+      heading: new Float64Array(n).fill(NaN),
+      paused: c.paused.subarray(a, b),
+    };
+    let worstIn = 0;
+    let worstAt = null;
+    let sumSq = 0;
+    let count = 0;
+    let worstHeadingDeg = 0;
+    let waitedS = 0;
+    for (let k = 0; k < n; ++k) {
+      const i = a + k;
+      const t = traj.t[i];
+      if (c.paused[i]) waitedS += k + 1 < n ? traj.t[i + 1] - t : 0.01;
+      const j = odom.indexAt(t);
+      if (j < 0 || t - odom.t[j] > 0.05) continue;
+      const dx = odom.cols.x[j] - c.ref_x[i];
+      const dy = odom.cols.y[j] - c.ref_y[i];
+      // the path's direction on the field, from the reference's robot-frame velocity
+      const h = (c.ref_hdg[i] * Math.PI) / 180;
+      const ux = c.ref_vf[i] * Math.sin(h) + c.ref_vs[i] * Math.cos(h);
+      const uy = c.ref_vf[i] * Math.cos(h) - c.ref_vs[i] * Math.sin(h);
+      const speed = Math.hypot(ux, uy);
+      const error = Math.hypot(dx, dy);
+      const heading = wrapDegrees180(c.ref_hdg[i] - odom.cols.heading[j]);
+      series.error[k] = error;
+      series.cross[k] = speed > 0.5 ? (dx * uy - dy * ux) / speed : NaN;
+      series.heading[k] = heading;
+      const holding = Number.isFinite(plannedS) && c.ref_t[i] >= plannedS - 1e-6;
+      if (holding) continue;
+      if (error > worstIn) {
+        worstIn = error;
+        worstAt = t;
+      }
+      sumSq += error * error;
+      count++;
+      worstHeadingDeg = Math.max(worstHeadingDeg, Math.abs(heading));
+    }
+    const m = tr.motion;
+    const lastT = n ? traj.t[b - 1] : m.start;
+    const actualS = m.ms !== null ? m.ms / 1000 : (m.stop ?? lastT) - m.start;
+    return { series, worstIn, worstAt, rmsIn: count ? Math.sqrt(sumSq / count) : NaN, worstHeadingDeg, waitedS,
+      plannedS, actualS, finished: m.end !== null };
+  }
+
   function analyzeMotions(log, t0, t1, report, add, when) {
     const list = slt.motions(log).filter((m) => m.start >= t0 - 0.001 && m.start <= t1);
+    const trajectories = slt.trajectories(log);
     for (const m of list) {
+      if (m.kind === 'followTrajectory') {
+        const tr = trajectories.find((x) => Math.abs(x.motion.start - m.start) < 1e-9);
+        m.trajectory = tr || null;
+        m.tracking = trajectoryTracking(log, tr);
+        analyzeTrajectory(log, m, add, when);
+      }
       if (m.reason === 'timeout') {
         // What was the robot doing when it gave up?
         const context = [];
@@ -953,6 +1038,47 @@
       }
     }
     return list;
+  }
+
+  /** The tracking findings for one followTrajectory() motion, from m.tracking. */
+  function analyzeTrajectory(log, m, add, when) {
+    const k = m.tracking;
+    if (!k) return;
+    const channels = ['traj', 'odom', ...MOTION_PIDS.followTrajectory];
+    if (k.worstIn > THRESHOLDS.trajectoryErrorIn) {
+      // were the tracking loops already at full volts when it was furthest off?
+      let saturated = false;
+      for (const name of MOTION_PIDS.followTrajectory) {
+        const ch = log.get(name);
+        if (!ch) continue;
+        const [a, b] = ch.range(k.worstAt - 0.2, k.worstAt + 0.02);
+        for (let i = a; i < b; ++i) if (ch.cols.flags[i] & 1) saturated = true;
+      }
+      add({ severity: 'warning', t: k.worstAt, end: m.stop, system: 'Drivetrain',
+        title: `followTrajectory fell ${k.worstIn.toFixed(1)} in off its plan`,
+        detail: `Worst ${when(k.worstAt)}, ${k.rmsIn.toFixed(1)} in RMS over the motion. ` +
+          (saturated ? 'The tracking loops were at full power then: the plan asked for more than the robot had ' +
+            '(a lower voltage budget for that section gives the feedback room, and stale models plan too fast).'
+            : 'The tracking loops weren\'t saturated, so the feedforward missed and the gains didn\'t make it up: ' +
+              're-run Auto-Tune on Fwd, Strafe and Turn, then on the Track controllers.'),
+        channels });
+    }
+    if (k.waitedS > THRESHOLDS.trajectoryWaitS) {
+      add({ severity: 'info', t: m.start, end: m.stop, system: 'Drivetrain',
+        title: `followTrajectory waited ${k.waitedS.toFixed(1)} s for the robot`,
+        detail: 'The robot fell more than maxLagIn behind its plan (blocked, bumped, or pushing something), so the ' +
+          'plan paused until it caught up. The replay marks where.', channels });
+    }
+    const extraS = k.actualS - k.plannedS - k.waitedS;
+    if (k.finished && Number.isFinite(k.plannedS) && k.plannedS > 0 &&
+        extraS > THRESHOLDS.trajectorySlowShare * k.plannedS + THRESHOLDS.trajectorySettleS) {
+      add({ severity: 'info', t: m.start, end: m.stop, system: 'Drivetrain',
+        title: `followTrajectory took ${Math.round((100 * (k.actualS - k.plannedS)) / k.plannedS)}% longer than planned`,
+        detail: `${k.actualS.toFixed(2)} s for a ${k.plannedS.toFixed(2)} s plan` +
+          (k.waitedS > 0 ? `, ${k.waitedS.toFixed(1)} s of it waiting` : '') + '. Settling on the last point took ' +
+          'the rest: the robot arrived off its plan. Usually stale axis models (re-run Auto-Tune), hot motors, or a ' +
+          'low battery.', channels });
+    }
   }
 
   function analyzeLogger(log, add, when) {
@@ -1022,6 +1148,7 @@
     THRESHOLDS,
     reportedDerating,
     analyze,
+    trajectoryTracking,
     BLOCKED_REASONS,
     blockedReasons,
     localizerInfo,

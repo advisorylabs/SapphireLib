@@ -45,4 +45,11 @@ PoseDelta correctionStep(double remainingXIn, double remainingYIn, double maxSte
     return PoseDelta{.dxIn = remainingXIn * scale, .dyIn = remainingYIn * scale};
 }
 
+Velocity velocityFromDelta(PoseDelta delta, double dHeadingDeg, double dtS) {
+    if (!(dtS > 0.0)) return Velocity{};
+    return Velocity{.xInPerS = delta.dxIn / dtS,
+                    .yInPerS = delta.dyIn / dtS,
+                    .headingDegPerS = dHeadingDeg / dtS};
+}
+
 } // namespace sapphirelib::odom

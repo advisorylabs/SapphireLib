@@ -32,13 +32,13 @@ namespace {
 
 constexpr std::uint32_t kDefaultLocalizerPeriodMs = 50;
 
-// Everything this robot's TUNE.CFG may set besides mcl.*: the PID page's four
-// controllers (by their telemetry channel names), Auto-Tune's three drive
-// axes, the lift's gravity volts, and the localizer's update period. The
-// analyzer writes exactly these keys (tools/analyzer/js/tunefile.js).
+// Everything this robot's TUNE.CFG may set besides mcl.*: the PID page's
+// seven controllers (by their telemetry channel names), Auto-Tune's three
+// drive axes, the lift's gravity volts, and the localizer's update period.
+// The analyzer writes exactly these keys (tools/analyzer/js/tunefile.js).
 TuneSchema schema() {
     return TuneSchema{
-        .pids = {"drive", "turn", "hold", "lift"},
+        .pids = {"drive", "turn", "hold", "lift", "trackFwd", "trackStrafe", "trackTurn"},
         .models = {"fwd", "strafe", "turn"},
         .values = {{.key = "lift.gravityVolts", .min = -12.0, .max = 12.0},
                    {.key = "mcl.periodMs", .min = 10.0, .max = 1000.0, .whole = true}},
@@ -133,6 +133,9 @@ void applyTuneProfile() {
     setGains("turn", drivetrain().turnPID());
     setGains("hold", drivetrain().headingHoldPID());
     setGains("lift", macros::liftMechanism().pid());
+    setGains("trackFwd", drivetrain().trackingForwardPID());
+    setGains("trackStrafe", drivetrain().trackingStrafePID());
+    setGains("trackTurn", drivetrain().trackingTurnPID());
 
     // Axis models for DriverInputMode::velocity, as Auto-Tune would install
     // them (tuning.cpp's installModel()).

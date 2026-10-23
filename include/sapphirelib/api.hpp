@@ -37,10 +37,16 @@
 #include "sapphirelib/localization/sensor_model.hpp"
 
 #include "sapphirelib/motion/exit_tracker.hpp"
+#include "sapphirelib/motion/holonomic_feedforward.hpp"
+#include "sapphirelib/motion/holonomic_tracking.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/motion_queue.hpp"
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
+#include "sapphirelib/motion/trajectory.hpp"
+#include "sapphirelib/motion/trajectory_config.hpp"
+#include "sapphirelib/motion/trajectory_generator.hpp"
+#include "sapphirelib/motion/trajectory_path.hpp"
 
 #include "sapphirelib/sensors/imu.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"

@@ -508,6 +508,15 @@
     }
 
     update(target, measurement, dtS) {
+      return this.step(target, measurement, dtS, false, 0);
+    }
+
+    /** PID::updateWithRate(): the D term from the caller's measured error rate. */
+    updateWithRate(target, measurement, errorRate, dtS) {
+      return this.step(target, measurement, dtS, true, errorRate);
+    }
+
+    step(target, measurement, dtS, hasErrorRate, errorRate) {
       const c = this.config;
       if (dtS === undefined) dtS = c.nominalDtS;
       let flags = this.hasPrev ? 0 : FLAG.firstStep;
@@ -521,7 +530,9 @@
       if (c.integralLimit > 0) this.integral = clamp(this.integral, -c.integralLimit, c.integralLimit);
 
       let derivative = 0;
-      if (this.hasPrev) {
+      if (hasErrorRate) {
+        derivative = errorRate;
+      } else if (this.hasPrev) {
         derivative = (c.derivativeOnMeasurement ? -(measurement - this.prevMeasurement)
           : error - this.prevError) / dtS;
       }

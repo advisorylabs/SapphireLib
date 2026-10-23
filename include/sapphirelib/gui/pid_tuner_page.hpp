@@ -149,7 +149,9 @@ private:
         tuning::GainDesign design;
     };
 
-    void addSelectorButton(Entry& entry, std::size_t row);
+    void addSelectorButton(Entry& entry);
+    // place every selector button, sharing the page's height between however many there are
+    void layoutSelectorButtons();
     void select(std::size_t index);
     void adjustGain(int gainIndex, double delta);
     void refreshGainLabels();

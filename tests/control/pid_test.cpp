@@ -217,6 +217,58 @@ void testDerivativeOnMeasurementTerm() {
     assert(std::fabs(observer.steps[1].dTerm - -10.0) < 1e-9); // -(0.2 / 0.02)
 }
 
+void testUpdateWithRateUsesTheGivenRate() {
+    // The D term is kD times the rate passed in, on the very first step too, and
+    // derivativeOnMeasurement doesn't apply: there's nothing to difference.
+    PID pid(PID::Config{.gains = {.kP = 1.0, .kD = 0.5}, .derivativeOnMeasurement = true});
+    RecordingObserver observer;
+    pid.setObserver(&observer);
+    const double first = pid.updateWithRate(10.0, 4.0, /*errorRate=*/8.0, 0.01);
+    assert(std::fabs(observer.steps[0].dTerm - 4.0) < 1e-12);
+    assert(std::fabs(first - (6.0 + 4.0)) < 1e-12);
+    assert(observer.steps[0].flags == PidStep::kFirstStep);
+
+    // A jump in the target with no change in the rate adds no kick.
+    pid.updateWithRate(100.0, 4.0, 8.0, 0.01);
+    assert(std::fabs(observer.steps[1].dTerm - 4.0) < 1e-12);
+
+    // A bad timestep falls back as it does for update().
+    pid.updateWithRate(1.0, 0.0, 0.0, 0.0);
+    assert((observer.steps.back().flags & PidStep::kDtFallback) != 0);
+}
+
+void testUpdateWithRateMatchesUpdateGivenTheDifferencedError() {
+    // Fed the same difference update() would take, updateWithRate() produces the
+    // same bits: the two share every other step of the math.
+    std::mt19937 rng(9667);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    for (int run = 0; run < 200; ++run) {
+        const PID::Config config{
+            .gains = {.kP = 5.0 * unit(rng), .kI = 2.0 * unit(rng), .kD = unit(rng)},
+            .integralLimit = unit(rng) < 0.5 ? 0.0 : 5.0 * unit(rng),
+            .outputLimit = unit(rng) < 0.5 ? 0.0 : 12.0,
+            .slewRate = unit(rng) < 0.5 ? 0.0 : 2.0 * unit(rng),
+        };
+        PID differenced(config);
+        PID rated(config);
+        double target = 0.0;
+        double measurement = 0.0;
+        double prevError = 0.0;
+        for (int tick = 0; tick < 200; ++tick) {
+            if (unit(rng) < 0.05) target = 100.0 * unit(rng) - 50.0;
+            measurement += 0.1 * (target - measurement) + (unit(rng) - 0.5);
+            const double dtS = 0.005 + 0.02 * unit(rng);
+            const double error = target - measurement;
+            // update() has no derivative on its first step
+            const double errorRate = tick == 0 ? 0.0 : (error - prevError) / dtS;
+            prevError = error;
+            const double expected = differenced.update(target, measurement, dtS);
+            const double actual = rated.updateWithRate(target, measurement, errorRate, dtS);
+            assert(sameBits(expected, actual));
+        }
+    }
+}
+
 void testDtFallbackFlag() {
     PID pid(PID::Config{.gains = {.kP = 1.0}, .nominalDtS = 0.02});
     RecordingObserver observer;
@@ -533,6 +585,8 @@ int main() {
     testResetClearsState();
     testObserverSeesEveryStepWithItsTerms();
     testDerivativeOnMeasurementTerm();
+    testUpdateWithRateUsesTheGivenRate();
+    testUpdateWithRateMatchesUpdateGivenTheDifferencedError();
     testDtFallbackFlag();
     testSaturatedAndIntegralHeldFlags();
     testSlewLimitedFlag();

@@ -19,6 +19,15 @@ double PID::update(double target, double measurement) {
 }
 
 double PID::update(double target, double measurement, double dtS) {
+    return step(target, measurement, dtS, false, 0.0);
+}
+
+double PID::updateWithRate(double target, double measurement, double errorRate, double dtS) {
+    return step(target, measurement, dtS, true, errorRate);
+}
+
+double PID::step(double target, double measurement, double dtS, bool hasErrorRate,
+                 double errorRate) {
     std::uint8_t flags = hasPrev_ ? 0 : PidStep::kFirstStep;
     if (!(dtS > 0.0) || dtS > kMaxPlausibleDtS) {
         dtS = config_.nominalDtS;
@@ -34,9 +43,11 @@ double PID::update(double target, double measurement, double dtS) {
         integral_ = std::clamp(integral_, -config_.integralLimit, config_.integralLimit);
     }
 
-    // derivative per second, for the same reason
+    // derivative per second, for the same reason. A measured rate needs no previous step
     double derivative = 0.0;
-    if (hasPrev_) {
+    if (hasErrorRate) {
+        derivative = errorRate;
+    } else if (hasPrev_) {
         derivative = (config_.derivativeOnMeasurement ? -(measurement - prevMeasurement_)
                                                       : (error - prevError_)) /
                      dtS;

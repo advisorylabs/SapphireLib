@@ -520,6 +520,47 @@ table.data-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
 .data-table.wrap-names td:first-child { white-space: normal; font-family: var(--font-body); }
 .data-table.wrap-names td:last-child { white-space: normal; }
 
+/* --- Paths tab ------------------------------------------------------------------------------ */
+
+.text-input,
+.num-input {
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font: inherit;
+}
+.num-input { width: 5.2em; font-family: var(--font-data); font-size: 0.82rem; }
+.path-table td { padding: 2px 3px; }
+.path-table .num-input { width: 4.6em; padding: 2px 4px; }
+.path-table tr.selected td { background: var(--accent-soft); }
+.path-table tbody tr { cursor: pointer; }
+.path-table .heading-cell { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+.path-table .heading-cell input[type="checkbox"] { accent-color: var(--accent); }
+.path-table .actions { display: flex; gap: 4px; justify-content: flex-end; }
+.sec-sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.mini {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.mini:hover { background: var(--surface-3); color: var(--ink); }
+.path-sections { display: grid; gap: 10px; }
+.section-card { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.88rem; }
+.section-card > header { display: flex; align-items: center; gap: 8px; }
+.section-card > header .mini { margin-left: auto; }
+.limit-grid { display: grid; grid-template-columns: auto repeat(2, minmax(0, 1fr)); gap: 4px 8px; align-items: center; }
+.limit-grid .h { color: var(--muted); font-size: 0.78rem; text-align: center; }
+.limit-grid .num-input { width: 100%; }
+.path-chart { width: 100%; height: 130px; display: block; }
+.code.paste { white-space: pre; width: 100%; resize: vertical; color: var(--ink); font-family: var(--font-data); }
+
 /* --- Narrow screens ------------------------------------------------------------------------------ */
 
 @media (max-width: 900px) {

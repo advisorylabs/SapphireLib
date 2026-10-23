@@ -556,5 +556,15 @@
       'Search on "Your robot" above.');
   }
 
-  root.SIM.tuneview = { build, drawHistory };
+  /**
+   * The open TUNE.CFG's axis models, as { forward, strafe, turn }, for the Paths tab to plan
+   * with the robot's own; null unless it has all three.
+   */
+  function profileModels() {
+    const m = state.profile.models;
+    if (!m.fwd || !m.strafe || !m.turn) return null;
+    return { forward: { ...m.fwd }, strafe: { ...m.strafe }, turn: { ...m.turn } };
+  }
+
+  root.SIM.tuneview = { build, drawHistory, profileModels };
 })();

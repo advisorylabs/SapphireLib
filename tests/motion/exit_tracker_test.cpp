@@ -70,6 +70,23 @@ void testZeroTimeoutNeverTimesOut() {
         assert(tracker.update(false, now) == ExitReason::running);
     }
     assert(tracker.elapsedMs() == 600000);
+    tracker.extendTimeout(100); // still no limit
+    assert(tracker.update(false, 600010) == ExitReason::running);
+}
+
+void testExtendingTheTimeout() {
+    // halfway through a 500ms timeout, 300ms more: it now times out at 800ms, measured from the
+    // same start
+    ExitTracker tracker(100, 500, 1000);
+    for (std::uint32_t now = 1010; now <= 1250; now += 10) {
+        assert(tracker.update(false, now) == ExitReason::running);
+    }
+    tracker.extendTimeout(300);
+    for (std::uint32_t now = 1260; now < 1800; now += 10) {
+        assert(tracker.update(false, now) == ExitReason::running);
+    }
+    assert(tracker.update(false, 1800) == ExitReason::timedOut);
+    assert(tracker.elapsedMs() == 800);
 }
 
 void testSettledWinsOverTimeoutOnTheSameTick() {
@@ -302,6 +319,7 @@ int main() {
     testLeavingTheThresholdResetsTheSettleTime();
     testTimesOut();
     testZeroTimeoutNeverTimesOut();
+    testExtendingTheTimeout();
     testSettledWinsOverTimeoutOnTheSameTick();
     testZeroSettleTimeSettlesOnTheFirstTickWithin();
     testElapsedFollowsEveryUpdate();
