@@ -16,15 +16,44 @@ enum class ExitReason : std::uint8_t {
     timedOut,
     /** the motion couldn't start (an empty path, or no odometry) and commanded nothing */
     aborted,
+    /**
+     * the competition mode changed under it (autonomous ended, a disable) and it stopped where it
+     * was. Only a motion on a task of its own (a MotionQueue's) gets to say so: one run from
+     * autonomous() itself is deleted with that task. See competitionModeChanged()
+     */
+    interrupted,
 };
 
 /**
  * @brief Get a short name for an exit reason
  *
  * @param reason the exit reason
- * @return const char* "running", "settled", "timeout", or "aborted"
+ * @return const char* "running", "settled", "timeout", "aborted", or "interrupted"
  */
 const char* exitReasonName(ExitReason reason);
+
+/** pros::competition::get_status()'s bits, here so competitionModeChanged() is pure */
+inline constexpr std::uint8_t kCompetitionDisabled = 1 << 0;
+inline constexpr std::uint8_t kCompetitionAutonomous = 1 << 1;
+inline constexpr std::uint8_t kCompetitionConnected = 1 << 2;
+
+/**
+ * @brief Whether a motion started under one competition status should stop under another
+ *
+ * Under competition control (a field or switch connected as the motion started), once the mode
+ * isn't the one it started in: autonomous ending, a disable, driver control starting. A motion on
+ * a task of its own outlives autonomous(), and would otherwise drive on into driver control,
+ * fighting the driver until it timed out. Off the field nothing interrupts a motion
+ *
+ * @param startStatus pros::competition::get_status() as the motion started
+ * @param nowStatus pros::competition::get_status() now
+ * @return true if the motion should stop
+ */
+constexpr bool competitionModeChanged(std::uint8_t startStatus, std::uint8_t nowStatus) {
+    if ((startStatus & kCompetitionConnected) == 0) return false;
+    constexpr std::uint8_t kMode = kCompetitionDisabled | kCompetitionAutonomous;
+    return (startStatus & kMode) != (nowStatus & kMode);
+}
 
 /**
  * @brief What a blocking motion returns

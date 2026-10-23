@@ -1029,6 +1029,12 @@
         add({ severity: 'info', t: m.start, system: 'Drivetrain', title: `${m.kind} aborted`,
           detail: 'It never started: no odometry set, or an empty path. The terminal log says which.',
           channels: [] });
+      } else if (m.reason === 'interrupted') {
+        add({ severity: 'info', t: m.start, end: m.end, system: 'Drivetrain',
+          title: `${m.kind} interrupted`,
+          detail: `The competition mode changed mid-motion (${when(m.end)}), and the motion, on a task ` +
+            'of its own (a MotionQueue), stopped there instead of driving on into the next period. ' +
+            'Expected at the end of autonomous; anywhere else, the routine ran long.', channels: [] });
       } else if (m.end === null) {
         add({ severity: 'info', t: m.start, end: m.stop, system: 'Drivetrain',
           title: `${m.kind} cut short`,

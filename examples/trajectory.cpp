@@ -96,6 +96,9 @@ void autonomous() {
 
     // the trajectory's first point, where the robot really starts
     odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 0});
+    // the number rush's motion will have: until it starts, trajectoryProgress() is still whatever
+    // trajectory ran last, which may well be past section 1
+    const std::uint32_t rushMotion = drivetrain().trajectoryProgress().motion + 1;
     queue.enqueue([] {
         // waits up to 4in behind the plan before the plan waits for it; times out 1s past the plan
         drivetrain().followTrajectory(rush.trajectory, {.overtimeMs = 1000, .maxLagIn = 4.0});
@@ -103,8 +106,12 @@ void autonomous() {
     queue.run();
 
     // as the robot enters the slower second section, start the intake, without the robot slowing
-    if (sapphirelib::waitUntil([] { return drivetrain().trajectoryProgress().section >= 1; },
-                               4000)) {
+    if (sapphirelib::waitUntil(
+            [rushMotion] {
+                const auto progress = drivetrain().trajectoryProgress();
+                return progress.motion == rushMotion && progress.section >= 1;
+            },
+            4000)) {
         intake.move_voltage(12000);
     }
     queue.waitUntilDone();

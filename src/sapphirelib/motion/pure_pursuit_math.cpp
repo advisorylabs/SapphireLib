@@ -1,6 +1,8 @@
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace sapphirelib::motion {
 
@@ -66,11 +68,37 @@ LookaheadResult findLookaheadPoint(double xIn, double yIn, const Path& path, dou
         bestIndex = i;
     }
 
-    if (!found) {
-        // the whole rest of the path is within the lookahead, so head for the last waypoint
-        return LookaheadResult{points.back(), points.size() - 1};
+    if (found) return LookaheadResult{bestPoint, bestIndex};
+
+    // nowhere does the rest of the path leave the circle. Ending inside it, the robot is near the
+    // end: head for the last waypoint
+    const Waypoint& last = points.back();
+    if (std::hypot(last.xIn - xIn, last.yIn - yIn) <= lookaheadIn ||
+        startIndex + 1 >= points.size()) {
+        return LookaheadResult{last, points.size() - 1};
     }
-    return LookaheadResult{bestPoint, bestIndex};
+    // ending outside it, the rest of the path never comes within reach at all: it starts somewhere
+    // else, or the robot was knocked off it. Back to the nearest point of what's left, rather than
+    // straight for the end past everything in between
+    Waypoint nearest = points[startIndex];
+    std::size_t nearestIndex = startIndex;
+    double nearestSq = std::numeric_limits<double>::infinity();
+    for (std::size_t i = startIndex; i + 1 < points.size(); ++i) {
+        const Vec2 p1{points[i].xIn, points[i].yIn};
+        const Vec2 d = sub(Vec2{points[i + 1].xIn, points[i + 1].yIn}, p1);
+        const double lengthSq = dot(d, d);
+        const double t =
+            lengthSq < 1e-9 ? 0.0 : std::clamp(dot(sub(center, p1), d) / lengthSq, 0.0, 1.0);
+        const Vec2 point{p1.x + d.x * t, p1.y + d.y * t};
+        const Vec2 offset = sub(point, center);
+        const double distanceSq = dot(offset, offset);
+        if (distanceSq < nearestSq) {
+            nearestSq = distanceSq;
+            nearest = Waypoint{point.x, point.y};
+            nearestIndex = i;
+        }
+    }
+    return LookaheadResult{nearest, nearestIndex};
 }
 
 bool reachedFinalApproach(double distanceToFinalIn, double finalApproachIn,

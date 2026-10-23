@@ -112,12 +112,19 @@ void trajectoryTestAuton() {
                          plan.trajectory.durationS(), plan.trajectory.lengthIn());
 
     odometry().setPose({.xIn = 0, .yIn = 0, .headingDeg = 0});
+    // the number this trajectory's motion will have: until it starts, the
+    // progress is still whichever trajectory ran last
+    const std::uint32_t motion = drivetrain().trajectoryProgress().motion + 1;
     queue.enqueue([] { drivetrain().followTrajectory(plan.trajectory); });
     queue.run();
     // where a mechanism would start as the robot enters the slower section,
     // without the robot slowing down for it: here, a mark in the log
-    if (sapphirelib::waitUntil([] { return drivetrain().trajectoryProgress().section >= 1; },
-                               5000)) {
+    if (sapphirelib::waitUntil(
+            [motion] {
+                const auto progress = drivetrain().trajectoryProgress();
+                return progress.motion == motion && progress.section >= 1;
+            },
+            5000)) {
         sapphirelib::telemetry::event("mark", "trajectory_test,section=1");
     }
     queue.waitUntilDone();

@@ -158,7 +158,7 @@ and an end:
 
 ```
 E,<t_us>,motion,start,<kind>,<key>=<value>,...
-E,<t_us>,motion,end,<kind>,reason=<settled|timeout|aborted>,error=<finalError>,ms=<elapsedMs>
+E,<t_us>,motion,end,<kind>,reason=<settled|timeout|aborted|interrupted>,error=<finalError>,ms=<elapsedMs>
 ```
 
 and a `followTrajectory` that carries on into the next trajectory of a chain (a branch at speed,
@@ -191,7 +191,9 @@ E,<t_us>,motion,nocontinue,followTrajectory,piece=<n>,why=<none|mismatched>
 - A motion that can't start (no odometry set, an empty path) logs a `start` with no keys, then an
   `end` with `reason=aborted`.
 - A motion cut short by a competition state change (PROS deletes the autonomous task wherever it
-  is) has a `start` and no `end`; the `phase` event marks where it stopped.
+  is) has a `start` and no `end`; the `phase` event marks where it stopped. One running on a task
+  of its own (a `MotionQueue`'s), which outlives `autonomous()`, notices the mode change itself
+  and ends with `reason=interrupted` instead of driving on into the next period.
 - `continue` comes as the plan carries on into piece `<n>` of a chain (1 for the second
   trajectory): that trajectory's sections, samples, length and planned duration, and `start_ms`,
   where it starts on the plan's clock (`traj`'s `ref_t`). The motion's one `end` comes after the
