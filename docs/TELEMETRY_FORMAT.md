@@ -266,6 +266,9 @@ volts that hold it against gravity.
   how many rounds of writing a full-size taught drive read back as written while this file was
   being logged, how long each took, the rows the logger dropped meanwhile, and whether it kept
   logging to this file.
+- `face`: `gui::FaceScreen`. `bump,g=<g>` when the IMU feels a bump while the face is up (it looks
+  surprised), with how far that reading jumped from the recent average: for tuning
+  `BumpConfig::thresholdG`.
 - `macro`: 96671H's driver macros (`src/robot/macros.cpp`). `autoclaw,piece_mm=<mm>,reach_mm=<mm>,
   speed=<m/s>` when autoClaw closes the claw on a pin at the bottom: the distance reading that did
   it, how far out it was closing at that moment (`kPieceDetectMm` plus the speed lead), and how fast

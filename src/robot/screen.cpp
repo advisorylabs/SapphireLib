@@ -10,8 +10,10 @@
 
 #include "robot/screen.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -28,11 +30,14 @@
 #include "sapphirelib/diag/sensor_check.hpp"
 #include "sapphirelib/gui/auton_selector_page.hpp"
 #include "sapphirelib/gui/diagnostics_page.hpp"
+#include "sapphirelib/gui/face_screen.hpp"
 #include "sapphirelib/gui/home_page.hpp"
 #include "sapphirelib/gui/odometry_page.hpp"
 #include "sapphirelib/gui/pid_tuner_page.hpp"
 #include "sapphirelib/telemetry/event.hpp"
+#include "sapphirelib/util/clock.hpp"
 #include "sapphirelib/util/log.hpp"
+#include "sapphirelib/util/timing.hpp"
 
 namespace robot {
 
@@ -40,6 +45,7 @@ using sapphirelib::diag::DeviceKind;
 using sapphirelib::diag::SensorCheck;
 using sapphirelib::gui::AutonSelectorPage;
 using sapphirelib::gui::DiagnosticsPage;
+using sapphirelib::gui::FaceScreen;
 using sapphirelib::gui::Gui;
 using sapphirelib::gui::HomePage;
 using sapphirelib::gui::OdometryPage;
@@ -51,6 +57,60 @@ namespace {
 // runSelectedAuton() finds it. Set in buildScreen(), before any competition
 // task can start.
 AutonSelectorPage* autonSelector = nullptr;
+
+// The face squints while the lift climbs faster than this, in motor degrees
+// per second, its speed smoothed over about kLiftRiseSmoothingMs. Well under
+// a real climb (hundreds of degrees a second), well over the few degrees the
+// lift hunts by while it holds a level.
+constexpr double kLiftRisingDegPerS = 100.0;
+constexpr double kLiftRiseSmoothingMs = 100.0;
+
+/// Whether the lift is on its way up, for the face's squint, from its
+/// position sampled every face frame. Only the face's frame timer calls it,
+/// on the GUI's task, so its state needs no lock. Works in autonomous too,
+/// where macros::update() isn't running: it reads the motors, not the macros.
+class LiftRiseWatch {
+public:
+    bool rising() {
+        const std::uint32_t now = sapphirelib::millis();
+        const double deg = macros::liftMechanism().position();
+        const std::uint32_t dtMs = sapphirelib::elapsedMs(lastMs_, now);
+        if (dtMs == 0) return degPerS_ > kLiftRisingDegPerS;
+        if (!std::isfinite(deg) || !std::isfinite(lastDeg_) || dtMs > 200) {
+            // No lift motors, or the first sample after a pause (the face was
+            // down): no speed to go on yet.
+            degPerS_ = 0.0;
+        } else {
+            const double sample = (deg - lastDeg_) * 1000.0 / dtMs;
+            degPerS_ += (1.0 - std::exp(-static_cast<double>(dtMs) / kLiftRiseSmoothingMs)) *
+                        (sample - degPerS_);
+        }
+        lastDeg_ = deg;
+        lastMs_ = now;
+        return degPerS_ > kLiftRisingDegPerS;
+    }
+
+private:
+    double lastDeg_ = std::numeric_limits<double>::quiet_NaN();
+    std::uint32_t lastMs_ = 0;
+    double degPerS_ = 0.0;
+};
+
+/// The face (see FaceScreen): up on its own through autonomous and driver
+/// control under competition control, or from the Home page's Face button,
+/// and down at a tap. It squints while the lift climbs, and looks surprised
+/// when the IMU feels a bump.
+FaceScreen& face() {
+    static LiftRiseWatch lift;
+    static FaceScreen instance({
+        .squinting = [] { return lift.rising(); },
+        // TODO: tune BumpConfig::thresholdG (0.8g) if hits go unnoticed or
+        // the robot's own driving looks surprised: the log's face,bump
+        // events have each counted bump's size.
+        .imu = &drivetrain().imu(),
+    });
+    return instance;
+}
 
 } // namespace
 
@@ -95,6 +155,9 @@ void buildScreen() {
         [](bool on) {
             if (on != teach::recording()) teach::requestToggle();
         });
+    // The face outside a match, bottom right of the page. A tap anywhere on
+    // it brings this page back.
+    homePage->addButton("Face", [] { face().show(); });
     gui.addPage(std::move(homePage));
 
     auto autonSelectorPage = std::make_unique<AutonSelectorPage>();
@@ -165,6 +228,8 @@ void buildScreen() {
     // Add your own pages here too: gui.addPage(std::make_unique<MyPage>(...))
 
     gui.start();
+    // Over the whole screen, Gui and all, whenever it's up.
+    face().start();
 }
 
 void runSelectedAuton() {

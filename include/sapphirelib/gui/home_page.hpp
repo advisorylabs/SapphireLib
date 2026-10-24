@@ -17,7 +17,7 @@ namespace sapphirelib::gui {
 
 /**
  * @brief Landing page: battery, competition status, heading, SD logging with a start/stop
- * button, and any rows and on/off buttons of your own
+ * button, and any rows, on/off buttons and plain buttons of your own
  *
  * @b Example
  * @code {.cpp}
@@ -81,6 +81,24 @@ public:
      */
     void addToggle(std::string name, std::function<bool()> isOn, std::function<void(bool)> setOn);
 
+    /**
+     * @brief Add a button that does something when tapped, like putting a FaceScreen up
+     *
+     * Buttons stack up from the page's bottom right corner, in the order added, under the toggles
+     * at the top. There's room for one or two, depending on how far down the page's rows reach
+     *
+     * @note call it before Gui::addPage(), like addToggle(). onTap runs on the GUI's task
+     *
+     * @param label the button's text. Keep it short
+     * @param onTap what a tap does
+     *
+     * @b Example
+     * @code {.cpp}
+     * home->addButton("Face", [] { face.show(); });
+     * @endcode
+     */
+    void addButton(std::string label, std::function<void()> onTap);
+
     const char* title() const override;
     void build(lv_obj_t* container) override;
     void update() override;
@@ -99,13 +117,21 @@ private:
         lv_obj_t* label = nullptr;
     };
 
+    struct Button {
+        std::string label;
+        std::function<void()> onTap;
+    };
+
     void addTelemetryRow();
     static void recordClicked(lv_event_t* e);
     static void toggleClicked(lv_event_t* e);
+    static void buttonClicked(lv_event_t* e);
 
     sensors::Imu* imu_;
     // unique_ptr so each Toggle stays put: its address is the button's event user data
     std::vector<std::unique_ptr<Toggle>> toggles_;
+    // the same, for each Button
+    std::vector<std::unique_ptr<Button>> buttons_;
     // set from whichever task wires telemetry up, read on the GUI's
     std::atomic<telemetry::Logger*> logger_{nullptr};
     std::vector<Row> rows_;

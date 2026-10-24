@@ -53,6 +53,12 @@ void HomePage::addToggle(std::string name, std::function<bool()> isOn,
         Toggle{.name = std::move(name), .isOn = std::move(isOn), .setOn = std::move(setOn)}));
 }
 
+void HomePage::addButton(std::string label, std::function<void()> onTap) {
+    if (container_ != nullptr || !onTap) return; // built already: see the doc comment
+    buttons_.push_back(
+        std::make_unique<Button>(Button{.label = std::move(label), .onTap = std::move(onTap)}));
+}
+
 const char* HomePage::title() const { return "Home"; }
 
 void HomePage::build(lv_obj_t* container) {
@@ -79,6 +85,21 @@ void HomePage::build(lv_obj_t* container) {
         lv_obj_center(toggle->label);
         lv_obj_add_event_cb(toggle->button, &HomePage::toggleClicked, LV_EVENT_CLICKED,
                             toggle.get());
+    }
+
+    // addButton() buttons, the same size, up from the bottom right: the rows on the left are
+    // shortest at the bottom of the page, and the toggles are at the top
+    std::int32_t buttonY = 0;
+    for (const std::unique_ptr<Button>& button : buttons_) {
+        lv_obj_t* obj = lv_button_create(container);
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_set_size(obj, kToggleW, kToggleH);
+        lv_obj_align(obj, LV_ALIGN_BOTTOM_RIGHT, 0, buttonY);
+        buttonY -= kToggleH + kToggleGap;
+        lv_obj_t* label = lv_label_create(obj);
+        lv_label_set_text(label, button->label.c_str());
+        lv_obj_center(label);
+        lv_obj_add_event_cb(obj, &HomePage::buttonClicked, LV_EVENT_CLICKED, button.get());
     }
 
     update();
@@ -194,6 +215,10 @@ void HomePage::update() {
 void HomePage::toggleClicked(lv_event_t* e) {
     Toggle* toggle = static_cast<Toggle*>(lv_event_get_user_data(e));
     toggle->setOn(!toggle->isOn());
+}
+
+void HomePage::buttonClicked(lv_event_t* e) {
+    static_cast<Button*>(lv_event_get_user_data(e))->onTap();
 }
 
 } // namespace sapphirelib::gui

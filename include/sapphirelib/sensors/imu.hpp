@@ -99,6 +99,17 @@ public:
      */
     double headingScale() const;
 
+    /**
+     * @brief Get the accelerometer reading
+     *
+     * pros::Imu::get_accel(): in the sensor's own axes, gravity included, so a flat IMU at rest
+     * reads about 1 on z. Every member is PROS_ERR_F (infinity) while the sensor can't answer.
+     * Safe from any task
+     *
+     * @return pros::imu_accel_s_t x, y and z, in g
+     */
+    pros::imu_accel_s_t getAccelG() const;
+
 private:
     static_assert(std::atomic<double>::is_always_lock_free,
                   "Imu's cross-task heading tracking relies on lock-free atomic doubles");
