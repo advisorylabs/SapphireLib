@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 
 #include "sapphirelib/control/pid.hpp"
 
@@ -98,6 +100,13 @@ struct PositionConfig {
     /** limit on the commanded volts, after feedforward. 12 by default */
     double maxVolts = 12.0;
 
+    /**
+     * a tighter limit on downward (negative) volts, as a positive number, for a mechanism that
+     * shouldn't come down as hard as it goes up. Never looser than maxVolts. No extra limit by
+     * default
+     */
+    double maxDownVolts = std::numeric_limits<double>::infinity();
+
     /** how close counts as at the target, in position units. 1 by default */
     double tolerance = 1.0;
 
@@ -109,6 +118,12 @@ struct PositionConfig {
      * derivative doesn't kick. 100 by default. 0 disables it
      */
     std::uint32_t resetAfterGapMs = 100;
+
+    /**
+     * @brief Get the limit on downward volts, as a positive number: the smaller of maxVolts and
+     * maxDownVolts
+     */
+    double downVoltsLimit() const { return std::min(maxVolts, maxDownVolts); }
 };
 
 /**
@@ -139,7 +154,7 @@ struct PositionCommand {
     /** which branch ran */
     PositionLaw law = PositionLaw::off;
 
-    /** volts to command, already clamped to +-maxVolts. 0 when braking */
+    /** volts to command, already clamped to [-downVoltsLimit(), maxVolts]. 0 when braking */
     double volts = 0.0;
 
     /** whether to brake instead of commanding volts */
@@ -160,7 +175,7 @@ struct PositionCommand {
  *   - position above floor + restBand: PID, but at most -seatVolts (seat)
  *   - otherwise: 0V and reset the PID (rest)
  *
- * then clamp to +-maxVolts
+ * then clamp to [-downVoltsLimit(), maxVolts]
  *
  * @param pid the live PID, whose gains may have been tuned since construction
  * @param config the mechanism's settings

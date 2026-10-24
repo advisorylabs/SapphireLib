@@ -50,7 +50,7 @@ PositionCommand computePositionCommand(PID& pid, const PositionConfig& config, d
         pid.reset();
         law = PositionLaw::rest;
     }
-    const double clamped = std::clamp(volts, -config.maxVolts, config.maxVolts);
+    const double clamped = std::clamp(volts, -config.downVoltsLimit(), config.maxVolts);
     return {.law = law, .volts = clamped, .brake = false};
 }
 

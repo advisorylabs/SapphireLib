@@ -493,6 +493,38 @@ void testClampAtMaxVolts() {
     CHECK(computePositionCommand(withGravity, config, 6.0, 0.0).volts == 8.0);
 }
 
+void testClampAtMaxDownVolts() {
+    // No extra limit by default: down is clamped at maxVolts, like up.
+    PositionConfig config{.pid = {.gains = {.kP = 1.0}}, .maxVolts = 8.0};
+    CHECK(config.downVoltsLimit() == 8.0);
+
+    // A tighter downward limit clamps only going down.
+    config.maxDownVolts = 6.0;
+    CHECK(config.downVoltsLimit() == 6.0);
+    PID up(config.pid);
+    CHECK(computePositionCommand(up, config, 100.0, 0.0).volts == 8.0);
+    PID down(config.pid);
+    CHECK(computePositionCommand(down, config, -100.0, 0.0).volts == -6.0);
+    PID within(config.pid);
+    CHECK(computePositionCommand(within, config, -5.0, 0.0).volts == -5.0);
+
+    // Seating heads down too, so it's clamped the same way, its minimum
+    // included.
+    PositionConfig seated = seatedConfig();
+    seated.pid.gains.kP = 0.2;
+    seated.maxDownVolts = 4.0;
+    PID seating(seated.pid);
+    const PositionCommand command = computePositionCommand(seating, seated, 0.0, 50.0);
+    CHECK(command.law == PositionLaw::seat);
+    CHECK(command.volts == -4.0); // min(-10, -3), then clamped to -4
+
+    // Never looser than maxVolts.
+    config.maxDownVolts = 20.0;
+    CHECK(config.downVoltsLimit() == 8.0);
+    PID loose(config.pid);
+    CHECK(computePositionCommand(loose, config, -100.0, 0.0).volts == -8.0);
+}
+
 void testUpdatesPidAtMostOnce() {
     const PositionConfig config = seatedConfig();
     PID pid(config.pid);
@@ -621,6 +653,7 @@ int main() {
     testRestCutsPowerAndResetsLoop();
     testSensorLostBrakesAndResets();
     testClampAtMaxVolts();
+    testClampAtMaxDownVolts();
     testUpdatesPidAtMostOnce();
     testMillivolts();
     testLawNames();

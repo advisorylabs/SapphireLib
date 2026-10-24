@@ -5,6 +5,7 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
+#include <vector>
 
 #include "pros/motor_group.hpp"
 #include "pros/rotation.hpp"
@@ -108,6 +109,25 @@ public:
     PositionMechanism(std::initializer_list<std::int8_t> motorPorts, PositionSource position,
                       PositionConfig config);
 
+    /**
+     * @brief Construct a new PositionMechanism from ports kept elsewhere, like a config file's
+     * array. Makes no device calls
+     *
+     * @param motorPorts motor ports. Negative reverses a motor
+     * @param position reads the position
+     * @param config PID, feedforward, and settle settings
+     *
+     * @b Example
+     * @code {.cpp}
+     * constexpr std::array<std::int8_t, 3> kLiftPorts{7, -9, 21};
+     * sapphirelib::mechanism::PositionMechanism lift(
+     *     std::vector<std::int8_t>(kLiftPorts.begin(), kLiftPorts.end()), liftPosition,
+     *     liftConfig);
+     * @endcode
+     */
+    PositionMechanism(const std::vector<std::int8_t>& motorPorts, PositionSource position,
+                      PositionConfig config);
+
     PositionMechanism(const PositionMechanism&) = delete;
     PositionMechanism& operator=(const PositionMechanism&) = delete;
 
@@ -126,7 +146,8 @@ public:
     /**
      * @brief Drive with open loop volts until the next setTarget(), holdPosition(), or stop()
      *
-     * @param volts voltage, clamped to +-maxVolts. NaN counts as 0V
+     * @param volts voltage, clamped to [-downVoltsLimit(), maxVolts] (see PositionConfig). NaN
+     * counts as 0V
      *
      * @b Example
      * @code {.cpp}
