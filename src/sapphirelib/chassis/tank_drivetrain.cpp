@@ -3,6 +3,8 @@
 #include <cmath>
 
 #include "pros/rtos.hpp"
+#include "sapphirelib/chassis/competition_watch.hpp"
+#include "sapphirelib/motion/boomerang_math.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 #include "sapphirelib/telemetry/event.hpp"
@@ -17,23 +19,6 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kLoopDelayMs = 10;
 
 constexpr const char* kNoOdometry = "no odometry - call setOdometry() first, or pass one";
-
-// heading error to steer toward a bearing, and which way to drive. Reverses instead of turning
-// more than 90 degrees, like driveDistance() with negative inches
-struct SteeringError {
-    double headingErrorDeg;
-    double direction; // +1 forward, -1 reverse
-};
-
-SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg) {
-    double headingError = wrapDegrees180(targetBearingDeg - currentHeadingDeg);
-    double direction = 1.0;
-    if (std::fabs(headingError) > 90.0) {
-        headingError = wrapDegrees180(headingError - 180.0);
-        direction = -1.0;
-    }
-    return SteeringError{headingError, direction};
-}
 
 // log a motion's end event and return its result
 motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& result) {
@@ -114,6 +99,7 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
 
     // measure from where the encoders read now instead of taring them. A tare would also zero
     // any MotorGroupTrackingWheel on these motors and make odometry jump
+    const CompetitionWatch watch;
     const double startDegrees = sideAverageDegrees();
     drivePID_.reset();
 
@@ -136,6 +122,11 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
         setSideVoltages(output - correction, output + correction);
 
         finalErrorIn = std::fabs(error);
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(std::fabs(error) <= exit.errorThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -155,6 +146,7 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
                      headingDeg, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
 
+    const CompetitionWatch watch;
     turnPID_.reset();
 
     motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
@@ -171,6 +163,11 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
         setSideVoltages(output, -output);
 
         finalErrorDeg = std::fabs(error);
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(std::fabs(error) <= exit.errorThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -191,7 +188,7 @@ motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn,
                      "start,moveToPoint,x=%.3f,y=%.3f,threshold=%.3f,settle_ms=%u,timeout_ms=%u",
                      xIn, yIn, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
-    return finishMotion("moveToPoint", approachPoint(xIn, yIn, odometry, exit));
+    return finishMotion("moveToPoint", approachPoint(xIn, yIn, odometry, exit, CompetitionWatch()));
 }
 
 motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn, ExitConditions exit) {
@@ -201,7 +198,8 @@ motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn, ExitCon
 
 motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
                                                    const odom::Odometry& odometry,
-                                                   ExitConditions exit) {
+                                                   ExitConditions exit,
+                                                   const CompetitionWatch& watch) {
     drivePID_.reset();
     turnPID_.reset();
 
@@ -216,13 +214,18 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
         const double distanceIn = std::hypot(dxIn, dyIn);
         const double targetBearingDeg = std::atan2(dxIn, dyIn) / kPi * 180.0;
 
-        const SteeringError steer = steerToward(targetBearingDeg, pose.headingDeg);
+        const motion::SteeringError steer = motion::steerToward(targetBearingDeg, pose.headingDeg);
         const double forwardOutput = steer.direction * drivePID_.update(distanceIn, 0.0);
         const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
 
         setSideVoltages(forwardOutput + turnOutput, forwardOutput - turnOutput);
 
         finalErrorIn = distanceIn;
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(distanceIn <= exit.errorThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -244,10 +247,15 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
                      exit.headingErrorThresholdDeg, static_cast<unsigned>(exit.settleTimeMs),
                      static_cast<unsigned>(exit.timeoutMs));
 
+    const CompetitionWatch watch;
     drivePID_.reset();
     turnPID_.reset();
 
-    const double targetHeadingRad = headingDeg * kPi / 180.0;
+    // the boomerang (motion::boomerangStep()): curve in toward a carrot behind the target, then
+    // settle, onto the point and turning in place to the final heading once within half the
+    // position threshold
+    const double turnRadiusIn = 0.5 * exit.positionErrorThresholdIn;
+    motion::BoomerangStep step;
 
     motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
@@ -255,29 +263,29 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
-        const double distanceToTargetIn = std::hypot(xIn - pose.xIn, yIn - pose.yIn);
+        const motion::BoomerangStep next =
+            motion::boomerangStep(pose, xIn, yIn, headingDeg, exit.boomerangLeadPct,
+                                  exit.settleRadiusIn, turnRadiusIn, step);
+        // the turn error jumps to something new: no derivative kick from the jump
+        if (next.settling != step.settling || next.turning != step.turning) turnPID_.reset();
+        step = next;
 
-        // boomerang carrot point: behind the target along its heading, moving toward the target as
-        // the chassis closes in, so it curves into the final heading
-        const double carrotOffsetIn = distanceToTargetIn * exit.boomerangLeadPct;
-        const double carrotXIn = xIn - carrotOffsetIn * std::sin(targetHeadingRad);
-        const double carrotYIn = yIn - carrotOffsetIn * std::cos(targetHeadingRad);
-
-        const double dxIn = carrotXIn - pose.xIn;
-        const double dyIn = carrotYIn - pose.yIn;
-        const double targetBearingDeg = std::atan2(dxIn, dyIn) / kPi * 180.0;
-
-        const SteeringError steer = steerToward(targetBearingDeg, pose.headingDeg);
-        const double forwardOutput = steer.direction * drivePID_.update(distanceToTargetIn, 0.0);
-        const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
+        const double forwardOutput =
+            step.direction * step.driveScale * drivePID_.update(step.driveErrorIn, 0.0);
+        const double turnOutput = turnPID_.update(step.turnErrorDeg, 0.0);
 
         setSideVoltages(forwardOutput + turnOutput, forwardOutput - turnOutput);
 
         const double headingErrorToFinalDeg =
             std::fabs(wrapDegrees180(headingDeg - pose.headingDeg));
-        const bool withinThreshold = distanceToTargetIn <= exit.positionErrorThresholdIn &&
+        const bool withinThreshold = step.distanceIn <= exit.positionErrorThresholdIn &&
                                      headingErrorToFinalDeg <= exit.headingErrorThresholdDeg;
-        finalErrorIn = distanceToTargetIn;
+        finalErrorIn = step.distanceIn;
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            reason = motion::ExitReason::interrupted;
+            break;
+        }
         reason = tracker.update(withinThreshold, pros::millis());
         if (reason != motion::ExitReason::running) break;
 
@@ -307,6 +315,7 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
                      static_cast<unsigned>(path.waypoints().size()), config.lookaheadIn,
                      config.cruiseVoltage, static_cast<unsigned>(config.timeoutMs));
 
+    const CompetitionWatch watch;
     turnPID_.reset();
 
     std::size_t segmentIndex = 0;
@@ -333,6 +342,13 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
                                                      .finalError = distToFinalIn,
                                                      .elapsedMs = pursuitMs});
         }
+        if (watch.changed()) {
+            stop();
+            return finishMotion("followPath",
+                                motion::MotionResult{.reason = motion::ExitReason::interrupted,
+                                                     .finalError = distToFinalIn,
+                                                     .elapsedMs = pursuitMs});
+        }
 
         const motion::LookaheadResult lookahead =
             motion::findLookaheadPoint(pose.xIn, pose.yIn, path, config.lookaheadIn, segmentIndex);
@@ -350,7 +366,7 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
     }
 
     motion::MotionResult result =
-        approachPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit);
+        approachPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit, watch);
     // the final approach decides how the path ended, but the time covers the whole path
     result.elapsedMs = pros::millis() - startMs;
     return finishMotion("followPath", result);

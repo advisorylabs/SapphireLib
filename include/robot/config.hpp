@@ -113,7 +113,11 @@ constexpr double kHorizontalWheelOffsetIn = 4.18;
 // these are placeholders for sensors centered on each side of a ~14in chassis.
 // Or measure them roughly and let the Odom page's "Calibrate Sensors" find
 // them: it applies what it finds until the program restarts, and the terminal
-// logs each sensor's {.forwardIn, .rightIn} to copy here.
+// logs each sensor's {.forwardIn, .rightIn} to copy here. From a wall or a
+// corner (no full field) it keeps one length from here, so measure it across
+// the robot, face to face: front to back (kFrontSensorForwardIn -
+// kBackSensorForwardIn) plus right to left (kRightSensorRightIn -
+// kLeftSensorRightIn). It finds everything else, the tracking center too.
 constexpr double kFrontSensorForwardIn = 7.0;
 constexpr double kFrontSensorRightIn = 0.0;
 constexpr double kRightSensorForwardIn = 0.0;

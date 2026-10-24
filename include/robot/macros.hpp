@@ -50,12 +50,12 @@
  * no sensor. Nothing else moves the lift. A press of A flips the claw piston
  * (G) and a press of X the top piston (H), and nothing else moves either:
  * R1 intakes at once, R2 only reverses the intake and roller claw (it never
- * scores), Y spins the roller claw in, and releasing Y doesn't dip. X is
- * also half of the X+UP auton shortcut, so starting a routine that way in
- * debug mode flips H too. Leaving debug mode puts the lift back on its level
- * (level 1 or up with the claw deployed, the bottom with it retracted), so
- * expect it to move, and retracts the top piston until the lift is at the
- * top level again.
+ * scores), Y spins the roller claw in, and releasing Y doesn't dip. X and A
+ * are also halves of shortcuts, so in debug mode the X+UP auton shortcut
+ * flips H too, and teach mode's X+A (teach.hpp) flips both. Leaving debug
+ * mode puts the lift back on its level (level 1 or up with the claw
+ * deployed, the bottom with it retracted), so expect it to move, and
+ * retracts the top piston until the lift is at the top level again.
  *
  * Controller screen: line 0 is the goal and level ("STOW" when stowed, or
  * "DBG" and each piston in debug mode), line 2 the readout LEFT picks. Line 1
@@ -108,6 +108,11 @@ void setDebug(bool on);
 /// Whether debug mode is on (or about to be, on update()'s next tick). Safe
 /// from any task.
 bool debug();
+
+/// Whether the roller claw's distance sensor sees a pin: what an autonomous
+/// routine branches on (autons.cpp's Branch routines). Reads the sensor, so
+/// it's current; safe from any task, including a trajectory's next.
+bool pinInClaw();
 
 /// Logs the lift to `logger`: its PID's every step (channel "lift") and
 /// what each update actually commanded (channel "lift.act": target and

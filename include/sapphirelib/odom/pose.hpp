@@ -18,4 +18,16 @@ struct Pose {
     double headingDeg = 0.0;
 };
 
+/**
+ * @brief How fast the robot is moving on the field, in the same frame as Pose
+ */
+struct Velocity {
+    /** x speed, in inches per second */
+    double xInPerS = 0.0;
+    /** y speed, in inches per second */
+    double yInPerS = 0.0;
+    /** turn rate, in degrees per second, clockwise positive */
+    double headingDegPerS = 0.0;
+};
+
 } // namespace sapphirelib::odom

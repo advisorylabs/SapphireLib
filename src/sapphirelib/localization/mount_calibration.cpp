@@ -28,11 +28,30 @@ constexpr double kMissedU = 10.0;
 // reading an outlier
 constexpr double kMadToSigma = 1.4826;
 constexpr double kMinScale = 0.02;
+// and never above this once the fit is near. The beam model's noise is the sensor's spec, so a
+// wider spread comes from readings that aren't walls at all, as around one wall in a room full of
+// things, where they can be most of the readings, and a scale that wide would let them all in
+constexpr double kMaxScale = 1.0;
+// nor above this before then, while the configured mounts can put a wall's readings a few inches
+// off. Near a wall that's several times their noise, and the tighter limit would throw them out
+// before the fit could move the mount to them
+constexpr double kMaxStartScale = 3.0;
 
 // weak priors, so a parameter no reading pins down stays put instead of making the fit singular
 constexpr double kCenterPriorIn = 200.0;
 constexpr double kHeadingPriorRad = 2.0;
 constexpr double kAlongPriorIn = 12.0;
+
+// from walls on one or two sides, how tightly the fit holds the configured mounts' spacing, in
+// inches: close enough to exact, loose enough to keep the system well conditioned
+constexpr double kSpacingSigmaIn = 1e-3;
+// the sensors' facings leave no spacing to hold when less than this share of "every offset grows
+// alike" is left once a shift of the tracking center explains what it can
+constexpr double kMinSpacingShare = 1e-3;
+// from one wall or a corner, a wall this far out of square with the robot's heading, in degrees, is
+// something else across the room the fit took for one (skewedWall()). A corner of the field is
+// square to well within it, and the fit tells a wall's skew to about a degree
+constexpr double kMaxWallSkewDeg = 3.0;
 
 // the start's heading is searched on a grid before the fit refines it. Half a turn covers every
 // start, since the walls look the same from half a turn around
@@ -88,6 +107,13 @@ struct Problem {
     // each parameter's prior: mean and standard deviation
     std::vector<double> priorMean;
     std::vector<double> priorSigma;
+    // from walls on one or two sides only: a weight per sensor (spacingWeights()), and the
+    // weighted sum of the along-beam offsets the fit holds them to. Empty when the walls pin them
+    std::vector<double> spacing;
+    double spacingTarget = 0.0;
+    // walls the fit leaves out, a bit each as in SensorMountFit::walls: from one wall, ones that
+    // came to rest on something else across the room (skewedWall())
+    std::uint8_t ignoredWalls = 0;
 };
 
 // a reading as the parameters predict it, and how the prediction changes with each of them
@@ -97,6 +123,8 @@ struct Prediction {
     int wall = kLeft;
     // |cos| of the angle between the beam and the wall's normal: 1 square on
     double cosIncidence = 0.0;
+    // sin of that angle, signed: which way along the wall the beam leans
+    double slant = 0.0;
     double dX = 0.0;
     double dY = 0.0;
     double dHeading = 0.0;
@@ -136,6 +164,7 @@ Prediction predict(const Reading& reading, const std::vector<double>& p, double 
     if (tx <= ty) {
         out.expectedIn = tx;
         out.wall = ux > 0.0 ? kRight : kLeft;
+        out.slant = uy;
         out.dX = -1.0 / ux;
         u = ux;
         n = nx;
@@ -143,6 +172,7 @@ Prediction predict(const Reading& reading, const std::vector<double>& p, double 
     } else {
         out.expectedIn = ty;
         out.wall = uy > 0.0 ? kFar : kNear;
+        out.slant = ux;
         out.dY = -1.0 / uy;
         u = uy;
         n = ny;
@@ -183,16 +213,29 @@ double median(std::vector<double> values) {
     return 0.5 * (lower + upper);
 }
 
+// the along-beam offsets' weighted sum the spacing holds, 0 with none
+double spacingSum(const Problem& problem, const std::vector<double>& p) {
+    double sum = 0.0;
+    for (std::size_t s = 0; s < problem.spacing.size(); ++s) {
+        sum += problem.spacing[s] * p[alongIndex(s)];
+    }
+    return sum;
+}
+
 double priorCost(const Problem& problem, const std::vector<double>& p) {
     double total = 0.0;
     for (std::size_t k = 0; k < p.size(); ++k) {
         const double z = (p[k] - problem.priorMean[k]) / problem.priorSigma[k];
         total += 0.5 * z * z;
     }
+    if (!problem.spacing.empty()) {
+        const double z = (spacingSum(problem, p) - problem.spacingTarget) / kSpacingSigmaIn;
+        total += 0.5 * z * z;
+    }
     return total;
 }
 
-// which readings this iteration fits: a wall hit nearly square on
+// which readings this iteration fits: a wall hit nearly square on, and not one it leaves out
 void selectReadings(const Problem& problem, const std::vector<double>& p,
                     std::vector<char>& selected) {
     const double sinHeading = std::sin(p[kHeading]);
@@ -201,7 +244,8 @@ void selectReadings(const Problem& problem, const std::vector<double>& p,
     for (std::size_t j = 0; j < problem.readings.size(); ++j) {
         const Prediction prediction =
             predict(problem.readings[j], p, sinHeading, cosHeading, problem.box);
-        selected[j] = prediction.usable && prediction.cosIncidence >= problem.cosMaxIncidence;
+        selected[j] = prediction.usable && prediction.cosIncidence >= problem.cosMaxIncidence &&
+                      (problem.ignoredWalls & (1u << prediction.wall)) == 0;
     }
 }
 
@@ -222,14 +266,14 @@ std::vector<double> normalizedErrors(const Problem& problem, const std::vector<d
     return errors;
 }
 
-double robustScale(const std::vector<double>& errors) {
+double robustScale(const std::vector<double>& errors, double maxScale) {
     std::vector<double> sizes;
     sizes.reserve(errors.size());
     for (const double z : errors) {
         if (std::isfinite(z)) sizes.push_back(std::fabs(z));
     }
     if (sizes.empty()) return 1.0;
-    return std::max(kMinScale, kMadToSigma * median(std::move(sizes)));
+    return std::clamp(kMadToSigma * median(std::move(sizes)), kMinScale, maxScale);
 }
 
 double cost(const Problem& problem, const std::vector<double>& p, const std::vector<char>& selected,
@@ -278,6 +322,17 @@ void normalEquations(const Problem& problem, const std::vector<double>& p,
         const double inverseVariance = 1.0 / (problem.priorSigma[k] * problem.priorSigma[k]);
         hessian[k * n + k] += inverseVariance;
         gradient[k] += (p[k] - problem.priorMean[k]) * inverseVariance;
+    }
+    if (!problem.spacing.empty()) {
+        const double inverseVariance = 1.0 / (kSpacingSigmaIn * kSpacingSigmaIn);
+        const double offBy = spacingSum(problem, p) - problem.spacingTarget;
+        for (std::size_t a = 0; a < problem.spacing.size(); ++a) {
+            gradient[alongIndex(a)] += problem.spacing[a] * offBy * inverseVariance;
+            for (std::size_t b = 0; b < problem.spacing.size(); ++b) {
+                hessian[alongIndex(a) * n + alongIndex(b)] +=
+                    problem.spacing[a] * problem.spacing[b] * inverseVariance;
+            }
+        }
     }
 }
 
@@ -408,7 +463,7 @@ void noiseFromPredictions(Problem& problem, const std::vector<double>& p) {
 // from the start's errors and may only shrink: allowed to grow, a fit drifting toward a compromise
 // between two explanations (the wall, and something flat in front of it) widens the scale, which
 // lets more of the readings it doesn't explain back in, which drags it further
-std::vector<double> refine(Problem problem, std::vector<double> p) {
+std::vector<double> refine(Problem problem, std::vector<double> p, double maxScale) {
     const std::size_t n = p.size();
     std::vector<char> selected;
     std::vector<double> hessian;
@@ -418,7 +473,7 @@ std::vector<double> refine(Problem problem, std::vector<double> p) {
     for (int iteration = 0; iteration < kMaxIterations; ++iteration) {
         noiseFromPredictions(problem, p);
         selectReadings(problem, p, selected);
-        scale = std::min(scale, robustScale(normalizedErrors(problem, p, selected)));
+        scale = std::min(scale, robustScale(normalizedErrors(problem, p, selected), maxScale));
         normalEquations(problem, p, selected, scale, kTukeyC, hessian, gradient);
         const double current = cost(problem, p, selected, scale, kTukeyC);
 
@@ -453,6 +508,12 @@ std::vector<double> refine(Problem problem, std::vector<double> p) {
     return p;
 }
 
+// refine() with room for readings the configured mounts put inches off, then again with the noise's
+// scale held near the beam model's, once the mounts have moved to their walls
+std::vector<double> fitFrom(const Problem& problem, std::vector<double> p) {
+    return refine(problem, refine(problem, std::move(p), kMaxStartScale), kMaxScale);
+}
+
 double wrapDegrees360(double degrees) {
     const double wrapped = std::fmod(degrees, 360.0);
     return wrapped < 0.0 ? wrapped + 360.0 : wrapped;
@@ -464,6 +525,162 @@ double headingGap(double a, double b) {
     return std::min(gap, 180.0 - gap);
 }
 
+// the readings a fit kept, sensor by sensor and wall by wall
+struct Tally {
+    std::vector<char> selected;
+    double scale = 1.0;
+    std::vector<std::array<std::size_t, 4>> wallReadings;
+    std::vector<std::size_t> readings;
+    std::vector<double> squaredError;
+    std::size_t used = 0;
+    // whether some sensor saw both walls of a pair, which the field's known width pins the robot
+    // between
+    bool pinnedX = false;
+    bool pinnedY = false;
+    // each wall's readings, every sensor's together: how many, and sums for a line through their
+    // errors (in inches) by how they slanted (Prediction::slant), and for the tracking center's
+    // mean distance from the wall
+    struct WallSums {
+        std::size_t count = 0;
+        double slant = 0.0;
+        double slantSquared = 0.0;
+        double error = 0.0;
+        double slantError = 0.0;
+        double distance = 0.0;
+    };
+    std::array<WallSums, 4> walls{};
+};
+
+Tally tally(Problem& problem, const std::vector<double>& p, std::size_t minWallReadings) {
+    Tally out;
+    noiseFromPredictions(problem, p);
+    selectReadings(problem, p, out.selected);
+    const std::vector<double> errors = normalizedErrors(problem, p, out.selected);
+    out.scale = robustScale(errors, kMaxScale);
+    out.wallReadings.assign(problem.sensorCount, {0, 0, 0, 0});
+    out.readings.assign(problem.sensorCount, 0);
+    out.squaredError.assign(problem.sensorCount, 0.0);
+    const double sinHeading = std::sin(p[kHeading]);
+    const double cosHeading = std::cos(p[kHeading]);
+    for (std::size_t j = 0; j < problem.readings.size(); ++j) {
+        if (!out.selected[j] || !std::isfinite(errors[j]) ||
+            weight(errors[j] / out.scale, kTukeyC) == 0.0) {
+            continue;
+        }
+        const Reading& reading = problem.readings[j];
+        const Prediction prediction = predict(reading, p, sinHeading, cosHeading, problem.box);
+        const auto wall = static_cast<std::size_t>(prediction.wall);
+        ++out.wallReadings[reading.sensor][wall];
+        ++out.readings[reading.sensor];
+        const double errorIn = reading.distanceIn - prediction.expectedIn;
+        out.squaredError[reading.sensor] += errorIn * errorIn;
+        ++out.used;
+        Tally::WallSums& sums = out.walls[wall];
+        ++sums.count;
+        sums.slant += prediction.slant;
+        sums.slantSquared += prediction.slant * prediction.slant;
+        sums.error += errorIn;
+        sums.slantError += prediction.slant * errorIn;
+        sums.distance +=
+            (prediction.expectedIn + p[alongIndex(reading.sensor)]) * prediction.cosIncidence;
+    }
+    for (const std::array<std::size_t, 4>& walls : out.wallReadings) {
+        const auto seen = [&](int wall) {
+            return walls[static_cast<std::size_t>(wall)] >= minWallReadings;
+        };
+        out.pinnedX = out.pinnedX || (seen(kLeft) && seen(kRight));
+        out.pinnedY = out.pinnedY || (seen(kNear) && seen(kFar));
+    }
+    return out;
+}
+
+// From one wall, the walls square to it are free to sit anywhere, and one can come to rest on
+// something flat across the room: a cabinet, a box. Few of those are square to the wall, and one
+// that isn't can't agree with it on the robot's heading. Whatever heading the fit settles on, the
+// readings off one of them then run long on one side of square on and short on the other: their
+// error, by how far the beam leans along it, slopes by the robot's distance from it times the
+// angle it's out of square. Real walls, square to each other, show no such slope. With two or more
+// walls seen, the one most out of square, as a bit like SensorMountFit::walls, when that's over
+// kMaxWallSkewDeg; 0 when none is, or only one wall was seen
+std::uint8_t skewedWall(const Tally& kept, std::size_t minWallReadings) {
+    int seen = 0;
+    int worst = -1;
+    double worstSkew = 0.0;
+    for (int wall = kLeft; wall <= kFar; ++wall) {
+        const Tally::WallSums& sums = kept.walls[static_cast<std::size_t>(wall)];
+        if (sums.count < minWallReadings) continue;
+        ++seen;
+        const double n = static_cast<double>(sums.count);
+        const double spread = n * sums.slantSquared - sums.slant * sums.slant;
+        if (!(spread > 0.0) || !(sums.distance > 0.0)) continue;
+        const double slope = (n * sums.slantError - sums.slant * sums.error) / spread;
+        const double skewDeg = std::fabs(std::atan(slope / (sums.distance / n))) / kDegToRad;
+        if (skewDeg > worstSkew) {
+            worstSkew = skewDeg;
+            worst = wall;
+        }
+    }
+    if (seen < 2 || worst < 0 || !(worstSkew > kMaxWallSkewDeg)) return 0;
+    return static_cast<std::uint8_t>(1u << worst);
+}
+
+// From walls on one or two sides, a robot nearer them with every sensor that much further out reads
+// the same, so one length has to come from the configured mounts. Not all of "every offset grows
+// alike", though: the tracking center sitting somewhere else changes opposite sensors' offsets
+// opposite ways, which the readings do see, so it's what's left once that's taken out. With a
+// sensor on each side it's simply their mean; with front, right and back it's the front and back
+// sensors' span, the right one's following from the readings.
+//
+// Weights for the along-beam offsets of the sensors in the fit, summing to 1: the fit holds their
+// weighted sum at the configured mounts'. Empty when nothing's left to hold, which is when those
+// sensors face no more than two ways and not opposite ones: any growth is then the tracking center
+// moving
+std::vector<double> spacingWeights(const std::vector<char>& inFit,
+                                   const std::vector<double>& sinFacing,
+                                   const std::vector<double>& cosFacing) {
+    const std::size_t count = inFit.size();
+    std::size_t sensorsInFit = 0;
+    // moving the tracking center right or forward shortens each offset by sin or cos of its facing.
+    // Made orthonormal, so the weights are the ones less their projections onto them
+    std::vector<std::vector<double>> shifts;
+    for (const std::vector<double>* along : {&sinFacing, &cosFacing}) {
+        std::vector<double> shift(count, 0.0);
+        for (std::size_t s = 0; s < count; ++s) {
+            if (inFit[s]) shift[s] = (*along)[s];
+        }
+        for (const std::vector<double>& other : shifts) {
+            double dot = 0.0;
+            for (std::size_t s = 0; s < count; ++s) dot += shift[s] * other[s];
+            for (std::size_t s = 0; s < count; ++s) shift[s] -= dot * other[s];
+        }
+        double norm = 0.0;
+        for (const double v : shift) norm += v * v;
+        norm = std::sqrt(norm);
+        if (norm < 1e-6) continue;
+        for (double& v : shift) v /= norm;
+        shifts.push_back(std::move(shift));
+    }
+    std::vector<double> weights(count, 0.0);
+    for (std::size_t s = 0; s < count; ++s) {
+        if (!inFit[s]) continue;
+        weights[s] = 1.0;
+        ++sensorsInFit;
+    }
+    for (const std::vector<double>& shift : shifts) {
+        double dot = 0.0;
+        for (std::size_t s = 0; s < count; ++s) dot += shift[s];
+        for (std::size_t s = 0; s < count; ++s) weights[s] -= dot * shift[s];
+    }
+    // the weights are a projection of the ones, so their sum is also their squared length
+    double sum = 0.0;
+    for (const double w : weights) sum += w;
+    if (sensorsInFit == 0 || !(sum >= kMinSpacingShare * static_cast<double>(sensorsInFit))) {
+        return {};
+    }
+    for (double& w : weights) w /= sum;
+    return weights;
+}
+
 } // namespace
 
 const char* mountFitStatusText(MountFitStatus status) {
@@ -472,6 +689,7 @@ const char* mountFitStatusText(MountFitStatus status) {
         case MountFitStatus::noReadings: return "no readings";
         case MountFitStatus::tooFewReadings: return "too few readings of a wall";
         case MountFitStatus::noOppositeWalls: return "no two opposite walls seen";
+        case MountFitStatus::noOppositeSensor: return "no opposite sensor saw a wall";
         case MountFitStatus::uncertain: return "too uncertain";
         case MountFitStatus::implausible: return "moved too far, view blocked?";
     }
@@ -557,6 +775,19 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
         return result;
     }
 
+    // The fit holds the configured mounts' spacing from the start, until a sensor turns out to see
+    // both walls of a pair. From walls on one or two sides, nothing in the readings stops every
+    // sensor moving out and the robot toward the walls together, and far enough along that, the
+    // walls it can't see come into reach of whatever else is around the room. Held over every
+    // sensor with readings for now
+    std::vector<char> withReadings(sensorCount, 0);
+    for (std::size_t s = 0; s < sensorCount; ++s) withReadings[s] = perSensor[s] > 0;
+    const auto holdSpacing = [&](const std::vector<char>& sensors) {
+        problem.spacing = spacingWeights(sensors, sinFacing, cosFacing);
+        problem.spacingTarget = spacingSum(problem, problem.priorMean);
+    };
+    holdSpacing(withReadings);
+
     // search the start's heading on a grid, then refine the best few starts and keep the best
     std::vector<std::pair<double, double>> starts; // (score, heading in degrees)
     for (double heading = -90.0; heading < 90.0; heading += kHeadingGridStepDeg) {
@@ -574,7 +805,7 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
         }
         if (!distinct) continue;
         refined.push_back(heading);
-        std::vector<double> p = refine(problem, startAt(problem, heading * kDegToRad));
+        std::vector<double> p = fitFrom(problem, startAt(problem, heading * kDegToRad));
         const double finalScore = score(problem, p);
         if (finalScore < bestScore) {
             bestScore = finalScore;
@@ -583,43 +814,56 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
     }
 
     // the readings the fit kept, sensor by sensor and wall by wall
-    noiseFromPredictions(problem, best);
-    std::vector<char> selected;
-    selectReadings(problem, best, selected);
-    const std::vector<double> errors = normalizedErrors(problem, best, selected);
-    const double scale = robustScale(errors);
-    const double sinHeading = std::sin(best[kHeading]);
-    const double cosHeading = std::cos(best[kHeading]);
-    std::vector<std::array<std::size_t, 4>> wallReadings(sensorCount, {0, 0, 0, 0});
-    std::vector<double> squaredError(sensorCount, 0.0);
-    for (std::size_t j = 0; j < problem.readings.size(); ++j) {
-        if (!selected[j] || !std::isfinite(errors[j]) ||
-            weight(errors[j] / scale, kTukeyC) == 0.0) {
-            continue;
+    Tally kept = tally(problem, best, config.minWallReadings);
+    bool pinned = kept.pinnedX || kept.pinnedY;
+    if (pinned && !problem.spacing.empty()) {
+        // A sensor saw both walls of a pair, so the field's width pins the spacing: let it go.
+        // Unless that moves it further than a tape measure across the robot is ever off, when the
+        // pair was really one wall and something across the room that happened to line up 140 in
+        // from it
+        Problem released = problem;
+        released.spacing.clear();
+        std::vector<double> p = refine(released, best, kMaxScale);
+        if (std::fabs(spacingSum(problem, p) - problem.spacingTarget) <=
+            config.maxSpacingChangeIn) {
+            problem = std::move(released);
+            best = std::move(p);
+            kept = tally(problem, best, config.minWallReadings);
+        } else {
+            pinned = false;
         }
-        const Reading& reading = problem.readings[j];
-        const Prediction prediction = predict(reading, best, sinHeading, cosHeading, problem.box);
-        ++wallReadings[reading.sensor][static_cast<std::size_t>(prediction.wall)];
-        ++result.sensors[reading.sensor].readings;
-        const double errorIn = reading.distanceIn - prediction.expectedIn;
-        squaredError[reading.sensor] += errorIn * errorIn;
-        ++result.readingsUsed;
     }
-
-    // a pair of opposite walls pins the robot's distance to both, since the field's width is known
-    bool pinnedX = false;
-    bool pinnedY = false;
-    for (std::size_t s = 0; s < sensorCount; ++s) {
-        const auto seen = [&](int wall) {
-            return wallReadings[s][static_cast<std::size_t>(wall)] >= config.minWallReadings;
-        };
-        pinnedX = pinnedX || (seen(kLeft) && seen(kRight));
-        pinnedY = pinnedY || (seen(kNear) && seen(kFar));
+    bool sawWall = false;
+    if (!pinned) {
+        // Walls on one or two sides only (one wall, or a corner): the spacing stays. Only real
+        // walls, though: one that came to rest on something out of square across the room is
+        // left out, and the fit goes again without it, until none is
+        for (int pass = 0; pass < 3 && !problem.spacing.empty(); ++pass) {
+            const std::uint8_t skewed = skewedWall(kept, config.minWallReadings);
+            if (skewed == 0) break;
+            problem.ignoredWalls |= skewed;
+            best = refine(problem, std::move(best), kMaxScale);
+            kept = tally(problem, best, config.minWallReadings);
+        }
+        // and held over just the sensors that saw a wall
+        std::vector<char> inFit(sensorCount, 0);
+        for (std::size_t s = 0; s < sensorCount; ++s) {
+            inFit[s] = kept.readings[s] >= config.minReadings;
+            sawWall = sawWall || inFit[s];
+        }
+        if (inFit != withReadings) {
+            holdSpacing(inFit);
+            if (!problem.spacing.empty()) best = refine(problem, std::move(best), kMaxScale);
+            kept = tally(problem, best, config.minWallReadings);
+        }
     }
+    const bool spacingKept = !problem.spacing.empty();
+    result.spacingFromMounts = spacingKept;
+    result.readingsUsed = kept.used;
 
     std::vector<double> hessian;
     std::vector<double> gradient;
-    normalEquations(problem, best, selected, scale, kTukeyC, hessian, gradient);
+    normalEquations(problem, best, kept.selected, kept.scale, kTukeyC, hessian, gradient);
 
     // the offsets' standard errors: their diagonal of the inverse hessian
     const auto stderrOf = [&](std::size_t index) {
@@ -643,22 +887,28 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
         fit.lateralFitted = fit.lateralStderrIn <= config.maxStderrIn;
         fit.lateralIn = fit.lateralFitted ? best[lateralIndex(s)] : configuredLateral;
         fit.lateralChangeIn = fit.lateralIn - configuredLateral;
-        fit.rmsErrorIn =
-            fit.readings > 0 ? std::sqrt(squaredError[s] / static_cast<double>(fit.readings)) : 0.0;
+        fit.readings = kept.readings[s];
+        fit.rmsErrorIn = fit.readings > 0
+                             ? std::sqrt(kept.squaredError[s] / static_cast<double>(fit.readings))
+                             : 0.0;
         bool onPinnedWall = false;
         for (int wall = kLeft; wall <= kFar; ++wall) {
-            if (wallReadings[s][static_cast<std::size_t>(wall)] < config.minWallReadings) continue;
+            if (kept.wallReadings[s][static_cast<std::size_t>(wall)] < config.minWallReadings) {
+                continue;
+            }
             fit.walls |= static_cast<std::uint8_t>(1u << wall);
             const bool xWall = wall == kLeft || wall == kRight;
-            if ((xWall && pinnedX) || (!xWall && pinnedY)) onPinnedWall = true;
+            if ((xWall && kept.pinnedX) || (!xWall && kept.pinnedY)) onPinnedWall = true;
         }
 
         if (perSensor[s] == 0) {
             fit.status = MountFitStatus::noReadings;
         } else if (fit.readings < config.minReadings) {
             fit.status = MountFitStatus::tooFewReadings;
-        } else if (!onPinnedWall) {
-            fit.status = MountFitStatus::noOppositeWalls;
+        } else if (!spacingKept && !onPinnedWall) {
+            // with the spacing held, every wall is pinned
+            fit.status =
+                pinned ? MountFitStatus::noOppositeWalls : MountFitStatus::noOppositeSensor;
         } else if (!(fit.alongStderrIn <= config.maxStderrIn)) {
             fit.status = MountFitStatus::uncertain;
         } else if (std::fabs(fit.alongChangeIn) > config.maxChangeIn ||
@@ -681,8 +931,9 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
     result.start = odom::Pose{
         .xIn = best[kX], .yIn = best[kY], .headingDeg = wrapDegrees360(best[kHeading] / kDegToRad)};
     if (!result.ok) {
-        result.error = (pinnedX || pinnedY) ? "no sensor could be calibrated"
-                                            : "no sensor saw two opposite walls";
+        result.error = pinned || spacingKept ? "no sensor could be calibrated"
+                       : sawWall             ? "no two opposite sensors saw a wall"
+                                             : "no sensor saw a wall";
     }
     return result;
 }

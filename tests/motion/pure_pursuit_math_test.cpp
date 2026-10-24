@@ -295,6 +295,39 @@ void testLookaheadDoesNotSkipToALapsLastSide() {
     expectTrue(offset.ticks > 500, "a lap driven off to one side runs the whole lap");
 }
 
+void testOffThePathGoesBackToIt() {
+    // a path that starts 20in from the robot, with a 6in lookahead: the circle reaches none of it.
+    // It used to head straight for the end, skipping the path; now it goes to the nearest point
+    const Path path({{0, 20}, {0, 50}, {30, 50}});
+    auto result = findLookaheadPoint(0.0, 0.0, path, 6.0, 0);
+    expectNear(result.point.xIn, 0.0, "nearest point x");
+    expectNear(result.point.yIn, 20.0, "nearest point: the path's start");
+    expectTrue(result.segmentIndex == 0, "on the first segment");
+    // knocked 15in off the middle of the second segment
+    result = findLookaheadPoint(15.0, 35.0, path, 6.0, 0);
+    expectNear(result.point.xIn, 0.0, "back across to the first segment");
+    expectNear(result.point.yIn, 35.0, "level with the robot");
+    expectTrue(result.segmentIndex == 0, "still the first segment");
+    // ...off the last one, and pursuit doesn't think it's done
+    result = findLookaheadPoint(15.0, 65.0, path, 6.0, 1);
+    expectNear(result.point.xIn, 15.0, "onto the last segment x");
+    expectNear(result.point.yIn, 50.0, "onto the last segment y");
+    expectTrue(result.segmentIndex == 1, "the last segment");
+    expectTrue(!reachedFinalApproach(std::hypot(30.0 - 15.0, 50.0 - 65.0), 6.0, 1, 3),
+               "not at the end yet");
+    // still heads for the end once the rest of the path is inside the circle
+    result = findLookaheadPoint(28.0, 51.0, path, 6.0, 1);
+    expectNear(result.point.xIn, 30.0, "the end x");
+    expectNear(result.point.yIn, 50.0, "the end y");
+
+    // driven from 20in off: it reaches the path and runs all of it, every corner passed
+    const PursuitRun run = pursue(path, 0.0, 0.0, 6.0, newFinalApproach);
+    for (std::size_t i = 0; i < path.waypoints().size(); ++i) {
+        expectTrue(run.closestToWaypointIn[i] < 6.0, "passes every waypoint");
+    }
+    expectTrue(std::hypot(run.xIn - 30.0, run.yIn - 50.0) <= 6.0, "hands over at the end");
+}
+
 } // namespace
 
 int main() {
@@ -309,6 +342,7 @@ int main() {
     testClosedPathDrivesTheWholeLap();
     testLookaheadMatchesTheOldSearchOnOpenPaths();
     testLookaheadDoesNotSkipToALapsLastSide();
+    testOffThePathGoesBackToIt();
     std::puts("pure_pursuit_math_test: all assertions passed");
     return 0;
 }

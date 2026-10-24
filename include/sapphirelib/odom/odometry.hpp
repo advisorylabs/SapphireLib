@@ -121,6 +121,13 @@ public:
 
         /** how many times setPose() has run. Pass it to setPositionCorrection() */
         std::uint32_t resetCount = 0;
+
+        /**
+         * how fast rawPose moved over the last update (10ms at startTask()'s default). Raw, so a
+         * correction easing in never reads as motion. Zero before the second update and right
+         * after setPose()
+         */
+        Velocity rawVelocity;
     };
 
     /**
@@ -183,6 +190,7 @@ private:
     // everything the pose is made of, behind one lock so a snapshot() is consistent
     struct State {
         Pose raw;
+        Velocity rawVelocity;
         double correctionXIn = 0.0;
         double correctionYIn = 0.0;
         double targetXIn = 0.0;
@@ -196,6 +204,9 @@ private:
 
     // when the last update() ran, for easing the correction in. 0 before the first
     std::uint32_t lastUpdateMs_ = 0;
+
+    // the same, in microseconds, for the velocity: a 1ms clock is 10% of a 10ms update
+    std::uint64_t lastUpdateUs_ = 0;
 
     // the last update's rotation reading (getCumulativeHeadingDeg()), which setPose() never
     // shifts, so a re-frame between two updates isn't mistaken for a turn

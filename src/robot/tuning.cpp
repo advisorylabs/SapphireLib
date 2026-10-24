@@ -12,14 +12,17 @@
 
 #include "robot/tuning.hpp"
 
+#include <cmath>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
 #include "robot/telemetry.hpp"
 #include "sapphirelib/control/feedforward.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
+#include "sapphirelib/motion/trajectory_generator.hpp"
 #include "sapphirelib/telemetry/characterization_tap.hpp"
 #include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/util/log.hpp"
@@ -30,8 +33,11 @@ using sapphirelib::MotorFeedforward;
 using sapphirelib::chassis::DriverInputMode;
 using sapphirelib::chassis::HolonomicAxisModels;
 using sapphirelib::gui::PidTunerPage;
+using sapphirelib::motion::generateTrajectory;
 using sapphirelib::motion::LocalOffset;
 using sapphirelib::motion::toLocalFrame;
+using sapphirelib::motion::TrajectoryResult;
+using sapphirelib::motion::TrajectorySection;
 using sapphirelib::odom::Pose;
 using sapphirelib::telemetry::Channel;
 using sapphirelib::telemetry::ChannelOptions;
@@ -58,6 +64,31 @@ void driveTuningTest() {
 void turnTuningTest() {
     drivetrain().turnToHeading(90);
     drivetrain().turnToHeading(0);
+}
+
+// For the three Track controllers: a trajectory out to a point 20in ahead
+// and 10in right, turning 45 degrees on the way, a stop, and straight back.
+// It uses all three axes at once, which is what the tracking gains are for,
+// and it's planned from the measured models, so it needs Auto-Tune's axes
+// first.
+void trackingTuningTest() {
+    const Pose start = odometry().getPose();
+    const double rad = start.headingDeg * 3.14159265358979323846 / 180.0;
+    // 20in ahead and 10in to the right, on the field
+    const double outX = start.xIn + 20.0 * std::sin(rad) + 10.0 * std::cos(rad);
+    const double outY = start.yIn + 20.0 * std::cos(rad) - 10.0 * std::sin(rad);
+    const std::vector<TrajectorySection> chain{
+        {.waypoints = {{.xIn = start.xIn, .yIn = start.yIn, .headingDeg = start.headingDeg},
+                       {.xIn = outX, .yIn = outY, .headingDeg = start.headingDeg + 45.0}},
+         .stopAtEnd = true},
+        {.waypoints = {{.xIn = start.xIn, .yIn = start.yIn, .headingDeg = start.headingDeg}}},
+    };
+    const TrajectoryResult plan = generateTrajectory(chain, drivetrain().axisModels());
+    if (!plan.ok) {
+        SAPPHIRELIB_LOG_ERROR("tune", "tracking test: %s", plan.error.c_str());
+        return;
+    }
+    drivetrain().followTrajectory(plan.trajectory);
 }
 
 // --- Auto-Tune for PidTunerPage ---
@@ -96,6 +127,10 @@ constexpr ResponseSpec kHeadingHoldResponse{.settleTimeS = 0.9, .dampingRatio = 
 // macros::liftExperiment(). Its loop runs at the 20ms opcontrol tick, which
 // the design allows for.
 constexpr ResponseSpec kLiftResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
+// followTrajectory()'s three PDs only correct what the feedforward missed,
+// so the errors stay small and they can be quicker than a step response.
+// A starting point; the delay check slows it down if the axis can't take it.
+constexpr ResponseSpec kTrackingResponse{.settleTimeS = 0.4, .dampingRatio = 1.0};
 
 // The char.* channels' rows arrive every 10ms (the runner's sample period)
 // during a run; 512 rows is 5s of them, far more than the logger's writer
@@ -243,6 +278,15 @@ void registerTuning(PidTunerPage& page) {
                        kHeadingHoldResponse);
     page.addController("Lift", macros::liftMechanism().pid(), &macros::liftTuningTest, "Lift",
                        kLiftResponse);
+    // followTrajectory()'s per-axis tracking PDs, each designed from its own
+    // axis, so strafing gets gains for the strafe model instead of borrowing
+    // the forward axis's.
+    page.addController("Track F", drivetrain().trackingForwardPID(), &trackingTuningTest, "Fwd",
+                       kTrackingResponse);
+    page.addController("Track S", drivetrain().trackingStrafePID(), &trackingTuningTest, "Strafe",
+                       kTrackingResponse);
+    page.addController("Track T", drivetrain().trackingTurnPID(), &trackingTuningTest, "Turn",
+                       kTrackingResponse);
     // Driver stick mode - see DriverInputMode. Velocity needs Auto-Tune's
     // models; until an axis has one, that axis quietly keeps voltage behavior.
     page.setToggle(

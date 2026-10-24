@@ -424,6 +424,76 @@ defaults shipped here.
       live heading). They now hold the heading the motion started with through the turn PID, the same
       way `moveToPose()` holds its target, and `followPath()` carries its starting heading through the
       final `moveToPoint()` approach.
+- [x] Holonomic trajectories: `motion::generateTrajectory()` plans a chain of `TrajectorySection`s
+      (waypoints, optional headings, per-section `TrajectoryConstraints`, optional `stopAtEnd`) and
+      `HolonomicDrivetrain::followTrajectory()` drives it. The path is a C2 cubic spline through the
+      waypoints (split at stops, so the robot may turn sharply at rest), the heading eases between the
+      waypoints that have one (smootherstep over arc length). The speed plan respects the wheel mix:
+      the forward, strafe and turn volts the measured axis models need must add up to the voltage
+      budget, since that sum is the worst corner after mixing, which is what slows diagonals, corners
+      and turning while driving. Static friction is shared between the axes by their share of the
+      motion (`frictionVolts()`), so a barely-moving axis doesn't jump to its full kS. The follower
+      (`motion::TrajectoryFollower`, pure; the drivetrain is a shell around it) drives
+      `trajectoryFeedforward()` plus a PD per axis on the robot-frame error, with the velocity error
+      from the new `Odometry::Snapshot::rawVelocity` as the D term (`PID::updateWithRate()`). The
+      plan pauses while the robot is more than `maxLagIn` behind it. `trajectoryProgress()` lets a
+      routine start a mechanism as the robot enters a section, without stopping. The three tracking
+      PIDs are on the PID page as Track F/S/T, designed by Auto-Tune from their own axes, persisted in
+      TUNE.CFG (`pid.trackFwd`...), and logged with the plan (`traj.plan`) and the reference (`traj`).
+      Sapphire Sim ports all of it (`tools/sim/js/trajectory.js`) and adds a Paths tab to draw, chain,
+      preview, run and export trajectories as C++. The analyzer overlays the plan on replays and
+      reports tracking error, time spent waiting, and time against the plan. Unit-tested in
+      `tests/motion/trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (including the
+      closed-form voltage-limited profile and golden values shared with the sim) and
+      `holonomic_tracking_test.cpp` (closed loop on a simulated chassis with delay); guide in
+      [`docs/TRAJECTORIES.md`](TRAJECTORIES.md). **Not yet driven on the robot**: it depends on the
+      axis models from Auto-Tune and on odometry, neither verified on the real chassis yet (see
+      Phase 2).
+- [x] Branching between trajectories planned separately, on a sensor mid-routine: with a stop (the
+      trunk settles, the routine reads the sensor and follows a branch) or at speed. A trajectory can
+      start where another ends, at its speed and in its direction of travel
+      (`TrajectoryOptions::from`, a spline clamped to that direction), and end moving
+      (`endSpeedInPerS`); `TrajectoryFollowConfig::next` picks the trajectory to carry on into at
+      each junction, and the follower drives straight through it, the clock running on and the
+      feedback untouched. A branch that can't take the junction speed fails to plan, saying so. Logged
+      as one motion (`motion,continue` events, a `traj.plan` burst per piece), read that way by the
+      analyzer. The robot has Branch Test and Branch At Speed routines on the claw's pin sensor;
+      Sapphire Sim has a Branch at speed routine on its front distance sensor. Unit-tested in
+      `trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (a branch golden case shared with
+      the sim) and `holonomic_tracking_test.cpp` (closed loop through the junction).
+- [x] Teach mode: X+A in driver control records a drive (odometry's pose and the held buttons every
+      tick) to TEACH.TXT, and the Taught Route auton replays it: `motion::trajectoryFromRecording()`
+      trims, smooths and differentiates the drive into a time-based trajectory, slowed evenly to fit
+      the voltage budget, and `input::ButtonPlayback` plays the buttons into the macros through
+      `Controller::replay()` on the plan's clock, never dropping a press. Guide in
+      [`docs/TEACH.md`](TEACH.md); unit-tested in `recorded_trajectory_test.cpp` (a replay followed in
+      closed loop, a turn in place, the file format) and `button_playback_test.cpp`. **Not yet run on
+      the robot.**
+- [x] Pathing bug fixes from a review: a motion on a `MotionQueue`'s task outlived `autonomous()`
+      and drove on into driver control until it timed out (every drivetrain motion now ends
+      `interrupted` when the competition mode changes under it, `motion::competitionModeChanged()`);
+      `trajectoryProgress()` still showed the last trajectory's progress until a queued one's first
+      tick, so `waitUntil(section >= 1)` could fire at once on a second trajectory (it now numbers
+      the motions, `TrajectoryProgress::motion`); and pure pursuit, with the robot farther than the
+      lookahead from the whole remaining path, headed straight for the last waypoint and skipped the
+      rest (`findLookaheadPoint()` now goes back to the nearest point of the path).
+- [x] `TankDrivetrain::moveToPose()` settles on its final heading: the boomerang picked forward or
+      reverse afresh every tick, so a carrot swinging past 90 degrees had it back in facing the wrong
+      way, and it steered on the bearing to its carrot right to the end (noise within an inch), with
+      nothing turning it to the final heading its exit requires. The steering is now pure and tested
+      (`motion::boomerangStep()`): the direction is picked once (the carrot goes in front of the
+      target when backing in), it turns before driving when facing well away, and within
+      `PoseExitConditions::settleRadiusIn` (3 in) it heads for the point itself, then turns in place
+      to the final heading. On a simulated tank driving to 300 random poses it settles 299 (69
+      before), and 297 or more with odometry noise (12 to 29 before). In
+      `tests/motion/boomerang_math_test.cpp`. **Not yet run on a tank.**
+- [x] One task at the SD card at a time: PROS's SD driver calls the VEX SDK's file functions bare,
+      with no lock between tasks, so teach mode saving while the logger wrote was up to VEXos. Every
+      card call now holds `telemetry::SdCardLock`: the logger for each writer pass, teach mode and
+      TUNE.CFG a 4 KB chunk at a time (`readCardFile()`/`writeCardFile()`), and a saved drive is
+      read back to verify it. `tools/telemetry/check_sd_access.py`, in CI, fails on any card call
+      made without it (proven against three deliberate breaks). The SD Stress Test auton checks it
+      on the brain, which hasn't been done yet.
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware**; tab bar height has been bumped twice in response to that
@@ -440,11 +510,11 @@ robot (default `1.0` is a no-op); the new `DiagnosticsPage`/`PidTunerPage` widge
 specifically, haven't had on-hardware time yet the way the rest of the GUI has. The identification and
 gain-design math is verified against a simulated axis (including delay and sensor noise), but the
 characterization voltages/travel in `src/robot/tuning.cpp` are unmeasured starting points, and how the fit holds
-up against real odometry noise, wheel slip, and backlash hasn't been checked. Still to come on the tuning
-side: motion profiles with feedforward and measured-velocity feedback in `moveToPoint()`/`followPath()`
-(per-axis gains, so strafing stops borrowing the forward axis's), and an automated path-tracking
-validation run, for which the SD telemetry now records the data (see above), though it hasn't run
-against a real card yet. The lift's Auto-Tune and the new telemetry are verified on the host
+up against real odometry noise, wheel slip, and backlash hasn't been checked. Motion profiles with
+feedforward, measured-velocity feedback and per-axis gains now exist as `followTrajectory()` (above);
+`moveToPoint()`/`followPath()` are unchanged and still share the forward axis's gains for strafing. Still
+to come on the tuning side: an automated path-tracking validation run, for which the SD telemetry now
+records the data (`traj` against `odom`, see above), though it hasn't run against a real card yet. The lift's Auto-Tune and the new telemetry are verified on the host
 (simulated axes, fake clock) and compile-checked only; the analyzer has been run against simulated
 logs, not a real match's.
 
@@ -778,6 +848,26 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       offset, so sideways is applied only when its standard error is under 0.25 in. Along-beam
       lands within about 0.1 in at the simulator's sensor noise; sensors that saw no pinned pair of
       walls are left alone.
+- [x] Mount calibration from one wall or a corner, for teams without a full field. From walls on
+      one or two sides only one length is missing (every sensor further out with the robot nearer
+      the walls reads the same), so `fitSensorMounts()` holds the configured mounts' spacing, as
+      the part of "every offset grows alike" that no shift of the tracking center explains
+      (`spacingWeights()`: the mean along-beam offset with a sensor on each side), and finds
+      everything else, the tracking center included. A sensor seeing an opposite pair lets the
+      field's width take over, as before. What stress runs over random rooms (a wall or a corner
+      1–4 ft away, up to twelve pieces of furniture in reach, mounts off by a few inches) taught:
+      the spacing has to be held from the first pass, or the fit slides every sensor out until the
+      walls it can't see land on furniture (mounts 30 in off, caught only by the 6 in limit);
+      letting the width take over needs a limit too (`maxSpacingChangeIn`, 3 in), or a flat thing
+      lined up across the room from 5 ft away passes for a field and moves every sensor 4 in; the
+      noise scale needs a ceiling (3× the beam model's while the mounts move, then 1×), or the
+      furniture's readings, most of the readings, pass for the sensors' noise and leave them too
+      uncertain (5–14% of rooms refused, against about 1%); and from one wall, the fit's walls
+      square to it float and settle on a cabinet's face, so a wall more than 3° out of square with
+      the others is left out (`skewedWall()`), which took one-wall errors past 0.4 in from 4% of
+      rooms to none within 3 ft. From a wall or corner within 3 ft, along-beam lands within about
+      0.05 in of where the spacing puts it, closer than from a full field, since every reading is
+      short.
 
 **Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
 in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts

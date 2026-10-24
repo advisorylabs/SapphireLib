@@ -66,6 +66,7 @@
       });
       this.robot.localizerPeriodMs = o.localizerPeriodMs;
       this.robot.localizer.setCorrectionEnabled(o.correctOdometry);
+      this.robot.drivetrain.setAxisModels(o.world.models);
       this.program = null;
       this.programName = null;
       this.programResult = null;
@@ -95,15 +96,19 @@
       if (!this.options.useAutoTune) return R.HAND_GAINS;
       const designs = R.autoTuneGains(this.options.world.models, this.options.world.delayS);
       this.designs = designs;
+      const tracked = (axis) => (designs.tracking[axis].ok ? designs.tracking[axis].gains
+        : R.HAND_GAINS.tracking[axis]);
       return {
         drive: designs.drive.ok ? designs.drive.gains : R.HAND_GAINS.drive,
         turn: designs.turn.ok ? designs.turn.gains : R.HAND_GAINS.turn,
+        tracking: { forward: tracked('forward'), strafe: tracked('strafe'), turn: tracked('turn') },
       };
     }
 
     applyGains() {
       this.gains = this.currentGains();
       this.robot.drivetrain.setGains(this.gains);
+      this.robot.drivetrain.setAxisModels(this.options.world.models);
     }
 
     /**

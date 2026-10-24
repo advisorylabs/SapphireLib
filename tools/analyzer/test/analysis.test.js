@@ -105,6 +105,96 @@ test('a steady loop that dithers around zero is not "oscillating"', () => {
   assert.ok(!A.analyze(matchLog(rows)).findings.some((f) => /oscillated/.test(f.title)));
 });
 
+// --- followTrajectory(): tracking against the plan ---------------------------------
+
+/**
+ * A match log with one followTrajectory() at 12s: 48in straight up the field (+y) at 24in/s
+ * for 2s, then `holdS` settling on the end. `offset(t)` is where the robot is from the
+ * reference [dx, dy], `paused(t)` whether the plan was waiting, `extraMs` added to the
+ * motion's time, and `saturated(t)` sets trackFwd's flag.
+ */
+function trajectoryLog({ offset = () => [0, 0], paused = () => false, extraMs = 0, saturated = () => false,
+  holdS = 0.2 } = {}) {
+  const start = 12;
+  let rows = '#chan,4,odom,samples,4,x,y,heading\n' +
+    '#chan,6,traj.plan,samples,3,t_plan,x,y,hdg,v,sec,stop\n' +
+    '#chan,7,traj,samples,3,ref_t,ref_x,ref_y,ref_hdg,ref_vf,ref_vs,ref_w,ff_f,ff_s,ff_t,lag,paused,sec\n' +
+    '#chan,8,trackFwd,pid,4,target,meas,err,p,i,d,u_raw,out,dt,flags\n';
+  const us = (t) => Math.round(t * 1e6);
+  rows += `E,${us(start)},motion,start,followTrajectory,sections=1,samples=97,length_in=48.000,duration_ms=2000,` +
+    'overtime_ms=1500\n';
+  for (let k = 0; k <= 20; ++k) {
+    rows += `S,6,${us(start) + 10},${k * 0.1},0,${k * 2.4},0,24,0,${k === 0 || k === 20 ? 1 : 0}\n`;
+  }
+  let refT = 0;
+  const end = start + 2 + holdS + extraMs / 1000;
+  for (let t = start; t < end - 1e-9; t += 0.01) {
+    const waiting = paused(t);
+    const holding = refT >= 2;
+    const y = 24 * Math.min(refT, 2);
+    const [dx, dy] = offset(t);
+    rows += `S,7,${us(t) + 20},${refT},0,${y},0,${holding ? 0 : 24},0,0,0,0,0,${-dy},${waiting ? 1 : 0},0\n`;
+    rows += `S,4,${us(t)},${dx},${y + dy},0\n`;
+    rows += `S,8,${us(t) + 30},${-dy},0,${-dy},0,0,0,0,0,0.01,${saturated(t) ? 1 : 0}\n`;
+    if (!waiting) refT += 0.01;
+  }
+  rows += `E,${us(end)},motion,end,followTrajectory,reason=settled,error=0.100,ms=${Math.round((end - start) * 1000)}\n`;
+  return matchLog(rows);
+}
+
+test('followTrajectory: tracking stats against the plan, and no alarms when it tracked', () => {
+  const report = A.analyze(trajectoryLog({ offset: () => [0.3, -0.4] }));
+  const m = report.motions.find((x) => x.kind === 'followTrajectory');
+  const k = m.tracking;
+  assert.ok(Math.abs(k.worstIn - 0.5) < 1e-3 && Math.abs(k.rmsIn - 0.5) < 1e-3);
+  assert.ok(Math.abs(k.plannedS - 2) < 1e-9 && Math.abs(k.actualS - 2.2) < 0.02);
+  assert.equal(k.waitedS, 0);
+  // heading north, so the robot 0.3in east is right of the path, and 0.4in behind
+  const mid = Math.floor(k.series.t.length / 2);
+  assert.ok(Math.abs(k.series.cross[mid] - 0.3) < 1e-3);
+  assert.ok(Math.abs(k.series.along[mid] - 0.4) < 1e-3);
+  assert.ok(!report.findings.some((f) => /followTrajectory/.test(f.title)),
+    report.findings.map((f) => f.title).join('\n'));
+  assert.ok(m.trajectory.plan && m.trajectory.plan.x.length === 21);
+});
+
+test('followTrajectory: far off its plan is a warning, saying whether the loops were maxed out', () => {
+  const off = (t) => (t > 13 && t < 13.2 ? [4.5, 0] : [0, 0]);
+  let f = A.analyze(trajectoryLog({ offset: off })).findings.find((x) => /fell .* off its plan/.test(x.title));
+  assert.ok(f && f.severity === 'warning' && Math.abs(f.t - 13) < 0.05);
+  assert.match(f.title, /fell 4\.5 in off/);
+  assert.match(f.detail, /weren't saturated/);
+  f = A.analyze(trajectoryLog({ offset: off, saturated: (t) => t > 12.9 && t < 13.2 })).findings
+    .find((x) => /off its plan/.test(x.title));
+  assert.match(f.detail, /at full power/);
+  // settling on the end doesn't count: the plan is over
+  const settling = A.analyze(trajectoryLog({ offset: (t) => (t > 14.05 ? [3.5, 0] : [0, 0]) }));
+  assert.ok(!settling.findings.some((x) => /off its plan/.test(x.title)));
+});
+
+test('followTrajectory: waiting for the robot, and taking longer than planned, are info', () => {
+  const waited = A.analyze(trajectoryLog({ paused: (t) => t > 12.5 && t < 13.2, offset: (t) =>
+    (t > 12.5 && t < 13.2 ? [0, -2] : [0, 0]) }));
+  const wait = waited.findings.find((x) => /waited/.test(x.title));
+  assert.ok(wait && wait.severity === 'info');
+  assert.match(wait.title, /waited 0\.7 s/);
+  // the waiting explains the extra time: not also "slow"
+  assert.ok(!waited.findings.some((x) => /longer than planned/.test(x.title)));
+
+  const slow = A.analyze(trajectoryLog({ extraMs: 900 })).findings.find((x) => /longer than planned/.test(x.title));
+  assert.ok(slow && slow.severity === 'info');
+  assert.match(slow.title, /took 55% longer/);
+  assert.ok(!A.analyze(trajectoryLog({ extraMs: 300 })).findings.some((x) => /longer than planned/.test(x.title)));
+});
+
+test('demo pit session: the Trajectory Test tracks its plan', () => {
+  const pit = slt.parse(demo.pitSession(), 'SL000041.CSV');
+  const [tr] = slt.trajectories(pit);
+  assert.ok(tr && tr.plan && tr.rows && tr.motion.reason === 'settled');
+  const k = A.trajectoryTracking(pit, tr);
+  assert.ok(k.worstIn < 1.5 && k.rmsIn < 1, `worst ${k.worstIn}, RMS ${k.rmsIn}`);
+});
+
 // --- The demo match: planted failures, found ---------------------------------------
 
 const MATCH = slt.parse(demo.match(), 'SL000042.CSV');

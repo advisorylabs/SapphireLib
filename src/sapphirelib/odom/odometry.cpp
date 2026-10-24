@@ -6,6 +6,7 @@
 #include "pros/rtos.hpp"
 #include "sapphirelib/odom/odometry_math.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
+#include "sapphirelib/util/clock.hpp"
 
 namespace sapphirelib::odom {
 
@@ -33,6 +34,9 @@ void Odometry::update() {
     const double dtS =
         lastUpdateMs_ == 0 ? 0.0 : std::min((nowMs - lastUpdateMs_) / 1000.0, kMaxCorrectionDtS);
     lastUpdateMs_ = nowMs;
+    const std::uint64_t nowUs = sapphirelib::micros();
+    const double elapsedS = lastUpdateUs_ == 0 ? 0.0 : (nowUs - lastUpdateUs_) / 1e6;
+    lastUpdateUs_ = nowUs;
 
     const std::uint32_t generation = poseGeneration_.load();
     if (generation != seenGeneration_) {
@@ -61,6 +65,7 @@ void Odometry::update() {
     const PoseDelta delta = computeOdometryDelta(
         lastHeadingDeg, headingDeg, verticalIn - lastVerticalIn_, horizontalIn - lastHorizontalIn_,
         config.verticalOffsetIn, config.horizontalOffsetIn);
+    const Velocity velocity = velocityFromDelta(delta, rotationDeg - lastRotationDeg_, elapsedS);
 
     lastRotationDeg_ = rotationDeg;
     lastVerticalIn_ = verticalIn;
@@ -73,6 +78,7 @@ void Odometry::update() {
     state->raw.xIn += delta.dxIn;
     state->raw.yIn += delta.dyIn;
     state->raw.headingDeg = headingDeg;
+    state->rawVelocity = velocity;
 
     // ease the correction toward its target
     const double maxStepIn = state->maxCorrectionRateInPerS > 0.0
@@ -94,6 +100,7 @@ Odometry::Snapshot Odometry::snapshot() const {
                      .headingDeg = state->raw.headingDeg},
         .rawPose = state->raw,
         .resetCount = poseGeneration_.load(),
+        .rawVelocity = state->rawVelocity,
     };
 }
 

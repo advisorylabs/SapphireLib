@@ -155,6 +155,9 @@
     const motion = opts.motion || activeMotion(app.report ? app.report.motions : slt.motions(run), t);
     const px = sx(x[i]);
     const py = sy(y[i]);
+    const planView = motion && motion.kind === 'followTrajectory' && layers.plan
+      ? { sx, sy, scale, px, py } : null;
+    if (planView) drawPlan(ctx, run, motion, t, planView, 'under');
     if (motion) {
       const p = motion.params;
       ctx.strokeStyle = token('--ink-2');
@@ -250,6 +253,8 @@
     }
     ctx.restore();
 
+    // the reference over the robot, so it shows even when the robot is right on it
+    if (planView) drawPlan(ctx, run, motion, t, planView, 'over');
     if (loc) drawLocalizer(ctx, loc, locView, 'over');
     if (loc && layers.estimate) {
       // the estimate, a cross
@@ -287,10 +292,113 @@
     }
   }
 
+  // --- A trajectory's plan ----------------------------------------------------------------------
+
+  /** A CSS color as [r, g, b], through a canvas, so any format the page uses works. */
+  function rgbOf(color) {
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.fillStyle = color;
+    const text = probe.fillStyle;
+    if (text.startsWith('#')) return [1, 3, 5].map((k) => parseInt(text.slice(k, k + 2), 16));
+    const m = text.match(/[\d.]+/g) || [0, 0, 0];
+    return [+m[0], +m[1], +m[2]];
+  }
+
+  /**
+   * followTrajectory()'s plan in the replay. Under the robot: the path colored by planned speed
+   * (slow muted, fast accent), a ring where each section ends and a square where the plan
+   * stops, and red dots where the plan waited for the robot (up to this moment). Over it: the
+   * reference the robot was chasing now (a dashed outline), joined to the robot. A log without
+   * "traj.plan" draws the reference's own track instead of the plan.
+   */
+  function drawPlan(ctx, run, motion, t, v, pass) {
+    const tr = slt.trajectories(run).find((m) => Math.abs(m.motion.start - motion.start) < 1e-9);
+    if (!tr) return;
+    const traj = run.get('traj');
+    if (pass === 'over') {
+      if (tr.rows) drawReference(ctx, traj, tr, motion, t, v);
+      return;
+    }
+    let pts = null;
+    if (tr.plan) {
+      pts = tr.plan;
+    } else if (tr.rows) {
+      const [a, b] = tr.rows;
+      const c = traj.cols;
+      pts = { x: c.ref_x.subarray(a, b), y: c.ref_y.subarray(a, b), sec: c.sec.subarray(a, b), stop: null,
+        v: Float64Array.from(c.ref_vf.subarray(a, b), (vf, k) => Math.hypot(vf, c.ref_vs[a + k])) };
+    }
+    if (!pts || pts.x.length < 2) return;
+
+    const top = Math.max(1, ...pts.v);
+    const slow = rgbOf(token('--muted'));
+    const fast = rgbOf(token('--accent'));
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    for (let k = 1; k < pts.x.length; ++k) {
+      const f = Math.min(1, (pts.v[k - 1] + pts.v[k]) / (2 * top));
+      const rgb = slow.map((s, n) => Math.round(s + (fast[n] - s) * f));
+      ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.85)`;
+      ctx.beginPath();
+      ctx.moveTo(v.sx(pts.x[k - 1]), v.sy(pts.y[k - 1]));
+      ctx.lineTo(v.sx(pts.x[k]), v.sy(pts.y[k]));
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = token('--ink-2');
+    ctx.fillStyle = token('--ink-2');
+    ctx.lineWidth = 1.5;
+    for (let k = 1; k < pts.x.length; ++k) {
+      if (pts.sec[k] !== pts.sec[k - 1]) {
+        ctx.beginPath();
+        ctx.arc(v.sx(pts.x[k - 1]), v.sy(pts.y[k - 1]), 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      if (pts.stop && pts.stop[k] && k + 1 < pts.x.length) {
+        ctx.fillRect(v.sx(pts.x[k]) - 4, v.sy(pts.y[k]) - 4, 8, 8);
+      }
+    }
+    if (!tr.rows) return;
+
+    const [a, b] = tr.rows;
+    const c = traj.cols;
+    ctx.fillStyle = token('--critical');
+    for (let i = a; i < b && traj.t[i] <= t; ++i) {
+      if (!c.paused[i]) continue;
+      ctx.beginPath();
+      ctx.arc(v.sx(c.ref_x[i]), v.sy(c.ref_y[i]), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** Where the plan had the robot at `t`: a dashed outline, and a dashed line to the robot. */
+  function drawReference(ctx, traj, tr, motion, t, v) {
+    const [a, b] = tr.rows;
+    const c = traj.cols;
+    const i = traj.indexAt(t);
+    if (i < a || i >= b || t > (motion.stop ?? t) + 0.05) return;
+    const rx = v.sx(c.ref_x[i]);
+    const ry = v.sy(c.ref_y[i]);
+    ctx.strokeStyle = token('--series-4');
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(v.px, v.py);
+    ctx.lineTo(rx, ry);
+    ctx.stroke();
+    const half = (ROBOT_IN / 2) * v.scale;
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate((c.ref_hdg[i] * Math.PI) / 180);
+    ctx.strokeRect(-half, -half, 2 * half, 2 * half);
+    ctx.restore();
+    ctx.setLineDash([]);
+  }
+
   // --- The localizer ---------------------------------------------------------------------------
 
-  /** What the field draws of the localizer; the Field panel's toggles. */
-  const DEFAULT_LAYERS = { raw: true, particles: true, ellipse: true, beams: true, estimate: true };
+  /** What the field draws; the Field panel's toggles. */
+  const DEFAULT_LAYERS = { raw: true, particles: true, ellipse: true, beams: true, estimate: true, plan: true };
 
   /** mcl.pts rows grouped into samples (rows under 10ms apart): [{ t, i0, i1 }]. Cached on the run. */
   function particleSamples(run) {
@@ -708,19 +816,23 @@
             for (const b of zoomSeg.children) b.setAttribute('aria-pressed', String(b === e.currentTarget));
             update();
           } }, label)));
-      const layerToggles = h('div', { class: 'layer-toggles' }, zoomSeg, hasLocalizer ?
-        [['raw', 'Raw odometry', 'Tracking wheels and IMU alone (dashed), and the correction to the pose'],
+      const toggles = [
+        ...(run.get('traj') ? [['plan', 'Trajectory plan', 'followTrajectory()\'s plan colored by speed (rings end ' +
+          'sections, squares are stops), the reference it was chasing (dashed), and red dots where it waited']] : []),
+        ...(hasLocalizer ? [['raw', 'Raw odometry', 'Tracking wheels and IMU alone (dashed), and the correction to the pose'],
           ['particles', 'Particles', 'A sample of 24, picked by weight'],
           ['ellipse', 'Ellipse', '2σ of the particle cloud'],
           ['beams', 'Beams', 'Dashed to where the map says the wall is, a tick at the reading. Green agrees, red ' +
-            'doesn\'t, grey read nothing']].map(([key, label, title]) => {
-          const input = h('input', { type: 'checkbox', checked: true });
-          input.addEventListener('change', () => {
-            layers[key] = input.checked;
-            update();
-          });
-          return h('label', { title }, input, label);
-        }) : null);
+            'doesn\'t, grey read nothing']] : []),
+      ];
+      const layerToggles = h('div', { class: 'layer-toggles' }, zoomSeg, toggles.map(([key, label, title]) => {
+        const input = h('input', { type: 'checkbox', checked: true });
+        input.addEventListener('change', () => {
+          layers[key] = input.checked;
+          update();
+        });
+        return h('label', { title }, input, label);
+      }));
       const locBox = h('div', { class: 'loc-box' });
       const liftCanvas = lift ? h('canvas', { class: 'lift-canvas', role: 'img', 'aria-label': `${lift.name} position` }) : null;
       const liftInfo = h('dl', { class: 'kv' });
@@ -790,10 +902,16 @@
           t: m.ch.t, y: m.ch.cols.temp, step: true, unit: '°C' })),
         { guides: [{ y: 55, label: '55°C: derating' }] });
       }
-      const err = ['drive', 'turn', 'hold'].map((n) => run.get(n)).filter(Boolean);
+      const err = ['drive', 'turn', 'hold', 'trackFwd', 'trackStrafe', 'trackTurn'].map((n) => run.get(n))
+        .filter(Boolean);
       if (err.length) {
         addChart('Drivetrain PID error', err.map((ch, k) => ({ label: ch.name, color: `--series-${k + 1}`, t: ch.t,
           y: ch.cols.err })));
+      }
+      const traj = run.get('traj');
+      if (traj) {
+        addChart('Trajectory: behind its plan (in)', [{ label: 'lag', color: '--series-4', t: traj.t, y: traj.cols.lag,
+          unit: 'in' }]);
       }
       const mcl = run.get('mcl');
       if (mcl) {

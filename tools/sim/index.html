@@ -58,6 +58,7 @@
     <dl>
       <dt>Drag</dt><dd>the defender</dd>
       <dt>Click</dt><dd>where to put the robot, after <em>Pick up</em></dd>
+      <dt>Paths tab</dt><dd>click to add a point, drag to move, right-click or <kbd>Del</kbd> to remove</dd>
       <dt>Follow</dt><dd>×4, ×12 zoom on the robot, with a scale bar</dd>
     </dl>
   </div>
@@ -99,6 +100,7 @@
   <aside class="controls">
     <nav class="tabs" id="tabs" role="tablist" aria-label="Controls">
       <button role="tab" data-tab="drive" aria-selected="true">Drive</button>
+      <button role="tab" data-tab="paths">Paths</button>
       <button role="tab" data-tab="show">Show</button>
       <button role="tab" data-tab="events">Events</button>
       <button role="tab" data-tab="robot">Robot</button>
@@ -145,6 +147,60 @@
           <button type="button" data-value="hand" aria-pressed="false" title="src/robot/devices.cpp">Hand-set</button>
         </div>
         <div class="gains num" id="gains-readout"></div>
+      </section>
+    </div>
+
+    <!-- Paths -->
+    <div class="tab-body" data-body="paths" hidden>
+      <section class="panel">
+        <header><h3>Trajectory</h3><span class="hint">click the field to add points, drag to move, right-click to remove</span></header>
+        <div class="row wrap">
+          <select class="select grow" id="path-select" aria-label="Path"></select>
+          <button class="btn" id="path-new-btn" type="button">New</button>
+          <button class="btn" id="path-delete-btn" type="button">Delete</button>
+        </div>
+        <div class="row">
+          <label class="inline grow">Name <input class="text-input grow" id="path-name" type="text" spellcheck="false"></label>
+        </div>
+        <div class="row wrap">
+          <button class="btn primary" id="path-run-btn" type="button" title="Put the robot at the first point and followTrajectory()">Run</button>
+          <button class="btn" id="path-reverse-btn" type="button" title="The same chain driven backward">Reverse</button>
+        </div>
+        <p class="result" id="path-status" hidden></p>
+        <p class="result" id="path-run-result" hidden></p>
+      </section>
+      <section class="panel">
+        <header><h3>Points</h3><span class="hint">drag a point's handle to set where it faces (Shift: 15°)</span></header>
+        <div class="table-wrap"><table class="data-table path-table" id="path-points"></table></div>
+      </section>
+      <section class="panel">
+        <header><h3>Sections</h3><span class="hint">0 is no cap: the voltage budget limits it</span></header>
+        <div class="path-sections" id="path-sections"></div>
+      </section>
+      <section class="panel">
+        <header><h3>Plan</h3><span class="hint" id="path-models-hint"></span></header>
+        <div class="segments" id="path-models-seg" role="group" aria-label="Plan with"
+          title="The robot plans with the models in its TUNE.CFG (or setAxisModels())">
+          <button type="button" data-value="robot" aria-pressed="true">Robot tab's models</button>
+          <button type="button" data-value="tune" aria-pressed="false">Open TUNE.CFG's</button>
+        </div>
+        <div class="gains num" id="path-summary"></div>
+        <canvas class="path-chart" id="path-chart" aria-label="Planned speed and the worst wheel's volts over time"></canvas>
+      </section>
+      <section class="panel">
+        <header><h3>C++</h3><span class="hint">for src/robot/autons.cpp</span></header>
+        <pre class="code" id="path-code"></pre>
+        <div class="row wrap">
+          <button class="btn primary" id="path-copy-btn" type="button">Copy C++</button>
+          <button class="btn" id="path-paste-btn" type="button" title="Read a path Copy C++ wrote, to keep editing it">Paste C++…</button>
+        </div>
+        <textarea class="code paste" id="path-paste" hidden rows="8" spellcheck="false"
+          placeholder="Paste a std::vector&lt;TrajectorySection&gt; that Copy C++ wrote, then Read"></textarea>
+        <div class="row" id="path-paste-row" hidden>
+          <button class="btn primary" id="path-read-btn" type="button">Read</button>
+          <button class="btn" id="path-paste-cancel" type="button">Cancel</button>
+        </div>
+        <p class="result" id="path-code-status" hidden></p>
       </section>
     </div>
 
@@ -293,6 +349,7 @@
 <script src="../analyzer/js/tunefile.js"></script>
 <script src="../analyzer/js/mclcal.js"></script>
 <script src="js/world.js"></script>
+<script src="js/trajectory.js"></script>
 <script src="js/robot.js"></script>
 <script src="js/routines.js"></script>
 <script src="js/sim.js"></script>
@@ -300,6 +357,7 @@
 <script src="js/tuner.js"></script>
 <script src="js/render.js"></script>
 <script src="js/tuneview.js"></script>
+<script src="js/pathview.js"></script>
 <script src="js/app.js"></script>
 <script>SIM.app.start();</script>
 </body>

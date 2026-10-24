@@ -49,6 +49,9 @@ void drive(sapphirelib::input::Controller& controller);
 ///     field connected, so it can't fire during a real match, and not while a
 ///     GUI routine is driving the chassis. It stops the intake, claw, and lift
 ///     first (macros::stop()), and blocks until the routine ends.
+///
+/// X+A, teach mode's start and stop, is teach::update()'s (robot/teach.hpp).
+/// While it records, line 1 says so instead of the drive mode.
 void shortcuts(sapphirelib::input::Controller& controller);
 
 } // namespace robot

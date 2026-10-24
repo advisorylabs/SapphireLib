@@ -79,19 +79,31 @@ struct MountCalibrationConfig {
      * something in the way fooled the fit, so the sensor is left as it was
      */
     double maxChangeIn = 6.0;
+
+    /**
+     * the most the field's width may move the configured mounts' spacing, in inches: how far every
+     * sensor moves out on average (see fitSensorMounts()). More means the pair of walls a sensor
+     * saw was really one wall and something across the room that happened to line up 140 in from
+     * it, so the spacing is held as from one wall
+     */
+    double maxSpacingChangeIn = 3.0;
 };
 
 /**
  * @brief Whether one sensor's mount was calibrated, and if not, why
  */
 enum class MountFitStatus : std::uint8_t {
-    calibrated,      // the fitted mount is good to use
-    noReadings,      // the sensor never had a usable reading
-    tooFewReadings,  // fewer than minReadings readings matched a wall
-    noOppositeWalls, // no sensor saw both walls of a pair, so the robot's distance to the walls
-                     // this one saw couldn't be told apart from its own offset
-    uncertain,       // the along-beam offset's standard error is over maxStderrIn
-    implausible,     // it moved more than maxChangeIn: something in the way, probably
+    calibrated,       // the fitted mount is good to use
+    noReadings,       // the sensor never had a usable reading
+    tooFewReadings,   // fewer than minReadings readings matched a wall
+    noOppositeWalls,  // other sensors saw both walls of a pair, but this one saw only walls they
+                      // didn't, so its offset couldn't be told apart from the robot's distance to
+                      // them
+    noOppositeSensor, // no sensor saw both walls of a pair, and the sensors that saw a wall face
+                      // no more than two ways, not opposite ones, so the configured spacing can't
+                      // stand in for the field's width (see fitSensorMounts())
+    uncertain,        // the along-beam offset's standard error is over maxStderrIn
+    implausible,      // it moved more than maxChangeIn: something in the way, probably
 };
 
 /**
@@ -171,9 +183,17 @@ struct MountCalibrationResult {
     std::vector<SensorMountFit> sensors;
 
     /**
+     * whether no sensor saw both walls of a pair, so the fit held the configured mounts' spacing
+     * in place of the field's width: a calibration from one wall or a corner (see
+     * fitSensorMounts())
+     */
+    bool spacingFromMounts = false;
+
+    /**
      * where the fit put the tracking center when the first reading was taken, in field
      * coordinates. On a square field it's only known up to a quarter turn about the middle, which
-     * changes nothing about the mounts
+     * changes nothing about the mounts. From one wall or a corner, only its distance to those
+     * walls means anything
      */
     odom::Pose start;
 
@@ -197,13 +217,31 @@ struct MountCalibrationResult {
  * in the way) are discarded as the fit goes (iteratively reweighted least squares, Huber then
  * Tukey's biweight)
  *
- * The robot can start anywhere, facing any way. What it can't do is pin a sensor's offset from
- * walls on one side only: a robot an inch nearer the wall with the sensor an inch further back
- * reads the same. Two opposite walls pin it, since the field's width is known, so at least one
- * sensor has to see both walls of a pair during the spin. From the middle of the field, or anywhere
- * on the line halfway between two opposite walls, every sensor does: the V5 Distance Sensor reaches
- * 78 in, and walls are 70 in from the middle. A sensor that only ever saw walls on unpinned sides
- * is left as it was (MountFitStatus::noOppositeWalls)
+ * The robot can start anywhere, facing any way. From walls on one or two sides, though, a robot an
+ * inch nearer them with every sensor an inch further out reads the same, so one length has to come
+ * from somewhere other than the readings. Where it comes from:
+ *
+ * - One wall, or two at a right angle (a corner): the configured mounts' spacing. The readings pin
+ *   everything else, including where the tracking center sits among the sensors (moving it changes
+ *   opposite sensors' offsets opposite ways, which they see), so what the fit holds is only what's
+ *   left: with a sensor on each side, the mean of their along-beam offsets, i.e. the configured
+ *   distances between opposite sensors' faces, front to back plus left to right. Measure those
+ *   across the robot, face to face; the tracking center can be a few inches off. It needs sensors
+ *   facing opposite ways (or three ways) among those that saw a wall, or every sensor is left as
+ *   it was (MountFitStatus::noOppositeSensor). result.spacingFromMounts says this is what it did
+ * - Two opposite walls, when a sensor sees both walls of a pair during the spin: the field's known
+ *   width, and the spacing is fitted too. From anywhere on the line halfway between them every
+ *   sensor does, since the V5 Distance Sensor reaches 78 in and the walls are 70 in from the
+ *   middle. A sensor that only ever saw walls on unpinned sides is then left as it was
+ *   (MountFitStatus::noOppositeWalls)
+ *
+ * The fit holds the spacing until a sensor turns out to see a pair, and lets it go only if the
+ * width moves it no more than maxSpacingChangeIn: further, the "pair" was one wall and something
+ * lined up across the room. From one wall, the walls square to it in the fit are free to sit
+ * anywhere, and one can come to rest on something flat across the room; one that's more than a
+ * few degrees out of square with the rest is left out. Within about 3 ft of the walls, the walls
+ * it can't see are out of the sensors' reach, so the rest of the room only makes readings that
+ * match nothing, and those are thrown out
  *
  * Facing isn't fitted: a sensor's facing and the robot's heading can't be told apart, and a degree
  * or two of facing changes a square-on reading by a fraction of a percent
@@ -213,7 +251,8 @@ struct MountCalibrationResult {
  *
  * @param samples the readings, any order
  * @param mounts each sensor's configured mount, in the order samples' sensor indices count
- * @param map the field. Only its four perimeter walls are used
+ * @param map the field. Only its four perimeter walls are used, and from one wall or a corner only
+ * that they're straight and square to each other
  * @param beam the sensor model, for each reading's noise
  * @param config which readings to use, and what counts as calibrated
  * @return MountCalibrationResult each sensor's fitted mount

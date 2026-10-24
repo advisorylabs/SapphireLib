@@ -9,6 +9,9 @@
  *   MonteCarloLocalizer            src/sapphirelib/localization/monte_carlo_localizer.cpp
  *   the holonomic motions          src/sapphirelib/chassis/holonomic_drivetrain.cpp
  *   ExitTracker, pure pursuit      src/sapphirelib/motion/
+ *   TrajectoryFollower,
+ *   followTrajectory()             src/sapphirelib/motion/holonomic_tracking.cpp and the
+ *                                  drivetrain (the planner and tracking math: trajectory.js)
  *
  * The PID controller and Auto-Tune's gain design come from the analyzer's
  * ports (tools/analyzer/js/model.js), so a gain set means the same thing here
@@ -30,13 +33,13 @@
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory(require('./mcl.js'), require('../../analyzer/js/model.js'));
+    module.exports = factory(require('./mcl.js'), require('../../analyzer/js/model.js'), require('./trajectory.js'));
   } else {
     const root = typeof self !== 'undefined' ? self : this;
     root.SIM = root.SIM || {};
-    root.SIM.robot = factory(root.SIM.mcl, root.SA.model);
+    root.SIM.robot = factory(root.SIM.mcl, root.SA.model, root.SIM.trajectory);
   }
-})(function (L, M) {
+})(function (L, M, T) {
   'use strict';
 
   const kDegToRad = L.kDegToRad;
@@ -85,9 +88,12 @@
       this.poseGeneration = 0;
       this.seenGeneration = 0;
       this.lastUpdateMs = 0;
+      // lastUpdateUs_: the velocity's own timestamp (null before the first update)
+      this.lastVelocityMs = null;
       this.imu.setHeadingDeg(startPose.headingDeg);
       this.state = {
         raw: { xIn: startPose.xIn, yIn: startPose.yIn, headingDeg: L.wrapDegrees360(startPose.headingDeg) },
+        rawVelocity: { xInPerS: 0, yInPerS: 0, headingDegPerS: 0 },
         correctionXIn: 0, correctionYIn: 0, targetXIn: 0, targetYIn: 0, maxCorrectionRateInPerS: 0,
       };
       this.lastRotationDeg = this.imu.getCumulativeHeadingDeg();
@@ -100,6 +106,8 @@
       const nowMs = this.clock();
       const dtS = this.lastUpdateMs === 0 ? 0.0 : Math.min((nowMs - this.lastUpdateMs) / 1000.0, kMaxCorrectionDtS);
       this.lastUpdateMs = nowMs;
+      const elapsedS = this.lastVelocityMs === null ? 0.0 : (nowMs - this.lastVelocityMs) / 1000.0;
+      this.lastVelocityMs = nowMs;
 
       const generation = this.poseGeneration;
       if (generation !== this.seenGeneration) {
@@ -118,6 +126,7 @@
 
       const delta = L.computeOdometryDelta(lastHeadingDeg, headingDeg, verticalIn - this.lastVerticalIn,
         horizontalIn - this.lastHorizontalIn, config.verticalOffsetIn, config.horizontalOffsetIn);
+      const velocity = L.velocityFromDelta(delta, rotationDeg - this.lastRotationDeg, elapsedS);
 
       this.lastRotationDeg = rotationDeg;
       this.lastVerticalIn = verticalIn;
@@ -127,6 +136,7 @@
       state.raw.xIn += delta.dxIn;
       state.raw.yIn += delta.dyIn;
       state.raw.headingDeg = headingDeg;
+      state.rawVelocity = velocity;
       const maxStepIn = state.maxCorrectionRateInPerS > 0.0 ? state.maxCorrectionRateInPerS * dtS : Infinity;
       const step = L.correctionStep(state.targetXIn - state.correctionXIn, state.targetYIn - state.correctionYIn,
         maxStepIn);
@@ -140,6 +150,7 @@
         pose: { xIn: s.raw.xIn + s.correctionXIn, yIn: s.raw.yIn + s.correctionYIn, headingDeg: s.raw.headingDeg },
         rawPose: Object.assign({}, s.raw),
         resetCount: this.poseGeneration,
+        rawVelocity: Object.assign({}, s.rawVelocity),
       };
     }
 
@@ -165,6 +176,7 @@
       this.poseGeneration++;
       this.state = {
         raw: { xIn: pose.xIn, yIn: pose.yIn, headingDeg: L.wrapDegrees360(pose.headingDeg) },
+        rawVelocity: { xInPerS: 0, yInPerS: 0, headingDegPerS: 0 },
         correctionXIn: 0, correctionYIn: 0, targetXIn: 0, targetYIn: 0, maxCorrectionRateInPerS: 0,
       };
     }
@@ -397,6 +409,10 @@
       this.elapsedMs = nowMs - this.startMs;
       return reason;
     }
+
+    extendTimeout(extraMs) {
+      if (this.timeoutMs > 0) this.timeoutMs += extraMs;
+    }
   }
 
   function toLocalFrame(dxIn, dyIn, headingDeg) {
@@ -432,8 +448,32 @@
       bestPoint = { xIn: p1.xIn + d.x * t2, yIn: p1.yIn + d.y * t2 };
       bestIndex = i;
     }
-    if (!found) return { point: points[points.length - 1], segmentIndex: points.length - 1 };
-    return { point: bestPoint, segmentIndex: bestIndex };
+    if (found) return { point: bestPoint, segmentIndex: bestIndex };
+    // the rest of the path ends inside the circle: head for the end
+    const last = points[points.length - 1];
+    if (Math.hypot(last.xIn - xIn, last.yIn - yIn) <= lookaheadIn || startIndex + 1 >= points.length) {
+      return { point: last, segmentIndex: points.length - 1 };
+    }
+    // it never comes within reach (it starts elsewhere, or the robot was knocked off it): back to
+    // the nearest point of what's left
+    let nearest = points[startIndex];
+    let nearestIndex = startIndex;
+    let nearestSq = Infinity;
+    for (let i = startIndex; i + 1 < points.length; ++i) {
+      const p1 = points[i];
+      const d = { x: points[i + 1].xIn - p1.xIn, y: points[i + 1].yIn - p1.yIn };
+      const lengthSq = d.x * d.x + d.y * d.y;
+      const t = lengthSq < 1e-9 ? 0.0
+        : Math.min(1.0, Math.max(0.0, ((xIn - p1.xIn) * d.x + (yIn - p1.yIn) * d.y) / lengthSq));
+      const point = { xIn: p1.xIn + d.x * t, yIn: p1.yIn + d.y * t };
+      const distanceSq = (point.xIn - xIn) ** 2 + (point.yIn - yIn) ** 2;
+      if (distanceSq < nearestSq) {
+        nearestSq = distanceSq;
+        nearest = point;
+        nearestIndex = i;
+      }
+    }
+    return { point: nearest, segmentIndex: nearestIndex };
   }
 
   function reachedFinalApproach(distanceToFinalIn, finalApproachIn, segmentIndex, waypointCount) {
@@ -443,16 +483,25 @@
 
   // --- chassis::HolonomicDrivetrain ------------------------------------------------
 
-  /** The robot program's own gains (src/robot/devices.cpp), before Auto-Tune. */
+  /**
+   * The robot program's own gains (src/robot/devices.cpp), before Auto-Tune.
+   * The tracking PIDs start from Drive and Turn's, as the drivetrain's do.
+   */
   const HAND_GAINS = {
     drive: { kP: 1.2, kI: 0.0, kD: 0.001 },
     turn: { kP: 0.35, kI: 0.0, kD: 0.0002 },
+    tracking: {
+      forward: { kP: 1.2, kI: 0.0, kD: 0.001 },
+      strafe: { kP: 1.2, kI: 0.0, kD: 0.001 },
+      turn: { kP: 0.35, kI: 0.0, kD: 0.0002 },
+    },
   };
 
-  /** The specs src/robot/tuning.cpp designs Drive and Turn to. */
+  /** The specs src/robot/tuning.cpp designs Drive, Turn and the three Track controllers to. */
   const RESPONSE_SPECS = {
     drive: M.responseSpec(0.6, 1.0, 50.0),
     turn: M.responseSpec(0.5, 1.0, 50.0),
+    tracking: M.responseSpec(0.4, 1.0, 50.0),
   };
 
   /**
@@ -464,12 +513,115 @@
    * one, as if characterization had measured it perfectly.
    */
   function autoTuneGains(models, delayS) {
+    const model = (m) => M.feedforward(m.kS, m.kV, m.kA);
     return {
-      drive: M.designPositionGains(M.feedforward(models.forward.kS, models.forward.kV, models.forward.kA),
-        RESPONSE_SPECS.drive, delayS),
-      turn: M.designPositionGains(M.feedforward(models.turn.kS, models.turn.kV, models.turn.kA),
-        RESPONSE_SPECS.turn, delayS),
+      drive: M.designPositionGains(model(models.forward), RESPONSE_SPECS.drive, delayS),
+      turn: M.designPositionGains(model(models.turn), RESPONSE_SPECS.turn, delayS),
+      // Track F, Track S, Track T: each from its own axis
+      tracking: {
+        forward: M.designPositionGains(model(models.forward), RESPONSE_SPECS.tracking, delayS),
+        strafe: M.designPositionGains(model(models.strafe), RESPONSE_SPECS.tracking, delayS),
+        turn: M.designPositionGains(model(models.turn), RESPONSE_SPECS.tracking, delayS),
+      },
     };
+  }
+
+  // --- motion::TrajectoryFollower (holonomic_tracking.cpp) ----------------------------
+
+  class TrajectoryFollower {
+    constructor(forward, strafe, turn) {
+      this.pids = { forward, strafe, turn };
+    }
+
+    begin(trajectory, models, config, nowMs) {
+      this.trajectory = trajectory;
+      this.models = models;
+      this.config = T.followConfig(config);
+      const durationMs = Math.ceil(trajectory.durationS() * 1000.0);
+      this.tracker = new ExitTracker(this.config.settleTimeMs, durationMs + this.config.overtimeMs, nowMs);
+      this.reason = 'running';
+      this.referenceTimeS = 0.0;
+      this.lastAlongTrackIn = 0.0;
+      this.lastMs = nowMs;
+      this.started = false;
+      this.finalErrorIn = 0.0;
+      this.progress = { running: true, section: 0, distanceIn: 0, timeS: 0, paused: false, piece: 0 };
+      // a chain: which trajectory, and where it starts in the chain's time, sections and distance
+      this.piece = 0;
+      this.pieceStartS = 0.0;
+      this.pieceFirstSection = 0;
+      this.pieceStartIn = 0.0;
+      this.chainEnded = false;
+      this.pids.forward.reset();
+      this.pids.strafe.reset();
+      this.pids.turn.reset();
+    }
+
+    update(pose, velocity, nowMs) {
+      const dtS = this.started ? (nowMs - this.lastMs) / 1000.0 : 0.0;
+      this.lastMs = nowMs;
+      const clock = this.started
+        ? T.advanceTrajectoryClock(this.referenceTimeS, dtS, this.lastAlongTrackIn, this.config.maxLagIn)
+        : { tS: 0.0, paused: false };
+      this.started = true;
+      this.referenceTimeS = clock.tS;
+
+      // past the end of a trajectory that ends moving: carry on into the next one
+      let chain = 'none';
+      while (!this.chainEnded && this.referenceTimeS >= this.trajectory.durationS() && T.endsMoving(this.trajectory)) {
+        const next = this.config.next ? this.config.next(this.trajectory) : null;
+        if (!next || next.empty() || !T.continuesFrom(next, this.trajectory)) {
+          chain = !next || next.empty() ? 'noNext' : 'mismatched';
+          this.chainEnded = true;
+          break;
+        }
+        this.referenceTimeS -= this.trajectory.durationS();
+        this.pieceStartS += this.trajectory.durationS();
+        this.pieceFirstSection += this.trajectory.sectionCount();
+        this.pieceStartIn += this.trajectory.lengthIn();
+        this.tracker.extendTimeout(Math.ceil(next.durationS() * 1000.0));
+        this.trajectory = next;
+        ++this.piece;
+        chain = 'continued';
+      }
+
+      const trajectory = this.trajectory;
+      const holding = this.referenceTimeS >= trajectory.durationS();
+
+      const reference = holding ? T.atRest(trajectory.sample(this.referenceTimeS))
+        : trajectory.sample(this.referenceTimeS);
+      const errors = T.trackingErrors(reference, pose, velocity);
+      const feedforward = holding ? { forward: 0, strafe: 0, turn: 0 }
+        : T.trajectoryFeedforward(this.models, reference, L.wrapDegrees180(pose.headingDeg - reference.headingDeg));
+      // PID.update()'s explicit dt; 0 falls back to the nominal 10ms, as on the robot
+      const pidDtS = dtS > 0.0 ? dtS : 0.0;
+      const volts = {
+        forward: feedforward.forward + this.pids.forward.updateWithRate(errors.forwardIn, 0.0,
+          errors.forwardRateInPerS, pidDtS),
+        strafe: feedforward.strafe + this.pids.strafe.updateWithRate(errors.strafeIn, 0.0,
+          errors.strafeRateInPerS, pidDtS),
+        turn: feedforward.turn + this.pids.turn.updateWithRate(errors.headingDeg, 0.0,
+          errors.headingRateDegPerS, pidDtS),
+      };
+      const section = this.pieceFirstSection + trajectory.sectionAt(reference.sIn);
+      this.lastAlongTrackIn = errors.alongTrackIn;
+      const referenceTimeS = this.pieceStartS + this.referenceTimeS;
+
+      const last = trajectory.samples[trajectory.samples.length - 1];
+      this.finalErrorIn = Math.hypot(last.xIn - pose.xIn, last.yIn - pose.yIn);
+      const headingErrorDeg = Math.abs(L.wrapDegrees180(last.headingDeg - pose.headingDeg));
+      const within = holding && this.finalErrorIn <= this.config.positionErrorThresholdIn &&
+        headingErrorDeg <= this.config.headingErrorThresholdDeg;
+      this.reason = this.tracker.update(within, nowMs);
+      this.progress = { running: this.reason === 'running', section, distanceIn: this.pieceStartIn + reference.sIn,
+        timeS: referenceTimeS, paused: clock.paused, piece: this.piece };
+      return { referenceTimeS, reference, feedforward, volts, errors, paused: clock.paused, holding, section,
+        piece: this.piece, chain };
+    }
+
+    result() {
+      return { reason: this.reason, finalError: this.finalErrorIn, elapsedMs: this.tracker.elapsedMs };
+    }
   }
 
   class Drivetrain {
@@ -480,7 +632,20 @@
       this.clock = clock;
       this.drivePID = new M.PID({ gains: Object.assign({}, gains.drive), outputLimit: 12.0 });
       this.turnPID = new M.PID({ gains: Object.assign({}, gains.turn), outputLimit: 12.0 });
+      const tracking = gains.tracking || HAND_GAINS.tracking;
+      this.trackingPIDs = {
+        forward: new M.PID({ gains: Object.assign({}, tracking.forward), outputLimit: 12.0 }),
+        strafe: new M.PID({ gains: Object.assign({}, tracking.strafe), outputLimit: 12.0 }),
+        turn: new M.PID({ gains: Object.assign({}, tracking.turn), outputLimit: 12.0 }),
+      };
+      // setAxisModels(): the sim's are the world's own, as if Auto-Tune measured them perfectly
+      this.axisModels = null;
       this.applied = { forward: 0, strafe: 0, turn: 0 };
+      // trajectoryProgress(), and the number of the followTrajectory() it's from
+      this.progress = { running: false, section: 0, distanceIn: 0, timeS: 0, paused: false, piece: 0 };
+      this.progressMotion = 0;
+      // setTrajectoryObserver(): { onTrajectoryStart(trajectory), onTrackingTick(tick) }
+      this.trajectoryObserver = null;
       // for the visualizer: what the running motion is aiming at
       this.target = null;
     }
@@ -488,6 +653,23 @@
     setGains(gains) {
       this.drivePID.setGains(gains.drive);
       this.turnPID.setGains(gains.turn);
+      if (gains.tracking) {
+        this.trackingPIDs.forward.setGains(gains.tracking.forward);
+        this.trackingPIDs.strafe.setGains(gains.tracking.strafe);
+        this.trackingPIDs.turn.setGains(gains.tracking.turn);
+      }
+    }
+
+    setAxisModels(models) {
+      this.axisModels = models;
+    }
+
+    trajectoryProgress() {
+      return Object.assign({}, this.progress, { motion: this.progressMotion });
+    }
+
+    setTrajectoryObserver(observer) {
+      this.trajectoryObserver = observer;
     }
 
     holonomicVolts(forwardVolts, strafeVolts, turnVolts) {
@@ -640,6 +822,51 @@
       result.elapsedMs = this.clock() - startMs;
       return result;
     }
+
+    /** followTrajectory(trajectory, config): a Trajectory from trajectory.js's generateTrajectory(). */
+    *followTrajectory(trajectory, config = {}) {
+      if (!trajectory || trajectory.empty()) return { reason: 'aborted', finalError: 0, elapsedMs: 0 };
+      const models = this.axisModels;
+      const valid = (m) => m && m.kV > 0 && m.kA > 0;
+      if (!models || !valid(models.forward) || !valid(models.strafe) || !valid(models.turn)) {
+        return { reason: 'aborted', finalError: 0, elapsedMs: 0 };
+      }
+      const follower = new TrajectoryFollower(this.trackingPIDs.forward, this.trackingPIDs.strafe,
+        this.trackingPIDs.turn);
+      follower.begin(trajectory, models, config, this.clock());
+      this.progress = follower.progress;
+      this.progressMotion++;
+      // the config too, and an end: the robot's drivetrain logs its motion events itself, the
+      // simulator's recorder does it from these
+      if (this.trajectoryObserver) this.trajectoryObserver.onTrajectoryStart(trajectory, follower.config);
+      this.target = { kind: 'trajectory', trajectory, reference: null };
+      for (;;) {
+        const snapshot = this.odometry.snapshot();
+        const tick = follower.update(snapshot.pose, snapshot.rawVelocity, this.clock());
+        this.holonomicVolts(tick.volts.forward, tick.volts.strafe, tick.volts.turn);
+        this.progress = follower.progress;
+        if (tick.chain === 'continued') {
+          // the visualizer draws the trajectory being followed
+          this.target.trajectory = follower.trajectory;
+          const o = this.trajectoryObserver;
+          if (o && o.onTrajectoryContinue) {
+            o.onTrajectoryContinue(follower.trajectory, follower.pieceStartS, follower.pieceFirstSection, tick.piece);
+          }
+        } else if (tick.chain !== 'none') {
+          const o = this.trajectoryObserver;
+          if (o && o.onTrajectoryNoContinue) o.onTrajectoryNoContinue(tick.chain, tick.piece);
+        }
+        this.target.reference = tick.reference;
+        if (this.trajectoryObserver) this.trajectoryObserver.onTrackingTick(tick);
+        if (follower.reason !== 'running') break;
+        yield;
+      }
+      this.stop();
+      this.target = null;
+      const result = follower.result();
+      if (this.trajectoryObserver && this.trajectoryObserver.onTrajectoryEnd) this.trajectoryObserver.onTrajectoryEnd(result);
+      return result;
+    }
   }
 
   function exitConditions(exit, defaultThreshold) {
@@ -695,6 +922,7 @@
     HAND_GAINS,
     RESPONSE_SPECS,
     autoTuneGains,
+    TrajectoryFollower,
     Drivetrain,
     Robot,
   };

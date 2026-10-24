@@ -52,8 +52,10 @@ std::string sensorName(const localization::DistanceSensorMount& mount, std::size
 std::string sensorResultText(const localization::MountCalibrationResult& result) {
     if (!result.ok) {
         std::string text = std::string("Sensors not calibrated: ") + result.error;
-        if (std::strcmp(result.error, "no sensor saw two opposite walls") == 0) {
-            text += ". Start nearer the halfway line";
+        if (std::strcmp(result.error, "no sensor saw a wall") == 0) {
+            text += ". Start within 3 ft of a wall";
+        } else if (std::strcmp(result.error, "no two opposite sensors saw a wall") == 0) {
+            text += ". Check the ones facing the other way";
         }
         return text;
     }
@@ -171,9 +173,10 @@ void OdometryPage::build(lv_obj_t* container) {
     lv_label_set_long_mode(calibStatusLabel_, LV_LABEL_LONG_WRAP);
     if (sensorsToo) {
         lv_label_set_text(calibStatusLabel_,
-                          calibSetSpin_ ? "Offsets: room to spin free. Sensors: on the field's "
-                                          "halfway line, walls in view"
-                                        : "Sensors: on the field's halfway line, walls in view");
+                          calibSetSpin_
+                              ? "Offsets: room to spin free. Sensors: within 3 ft of a "
+                                "wall or corner, walls in view"
+                              : "Sensors: within 3 ft of a wall or corner, walls in view");
     } else {
         lv_label_set_text(calibStatusLabel_,
                           calibSetSpin_ ? "Spin the bot free, then tap Calibrate" : "");
