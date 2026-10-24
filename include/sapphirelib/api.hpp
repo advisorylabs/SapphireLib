@@ -50,6 +50,7 @@
 #include "sapphirelib/motion/trajectory_generator.hpp"
 #include "sapphirelib/motion/trajectory_path.hpp"
 
+#include "sapphirelib/sensors/bump_detector.hpp"
 #include "sapphirelib/sensors/imu.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 
@@ -83,6 +84,8 @@
 
 #include "sapphirelib/gui/auton_selector_page.hpp"
 #include "sapphirelib/gui/diagnostics_page.hpp"
+#include "sapphirelib/gui/face_math.hpp"
+#include "sapphirelib/gui/face_screen.hpp"
 #include "sapphirelib/gui/field_view_math.hpp"
 #include "sapphirelib/gui/gui.hpp"
 #include "sapphirelib/gui/home_page.hpp"

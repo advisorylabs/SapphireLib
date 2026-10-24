@@ -63,4 +63,6 @@ void Imu::setHeadingScale(double headingScale) { headingScale_.store(headingScal
 
 double Imu::headingScale() const { return headingScale_.load(); }
 
+pros::imu_accel_s_t Imu::getAccelG() const { return imu_.get_accel(); }
+
 } // namespace sapphirelib::sensors

@@ -19,9 +19,13 @@ namespace robot {
 sapphirelib::gui::Gui& screen();
 
 /// Adds every page (Home, Auton, Diagnostics, PID tuning, Odom) and starts
-/// the screen refreshing. Call once from initialize(), after initDevices()
-/// (the pages need the devices) and startTelemetry() (the Home page shows
-/// the SD card's state, and the tuner's Auto-Tune axes log into channels).
+/// the screen refreshing, and the face (gui::FaceScreen) that covers it all
+/// through autonomous and driver control under competition control, or after
+/// the Home page's Face button, until a tap. It squints while the lift climbs
+/// and looks surprised at a bump. Call once from initialize(), after
+/// initDevices() (the pages need the devices) and startTelemetry() (the Home
+/// page shows the SD card's state, and the tuner's Auto-Tune axes log into
+/// channels).
 void buildScreen();
 
 /// Runs the routine picked on the Auton tab, logging its start and end (to
