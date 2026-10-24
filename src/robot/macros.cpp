@@ -152,6 +152,7 @@ pros::Motor claw(ports::kClawMotor); // the roller claw
 pros::Rotation liftSensor(ports::kLiftSensor);
 pros::Distance clawSensor(ports::kClawDistance);
 Piston clawPiston(ports::kClawPiston, /*extendedAtStart=*/false);
+Piston topPiston(ports::kTopPiston, /*extendedAtStart=*/false); // out at the top of travel
 
 // Driven from update(), once per opcontrol tick, with that tick's `now`,
 // not on a task of its own, so nothing moves the lift while opcontrol isn't
@@ -179,6 +180,9 @@ enum class Readout { lift, liftMotorA, liftMotorB };
 struct State {
     // false = stowed: piston retracted, lift at the bottom. Only R1 stows.
     bool clawDeployed = false;
+    // The top piston: out once the lift reaches its goal's top level (see
+    // topWanted()), or wherever X left it in debug mode.
+    bool topDeployed = false;
     bool clawIntake = false;  // Y held (and not overridden by R1 or a score)
     bool intakeReady = false; // R1's stow is done, so it intakes until R1 is let go
     bool debug = false;       // the debug mode update() is running, see debugMode
@@ -259,11 +263,24 @@ bool scoreReady() { return liftArrived() && clawPiston.extendedFor(kPistonMoveMs
 /// intake.
 bool stowReached() { return liftArrived() && clawPiston.retractedFor(kPistonMoveMs, tickMs); }
 
+/// The top piston, outside debug mode: out once the lift is on its goal's
+/// top level and has got there, and in the moment it's sent to any other
+/// level. Keyed on the level rather than the reading, so a score at the top,
+/// which dips halfway to the level below, keeps it out the whole way. Never
+/// out with the rotation sensor unplugged (isNear() is false with no
+/// reading), nor during the lift's Run Test.
+bool topWanted() {
+    if (!state.clawDeployed || ladder.level() != ladder.maxLevel()) return false;
+    if (std::isfinite(liftTestTarget.load())) return false;
+    return state.topDeployed || lift.isNear(ladder.levelPosition());
+}
+
 void showStatus(Controller& controller) {
     ControllerScreen& screen = controller.screen();
     if (state.debug) {
-        // No level to show: the lift is L1/L2's.
-        screen.setLine(0, "DEBUG CLAW %s", state.clawDeployed ? "OUT" : "IN");
+        // No level to show: the lift is L1/L2's. Each piston by its port.
+        screen.setLine(0, "DBG G:%s H:%s", state.clawDeployed ? "OUT" : "IN",
+                       state.topDeployed ? "OUT" : "IN");
     } else if (state.clawDeployed) {
         screen.setLine(0, "%-8s L%d/%d", ladder.tableName(), ladder.level(), ladder.maxLevel());
     } else {
@@ -335,6 +352,10 @@ void update(Controller& controller) {
         // The lift keeps its level on the new goal (moving to that goal's
         // height for it), capped if the new goal has fewer levels.
         ladder.nextTable();
+        // The new goal's top level may be at another height, so the top
+        // piston waits to get there again (topWanted()). It doesn't move if
+        // the lift is already there. Debug mode's piston is X's alone.
+        if (!state.debug) state.topDeployed = false;
         // TODO: LED library's mode-change call goes here.
     }
 
@@ -352,6 +373,10 @@ void update(Controller& controller) {
             ladder.setLevel(state.clawDeployed ? std::max(ladder.level(), kFirstLevel)
                                                : kBottomLevel);
             lift.resetController();
+            // The top piston goes back on its rule (topWanted()), rather
+            // than staying wherever X left it: out again only once the lift
+            // is at the top level.
+            state.topDeployed = false;
         }
     }
 
@@ -365,14 +390,12 @@ void update(Controller& controller) {
     // leaves out everything that moves the lift. Then scoring: once started,
     // nothing interrupts it, and starting one beats everything else.
     if (state.debug) {
-        // No levels and no sequences: R1 retracts the claw and intakes at
-        // once, Y deploys it and spins the roller claw in, and the lift is
-        // L1 and L2's alone (below).
-        if (intaking) {
-            state.clawDeployed = false;
-        } else if (clawIntaking) {
-            state.clawDeployed = true;
-        }
+        // No levels and no sequences: each piston flips on a press of its
+        // own button (A the claw on G, X the top piston on H) and nothing
+        // else moves either, R1 intakes at once, Y spins the roller claw
+        // in, and the lift is L1 and L2's alone (below).
+        if (controller.pressed(Button::a)) state.clawDeployed = !state.clawDeployed;
+        if (controller.pressed(Button::x)) state.topDeployed = !state.topDeployed;
         state.intakeReady = intaking;
         state.clawIntake = clawIntaking && !intaking;
     } else if (sequence.running(kScore)) {
@@ -427,7 +450,9 @@ void update(Controller& controller) {
         }
     }
 
+    if (!state.debug) state.topDeployed = topWanted();
     clawPiston.set(state.clawDeployed, now);
+    topPiston.set(state.topDeployed, now);
 
     // R2 held while stowed (or in debug mode, which never scores) reverses the
     // roller claw along with the intake. Deployed, an R2 press scores
@@ -486,7 +511,7 @@ void update(Controller& controller) {
                                              : static_cast<double>(pieceMm),
                          static_cast<double>(ladder.level()), static_cast<double>(ladder.tableIndex()),
                          phase ? static_cast<double>(*phase) : -1.0,
-                         state.clawDeployed ? 1.0 : 0.0});
+                         state.clawDeployed ? 1.0 : 0.0, topPiston.extended() ? 1.0 : 0.0});
     }
 }
 
@@ -517,14 +542,16 @@ void attachTelemetry(sapphirelib::telemetry::Logger& logger) {
         channel->record({step.target, step.position, step.volts, static_cast<double>(step.law)});
     });
     // The intake, claw and lift state machine, every opcontrol tick: volts
-    // sent to the intake and roller claw, the piston, the claw's distance
-    // reading (mm), the lift's level (0 stowed) and goal (0 ALLIANCE, 1
-    // MEDIUM, 2 CENTER), the running sequence step (-1 none; else Phase's
-    // order: scoreDescend, scoreOuttake, dipLower, dipBottom, stowLower), and
-    // whether the claw is deployed.
-    mechLog = &logger.channel(
-        "mech", {"intake_v", "claw_v", "piston", "piece_mm", "level", "mode", "phase", "deployed"},
-        {.capacity = 128, .decimals = 2});
+    // sent to the intake and roller claw, the claw piston, the claw's
+    // distance reading (mm), the lift's level (0 stowed) and goal (0
+    // ALLIANCE, 1 MEDIUM, 2 CENTER), the running sequence step (-1 none; else
+    // Phase's order: scoreDescend, scoreOuttake, dipLower, dipBottom,
+    // stowLower), whether the claw is deployed, and the top piston. "top" is
+    // last so the analyzer still reads logs from before it.
+    mechLog = &logger.channel("mech",
+                              {"intake_v", "claw_v", "piston", "piece_mm", "level", "mode", "phase",
+                               "deployed", "top"},
+                              {.capacity = 128, .decimals = 2});
 }
 
 void setDebug(bool on) { debugMode.store(on); }

@@ -80,8 +80,9 @@ void buildScreen() {
     homePage->setTelemetry(&logger());
     // Which TUNE.CFG this run is using, or that it's on the code's values.
     homePage->addRow(&tuneStatusText);
-    // The macros' debug mode: L1/L2 power the lift directly, no levels (see
-    // macros.hpp). Top right of the page, red while on.
+    // The macros' debug mode: L1/L2 power the lift directly, no levels, and
+    // A/X toggle the pistons on G/H (see macros.hpp). Top right of the page,
+    // red while on.
     homePage->addToggle(
         "Debug", [] { return macros::debug(); }, [](bool on) { macros::setDebug(on); });
     gui.addPage(std::move(homePage));

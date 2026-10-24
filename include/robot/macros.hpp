@@ -37,17 +37,28 @@
  * a pin, to keep hold of it. The lift holds each level on a PID loop around
  * its rotation sensor.
  *
+ * Two pistons (ports in config.hpp). The claw piston, on G, deploys the
+ * moment L1 or Y takes the lift off the bottom, and only R1's stow retracts
+ * it. The top piston, on H, deploys once the lift has reached its goal's top
+ * level, stays out through a score there, and retracts the moment the lift is
+ * sent to any other level. RIGHT at the top level retracts it until the lift
+ * reaches the new goal's top, unless it's already there.
+ *
  * Debug mode (the Home page's Debug button), for bringing the lift up: the
  * lift ignores its levels, and L1 and L2 power its motors directly, up and
  * down for as long as they're held, braking wherever it's let go, sensor or
- * no sensor. Nothing else moves the lift: R1 intakes at once (retracting the
- * claw), R2 only reverses the intake and roller claw (it never scores), Y
- * deploys the claw and spins the roller claw in, and releasing Y doesn't
- * dip. Leaving debug mode puts the lift back on its level (level 1 or up with
- * the claw deployed, the bottom with it retracted), so expect it to move.
+ * no sensor. Nothing else moves the lift. A press of A flips the claw piston
+ * (G) and a press of X the top piston (H), and nothing else moves either:
+ * R1 intakes at once, R2 only reverses the intake and roller claw (it never
+ * scores), Y spins the roller claw in, and releasing Y doesn't dip. X is
+ * also half of the X+UP auton shortcut, so starting a routine that way in
+ * debug mode flips H too. Leaving debug mode puts the lift back on its level
+ * (level 1 or up with the claw deployed, the bottom with it retracted), so
+ * expect it to move, and retracts the top piston until the lift is at the
+ * top level again.
  *
  * Controller screen: line 0 is the goal and level ("STOW" when stowed, or
- * "DEBUG" and the claw in debug mode), line 2 the readout LEFT picks. Line 1
+ * "DBG" and each piston in debug mode), line 2 the readout LEFT picks. Line 1
  * belongs to driver.cpp.
  *
  * Team 96671H: Hitmen

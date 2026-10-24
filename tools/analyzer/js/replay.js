@@ -835,6 +835,8 @@
             const piece = mech.valueAt('piece_mm', t, 0.5);
             add('level', `${fmt(mech.valueAt('level', t, 0.5), 0)} (mode ${fmt(mech.valueAt('mode', t, 0.5), 0)})`);
             add('claw', mech.valueAt('piston', t, 0.5) === 1 ? 'deployed' : 'retracted');
+            // Logs from before the top piston have no column for it.
+            if (mech.has('top')) add('top piston', mech.valueAt('top', t, 0.5) === 1 ? 'deployed' : 'retracted');
             add('piece', Number.isFinite(piece) && piece < 100 ? `yes (${piece.toFixed(0)} mm)` : 'no');
             add('intake / claw', `${fmt(mech.valueAt('intake_v', t, 0.5), 1)} / ${fmt(mech.valueAt('claw_v', t, 0.5), 1)} V`);
           }
