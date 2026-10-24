@@ -75,7 +75,10 @@ Yours to finish first. Everything here is a constant at the top of
 | `ladder` | placeholders | each goal's level heights, in motor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift rests on its switch and autoClaw picks up pins, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has. Names show on the controller, 8 characters at most |
 | `kPieceDetectMm` | 80 | the claw's distance sensor reading at or under which a pin counts as in the claw |
 | `kAutoClawDetectMs` | 0 | how long the sensor must see a pin, without a break, before autoClaw closes the claw on it. 0 closes it on the first reading |
-| `kAutoClawClearMs` | 200 | once the claw opens on a pin, how long the sensor must see nothing before autoClaw can close it again |
+| `kAutoClawClearMs` | 0 | once the claw opens on a pin, how long the sensor must see nothing before autoClaw can close it again. 0 is the first reading that sees nothing; raise it (it was 200) if the claw snaps shut on a pin it was just opened to drop |
+| `kAutoClawLeadMs` | 100 | driving onto a pin, autoClaw closes this many ms of travel early: the reach is `kPieceDetectMm` plus the robot's speed toward the claw's side (mm/ms, the same as m/s) times this. More if pins taken at speed end up past the claw or pushed out, less if it closes before the pin gets there |
+| `kAutoClawMaxReachMm` | 200 | the furthest out that lead ever closes the claw, however fast the robot goes |
+| `kClawFacingDeg` | 0 | which way the claw's mouth faces, degrees clockwise from the robot's front (180 the back). Only driving that way counts toward the lead |
 | `kScoreReleaseMs` | 400 | how long a score waits after opening the claw before lowering the lift, for the claw to let go of the pin |
 | `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
 | `kLiftToleranceDeg` | 15 | how close the lift must get before a score's dip moves on to opening the claw |
