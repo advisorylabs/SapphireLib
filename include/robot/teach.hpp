@@ -11,14 +11,14 @@
  * same path as a trajectory, with the feedback, odometry and the localizer
  * correcting it like any other, so a low battery or a start a little off
  * doesn't send it somewhere else. The buttons go back into the driver macros
- * on the trajectory's clock, so the intake, claw and lift do what the driver
- * did, where they did it, even if the robot was held up on the way.
+ * on the trajectory's clock, so the claw, lift and extender do what the
+ * driver did, where they did it, even if the robot was held up on the way.
  *
  * Stopping saves the drive to the SD card as TEACH.TXT (next to the logs, or
  * the card's root), and the next power-on loads it again. The "Taught Route"
  * auton replays it. Start teaching where the routine will start, with the
- * mechanisms as a match starts them (stowed), and put the robot back on that
- * spot before replaying.
+ * mechanisms as a match starts them (lift down, claw closed on a preload,
+ * extender in), and put the robot back on that spot before replaying.
  *
  * Team 96671H: Hitmen
  */

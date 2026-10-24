@@ -200,8 +200,9 @@ void initDevices() {
     // because it isn't synchronized.
     chassis.setOdometry(&odometry());
 
-    // Intake/claw/lift driver macros, see macros.hpp. Zeroes the lift here,
-    // so start the program with the lift all the way down.
+    // Lift/claw/extender driver macros, see macros.hpp. Zeroes the lift's
+    // encoders here, so start the program with the lift all the way down
+    // (its bottom switch zeroes them again the first time it's pressed).
     macros::initialize();
 
     // TUNE.CFG's gains, axis models and lift gravity, over the values above

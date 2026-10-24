@@ -952,11 +952,20 @@
           if (mech) {
             const piece = mech.valueAt('piece_mm', t, 0.5);
             add('level', `${fmt(mech.valueAt('level', t, 0.5), 0)} (mode ${fmt(mech.valueAt('mode', t, 0.5), 0)})`);
-            add('claw', mech.valueAt('piston', t, 0.5) === 1 ? 'deployed' : 'retracted');
-            // Logs from before the top piston have no column for it.
-            if (mech.has('top')) add('top piston', mech.valueAt('top', t, 0.5) === 1 ? 'deployed' : 'retracted');
-            add('piece', Number.isFinite(piece) && piece < 100 ? `yes (${piece.toFixed(0)} mm)` : 'no');
-            add('intake / claw', `${fmt(mech.valueAt('intake_v', t, 0.5), 1)} / ${fmt(mech.valueAt('claw_v', t, 0.5), 1)} V`);
+            if (mech.has('claw')) {
+              // The pneumatic claw, extender and bottom switch.
+              add('claw', mech.valueAt('claw', t, 0.5) === 1 ? 'closed' : 'open');
+              add('extender', mech.valueAt('extender', t, 0.5) === 1 ? 'out' : 'in');
+              add('bottom switch', mech.valueAt('bottom', t, 0.5) === 1 ? 'pressed' : '-');
+              add('piece', Number.isFinite(piece) && piece < 100 ? `yes (${piece.toFixed(0)} mm)` : 'no');
+            } else {
+              // Logs from the intake and roller claw.
+              add('claw', mech.valueAt('piston', t, 0.5) === 1 ? 'deployed' : 'retracted');
+              // Logs from before the top piston have no column for it.
+              if (mech.has('top')) add('top piston', mech.valueAt('top', t, 0.5) === 1 ? 'deployed' : 'retracted');
+              add('piece', Number.isFinite(piece) && piece < 100 ? `yes (${piece.toFixed(0)} mm)` : 'no');
+              add('intake / claw', `${fmt(mech.valueAt('intake_v', t, 0.5), 1)} / ${fmt(mech.valueAt('claw_v', t, 0.5), 1)} V`);
+            }
           }
         }
         for (const tile of tiles) {

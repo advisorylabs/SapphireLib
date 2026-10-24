@@ -1,7 +1,7 @@
 # Teach mode: drive it once, replay it as an auton
 
 Drive a route by hand in driver control, and the **Taught Route** auton replays it: the same path,
-at the driver's pace, with the intake, claw and lift doing what the driver did where they did it.
+at the driver's pace, with the claw, lift and extender doing what the driver did where they did it.
 
 It doesn't replay the sticks. Replaying stick inputs is open loop: the same volts don't give the
 same path, so a start 1° off ends 2.5 in off after 12 ft, and a low battery, wheel slip or a bump
@@ -23,9 +23,10 @@ Contents: [Teaching](#teaching) · [Replaying](#replaying) · [How a drive becom
 ## Teaching
 
 1. Off the field (no competition switch or field cable), put the robot where the routine will
-   start, with the mechanisms as a match starts them: stowed. The drive is recorded in whatever
-   frame odometry is in: field coordinates if an auton's `setPose()` put it there earlier this
-   power-on, otherwise inches from where the robot sat at power-on. The replay sets that same
+   start, with the mechanisms as a match starts them: lift down, claw closed on a preload, extender
+   in. The drive is recorded in whatever frame odometry is in: field coordinates if an auton's
+   `setPose()` put it there earlier this power-on, otherwise inches from where the robot sat at
+   power-on. The replay sets that same
    start, so either works with the robot put back on the spot, but only in field coordinates can
    the localizer also correct the replay against the walls.
 2. **X+A** (pressed together) starts recording, or the Home page's **Teach** button. The
@@ -94,7 +95,8 @@ Unlike a drawn path, a taught drive can turn in place: it's planned in time, not
   and a field-coordinates `setPose()`, a start a little off gets corrected against the walls;
   without them, the whole replay is shifted by however far off the robot was put.
 - **Mechanism state isn't recorded**, only the buttons. Start teaching and replaying from the same
-  state (stowed, the same goal selected), or the same presses do something else.
+  state (lift down, the claw and extender as they were, the same goal selected), or the same presses
+  do something else: R1 and Y flip their piston, so from the other state they flip it the other way.
 - **Only the driver macros' buttons replay.** The drive itself comes from the trajectory, so B
   (invert) and DOWN (orbit) don't matter, and X+UP isn't replayed.
 - **A long drive outlives autonomous**: a taught drive longer than the autonomous period is cut off

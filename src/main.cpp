@@ -4,7 +4,7 @@
  * PROS's competition callbacks, and nothing else: each one hands off to the
  * robot program in src/robot/ (ports in include/robot/config.hpp, devices,
  * screen, autons, tuning, telemetry, driver control, teach mode, and the
- * intake/claw/lift macros).
+ * lift/claw/extender macros).
  *
  * Team 96671H: Hitmen
  */
@@ -110,7 +110,7 @@ void opcontrol() {
         // the driver asked for next to what the robot did.
         robot::logDriver(controller);
 
-        // Intake, claw, and lift buttons (R1/R2/L1/L2/Y/RIGHT/LEFT). Runs
+        // Claw, lift, and extender buttons (R1/R2/L1/L2/Y/RIGHT/LEFT). Runs
         // ahead of the busy check below, so they keep working during a GUI
         // routine.
         robot::macros::update(controller);

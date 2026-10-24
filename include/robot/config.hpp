@@ -3,9 +3,10 @@
  *
  * Where everything on 96671H's robot is plugged in, plus the drivetrain and
  * odometry geometry. Each port is written here and nowhere else: the
- * drivetrain, the tracking wheels, the driver macros, the Lift Testing auton
- * and the Diagnostics page all read these, so moving a cable means changing
- * one number. As everywhere in PROS, a negative smart port reverses the
+ * drivetrain, the tracking wheels, the driver macros, the Lift Testing auton,
+ * the telemetry and the Diagnostics page all read these, so moving a cable
+ * means changing one number, and adding or removing a lift motor one entry in
+ * kLiftMotors. As everywhere in PROS, a negative smart port reverses the
  * device on it.
  *
  * Team 96671H: Hitmen
@@ -13,6 +14,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace robot::ports {
@@ -23,52 +25,57 @@ namespace robot::ports {
 // as on the test chassis, the whole drive ran backward. With the wheels off
 // the ground, full forward on the left stick must spin all six forward; if
 // one wheel doesn't, flip just its sign.
-constexpr std::int8_t kFrontLeft = 3;
-constexpr std::int8_t kFrontRight = -15;
-constexpr std::int8_t kBackLeft = 14;
-constexpr std::int8_t kBackRight = -6;
-constexpr std::int8_t kMiddleLeft = 2;
-constexpr std::int8_t kMiddleRight = -20;
-constexpr std::uint8_t kImu = 19;
+constexpr std::int8_t kFrontLeft = 9;
+constexpr std::int8_t kFrontRight = -19;
+constexpr std::int8_t kBackLeft = 2;
+constexpr std::int8_t kBackRight = -20;
+constexpr std::int8_t kMiddleLeft = 5;
+constexpr std::int8_t kMiddleRight = -7;
+constexpr std::uint8_t kImu = 4;
 
 // --- Odometry tracking wheels (rotation sensors) ---
 // Vertical is reversed, as it had to be on the test chassis; see its
 // constructor in devices.cpp. TODO: confirm both on this robot: on the Odom
 // page, driving forward must raise Y and strafing right must raise X.
 // Negate whichever one goes the wrong way.
-constexpr std::int8_t kVerticalTracking = -11;
-constexpr std::int8_t kHorizontalTracking = 1;
+constexpr std::int8_t kVerticalTracking = 6;
+constexpr std::int8_t kHorizontalTracking = 3;
 
-// --- Intake, roller claw, and lift (macros.cpp) ---
-// Intaking (+) spins the intake and the roller claw "clockwise" in the
-// driver's sense of it; the intake's port is reversed so that's +. If either
-// spins outward on R1, negate its port.
-constexpr std::int8_t kIntake = -21;
-constexpr std::int8_t kClawMotor = 17; // the roller claw
-// The two lift motors are geared straight to each other, so they spin
-// opposite ways: A clockwise going up, B counterclockwise. B is reversed so
-// + is up for both; with both the same sign they fight each other and lock
-// up. If L1 in debug mode drives the lift down, negate both.
-constexpr std::int8_t kLiftA = 7;
-constexpr std::int8_t kLiftB = -9;
-// Negate this if the sensor's reading goes down as the lift goes up.
-constexpr std::int8_t kLiftSensor = 16;
-// Sees a pin in the roller claw.
-constexpr std::uint8_t kClawDistance = 12;
-// The two pistons, on the brain's 3-wire ports (not smart ports). G deploys
-// the claw, the moment L1 or Y takes the lift off the bottom. H deploys once
-// the lift reaches the top of its travel: its goal's top level. In debug
-// mode, A and X toggle them by hand (see macros.hpp).
-constexpr char kClawPiston = 'G';
-constexpr char kTopPiston = 'H';
+// --- Lift, claw, and extender (macros.cpp) ---
+// The lift's motors, all driven together, as many as the lift has: add or
+// remove one here and the lift, the Diagnostics page, the telemetry and the
+// controller's motor readouts (LEFT) all follow. They're lettered A, B, C...
+// in this order everywhere. + must be up for every one: motors geared
+// straight to each other spin opposite ways, so one of each such pair is
+// reversed, and with the signs wrong they fight each other and lock up. If L1
+// in debug mode drives the lift down, negate them all.
+//
+// There's no lift sensor: the position is these motors' own encoders, in
+// motor degrees, zeroed by the bottom switch below.
+//
+// After moving one, check each motor on its own (Diagnostics, then the LEFT
+// readout's volts in debug mode).
+constexpr std::array<std::int8_t, 3> kLiftMotors{14, -13, -10};
+// A limit switch the lift presses at the bottom of its travel, on a 3-wire
+// port. Each press zeroes the lift's encoders, and a lift heading for the
+// bottom drives down until it's pressed.
+constexpr char kLiftBottomSwitch = 'A';
+// Sees a pin in the claw: autoClaw closes on it at the bottom, and the Branch
+// autons pick their branch by it.
+constexpr std::uint8_t kClawDistance = 15;
+// The two pistons, on 3-wire ports (not smart ports). R1 opens and closes the
+// claw, a score opens it, and autoClaw closes it; Y pushes the extender out
+// and pulls it back in (see macros.hpp).
+constexpr char kClawPiston = 'B';
+constexpr char kExtenderPiston = 'H';
 
 // --- Localization distance sensors (devices.cpp) ---
 // One per side, for Monte Carlo localization. The team calls them by
 // compass point, with north the robot's front.
-constexpr std::uint8_t kDistanceFront = 8;  // north
-constexpr std::uint8_t kDistanceRight = 10; // east
-constexpr std::uint8_t kDistanceBack = 18;  // south
-constexpr std::uint8_t kDistanceLeft = 5;   // west
+constexpr std::uint8_t kDistanceFront = 21;  // north
+constexpr std::uint8_t kDistanceRight = 8; // east
+constexpr std::uint8_t kDistanceBack = 11;  // south
+constexpr std::uint8_t kDistanceLeft = 12;   // west
 
 } // namespace robot::ports
 

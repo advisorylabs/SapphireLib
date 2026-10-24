@@ -36,8 +36,8 @@ Contents: [Before you start](#before-you-start) · [1. Macros and lift heights](
   chassis, and the robot applies it at every startup over the code's values: `pid.*`, `model.*`,
   `lift.gravityVolts` and `mcl.*`. The Home page should read "Tune: code values (no TUNE.CFG)".
 - [ ] Ports in [`config.hpp`](../include/robot/config.hpp). The Diagnostics page checks every smart port
-  device straight from it, so it should be all green. It doesn't check the 3-wire ports: the claw
-  piston on G and the top piston on H get their check in step 1.
+  device straight from it, so it should be all green. It doesn't check the 3-wire ports: the lift's
+  bottom switch, the claw piston and the extender get their check in step 1.
 - [ ] **The drive controls** ([`driver.cpp`](../src/robot/driver.cpp)). Driving is robot-centric
   holonomic split arcade: the left stick drives and strafes, the right stick turns, and B swaps front
   and back. Steps 3, 5 and 6 spin and drive the robot with the sticks. DOWN orbits a pivot behind the
@@ -59,53 +59,69 @@ Two ways to get numbers off the robot, used all through this page:
 - **The terminal.** `pros terminal` with the brain or controller plugged in over USB. Calibrations
   print what they found there, ready to copy.
 
-Units: the lift is in **degrees of its rotation sensor**, counted up from where it was zeroed, past
-360 (720 is two turns of the sensor, not of the lift). Driving is in inches, turning in degrees.
+Units: the lift is in **motor degrees**, the lift motors' own encoders (the median of the ones that
+answer), counted up from the bottom switch, past 360 (720 is two turns of the motors, not of the
+lift). Driving is in inches, turning in degrees.
 
 ## 1. Macros and lift heights
 
 Yours to finish first. Everything here is a constant at the top of
-[`macros.cpp`](../src/robot/macros.cpp):
+[`macros.cpp`](../src/robot/macros.cpp), the ports in [`config.hpp`](../include/robot/config.hpp):
 
 | Constant | Now | What it is |
 |---|---|---|
-| `ladder` | placeholders | each goal's level heights, in lift sensor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift stows and intakes, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has; the last is the goal's top level, where the top piston (H) deploys. Names show on the controller, 8 characters at most |
-| `kPieceDetectMm` | 50 | the claw's distance sensor reading at or under which a piece counts as in the claw |
-| `kIntakeMv`, `kClawMv` | 12700 | intake and roller claw speed, in millivolts (12000 is full) |
-| `kClawHoldMv` | 12700 | roller claw spin while it holds a detected piece. It's stalled most of that time: turn this down first if the claw motor runs hot |
-| `kPistonMoveMs` | 400 | how long the claw piston (G) gets to finish moving before anything runs past it: a score's outtake waits for it to have deployed this long, R1's intake for it to have retracted this long |
-| `kScoreOuttakeMs` | 500 | how long the roller claw outtakes on a score |
+| `kLiftMotors` (`config.hpp`) | 14, -13, -10 | the lift's motors, all driven together; add or remove one and everything that drives, checks, logs or shows them follows |
+| `kLiftBottomSwitch`, `kClawPiston`, `kExtenderPiston` (`config.hpp`) | 'A', 'B', 'H' | the 3-wire ports: the lift's bottom switch, the claw and the extender |
+| `ladder` | placeholders | each goal's level heights, in motor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift rests on its switch and autoClaw picks up pins, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has. Names show on the controller, 8 characters at most |
+| `kPieceDetectMm` | 80 | the claw's distance sensor reading at or under which a pin counts as in the claw |
+| `kAutoClawDetectMs` | 0 | how long the sensor must see a pin, without a break, before autoClaw closes the claw on it. 0 closes it on the first reading |
+| `kAutoClawClearMs` | 200 | once the claw opens on a pin, how long the sensor must see nothing before autoClaw can close it again |
+| `kScoreReleaseMs` | 400 | how long a score waits after opening the claw before lowering the lift, for the claw to let go of the pin |
 | `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
-| `kDipBottomMs` | 100 | after releasing Y, how long the lift sits at the bottom before coming back up to level 1 |
-| `kLiftToleranceDeg` | 15 | how close the lift must get before a sequence waiting on it moves on (a score's dip, the dip after Y, R1's stow), and how close to its goal's top level before the top piston deploys |
-| `kLiftDescendTimeoutMs`, `kStowTimeoutMs` | 1000, 2000 | how long a sequence waits for the lift before moving on anyway. Stowing can start from the top, so it gets longer |
-| `kLiftDebugVolts` | 12 | debug mode: the volts L1 and L2 put on the lift motors while held |
+| `kLiftToleranceDeg` | 15 | how close the lift must get before a score's dip moves on to opening the claw |
+| `kLiftDescendTimeoutMs` | 1000 | how long a score's dip waits for the lift before opening the claw anyway |
+| `kLiftSeekVolts`, `kLiftSeekTimeoutMs` | 3, 1000 | heading for the bottom, when the encoders read 0 but the switch isn't pressed, the lift drives down at these volts until it is, for this long at most |
+| `kLiftMaxDownVolts` | 9 | the most the lift is ever driven down with, 75% of full power: its loop, the seat, the seek, debug mode's L2, Auto-Tune's ramps and the Lift Testing auton all stop here. Up is still full power |
+| `kLiftDebugVolts` | 12 | debug mode: the volts L1 and L2 put on the lift motors while held (L2's capped at `kLiftMaxDownVolts`) |
 
 - [ ] **Debug mode** (Home page, **Debug**) for the checks below: L1 and L2 drive the lift motors
-  directly, up and down, sensor or no sensor, and nothing else moves the lift. If L1 drives it down,
-  negate both `kLiftA` and `kLiftB` in `config.hpp`.
-- [ ] **Pistons.** Still in debug mode, A flips the claw piston (G) and X the top piston (H), one press
-  each. The controller's top line shows both, `DBG G:OUT H:IN`. Each should move the way the line
-  says; one that's backward has its valve plumbed the other way: swap its air lines, or give its
-  `Piston` in `macros.cpp` `extendedIsLow = true`. X and A are also halves of shortcuts: the X+UP auton
-  shortcut flips H too, and X+A, which starts and stops teach mode ([`TEACH.md`](TEACH.md)), flips both.
-- [ ] **Lift sensor sign.** Raising the lift makes the controller's `LIFT` reading grow. If it
-  shrinks, negate `kLiftSensor` in `config.hpp`. Backward, Auto-Tune can't fit the lift ("no fit"),
-  since a positive voltage has to make the reading grow.
-- [ ] **Zero.** `macros::initialize()` zeroes the lift sensor wherever the lift is when the program
-  starts. Always start with the lift all the way down, and never restart with it up.
-- [ ] **Level heights.** The controller's third line shows `LIFT reading/target` (LEFT cycles it to
-  the lift motors' volts, current and temperature, and back). In debug mode it shows just the reading,
-  so drive the lift to each of a goal's heights with L1 and L2 and copy the numbers into its table.
-  Leaving debug mode puts the lift back on its level, so expect it to move.
-- [ ] **The top of travel.** Read the sensor with the lift at its highest safe point. Step 2's window
-  is set from it, and no goal's top level should be above it.
-- [ ] **The top piston.** Out of debug mode, step a goal up to its top level with L1: H deploys once
-  the lift gets within `kLiftToleranceDeg` of it, stays out through a score there, and retracts the
-  moment L2, R1 or Y sends the lift to another level. A lift that hangs further below the top than
-  that never deploys it: check again after step 2's gravity volts.
-- [ ] **`kPieceDetectMm`.** Start log, sit a piece in the claw, take it out, a few times. In the
+  directly, up and down, encoders or no encoders, and nothing else moves the lift (R2 never scores,
+  and autoClaw is off). L2 stops at the bottom switch. If L1 drives it down, negate every port in
+  `kLiftMotors`.
+- [ ] **Each lift motor.** LEFT cycles the controller's third line from the lift to each motor's
+  volts, current and temperature, lettered A, B, C in `kLiftMotors`' order (the Diagnostics page and
+  the `motor.lift*` log channels letter them the same way). Hold L1 and step through them: all three
+  should show about +12 V and a similar current. One that's at 0 V is on the wrong port; one that
+  fights the others (the lift crawls or stalls, one motor's current far above the rest) has the wrong
+  sign.
+- [ ] **The bottom switch.** The third line's label reads `BTM` instead of `LIFT` while the switch is
+  pressed. Press it by hand, then lower the lift onto it with L2: `BTM` should come on as it lands,
+  and the reading go to 0. Unplug it: the label should stay `LIFT`.
+- [ ] **Pistons.** Still in debug mode, R1 flips the claw and Y the extender, one press each. The
+  controller's top line shows both, `DBG SHUT EX:IN`. The claw should start closed, and each should
+  move the way the line says; one that's backward has its valve plumbed the other way: swap its air
+  lines, or give its `Piston` in `macros.cpp` `extendedIsLow = true`.
+- [ ] **Encoder sign.** Nothing to set: the encoders are the motors' own, so a port's sign reverses
+  its reading along with its direction. Once L1 drives the lift up, raising it makes the
+  controller's `LIFT` reading grow, which is what Auto-Tune needs to fit it.
+- [ ] **Zero.** `macros::initialize()` zeroes the encoders wherever the lift is when the program
+  starts, and every press of the bottom switch zeroes them again. So a restart with the lift up is
+  wrong only until the lift first comes down: start with it down anyway.
+- [ ] **Level heights.** The controller's third line shows `LIFT reading/target`. In debug mode it
+  shows just the reading, so lower the lift onto the switch first (it zeroes there), then drive it to
+  each of a goal's heights with L1 and copy the numbers into its table. Leaving debug mode puts the
+  lift back on its level, so expect it to move.
+- [ ] **The top of travel.** Read the encoders with the lift at its highest safe point. Step 2's
+  window is set from it, and no goal's top level should be above it.
+- [ ] **The seek.** Out of debug mode, at a level, unplug the bottom switch and press L2 down to the
+  bottom: the lift rests at 0, drives down at `kLiftSeekVolts` for `kLiftSeekTimeoutMs`, then gives
+  up and rests (the terminal says so, and the log has a `macro,seek_failed` event). Plug it back in.
+  If the lift never gets down onto the switch in normal use, raise `kLiftSeekVolts`.
+- [ ] **`kPieceDetectMm`.** Start log, sit a pin in the claw, take it out, a few times. In the
   analyzer's **Charts**, the `mech` channel's `piece_mm` shows both readings; pick a value between.
+- [ ] **autoClaw.** Out of debug mode, lift at the bottom, R1 to open the claw with no pin in it, then
+  push a pin in: it closes. R1 to open it again on that pin: it stays open until you take the pin out
+  and put one back.
 
 Measure the heights again after step 2: a lift that settled short with the old gains lands on its
 target now, so what you read is where it really is.
@@ -120,7 +136,8 @@ are in.
 `macros::liftExperiment()` takes the lift's motors from its loop and drives four segments, each from
 rest:
 
-1. **Ramp up**: volts climb at 6 V/s (to 10 V at most) until the reading passes `kLiftTuneUpperDeg`.
+1. **Ramp up**: volts climb at 6 V/s (to 9 V at most, `kLiftMaxDownVolts`) until the reading passes
+   `kLiftTuneUpperDeg`.
 2. **Ramp down**: the same downward, until it passes `kLiftTuneLowerDeg`.
 3. **Step up**: straight to `kLiftTuneUpVolts`, until it passes `kLiftTuneUpperDeg`.
 4. **Step down**: straight to `kLiftTuneDownVolts` downward, until it passes `kLiftTuneLowerDeg`.
@@ -206,10 +223,11 @@ In the analyzer ([`tools/analyzer`](../tools/analyzer/)):
    Copy from the analyzer, not the screen: the PID page shows gains to three decimals, and kD often
    lives in the fourth. The analyzer refits the logged run with a port of the robot's own math, so its
    numbers are the robot's, in full.
-5. [ ] **Seat volts.** If the lift heading for level 0 hangs just above its bottom stop instead of
-   resting on it, raise `kLiftSeatVolts` (0 now). Heading for level 0 it drives down with at least
-   that many volts, without gravity volts, until it's within `kLiftRestDeg` (2) of the bottom, then
-   cuts power and rests on the stop.
+5. [ ] **Seat volts.** If the lift heading for level 0 slows to a crawl just above its bottom stop,
+   raise `kLiftSeatVolts` (0 now). Heading for level 0 it drives down with at least that many volts,
+   without gravity volts, until its encoders read within `kLiftRestDeg` (2) of 0, then cuts power
+   and rests. If the bottom switch isn't pressed by then, the seek (`kLiftSeekVolts`) takes it the
+   rest of the way down onto it.
 6. [ ] Rebuild, flash, Run Test again: the same behavior, now from the code.
 
 **Tweaking.** `kLiftResponse` in [`tuning.cpp`](../src/robot/tuning.cpp) is what the design aims for:

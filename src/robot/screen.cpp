@@ -10,6 +10,7 @@
 
 #include "robot/screen.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -81,9 +82,9 @@ void buildScreen() {
     homePage->setTelemetry(&logger());
     // Which TUNE.CFG this run is using, or that it's on the code's values.
     homePage->addRow(&tuneStatusText);
-    // The macros' debug mode: L1/L2 power the lift directly, no levels, and
-    // A/X toggle the pistons on G/H (see macros.hpp). Top right of the page,
-    // red while on.
+    // The macros' debug mode: L1/L2 power the lift directly, no levels, no
+    // scoring and no autoClaw (see macros.hpp). Top right of the page, red
+    // while on.
     homePage->addToggle(
         "Debug", [] { return macros::debug(); }, [](bool on) { macros::setDebug(on); });
     // Teach mode (teach.hpp): what's taught, and a button that starts and
@@ -104,32 +105,33 @@ void buildScreen() {
     // Re-checks these every tick (not just at startup), a sensor that
     // works at power-on but gets knocked loose mid-match should still show
     // up. Built from config.hpp, the same ports the devices use.
-    const auto check = [](const char* label, std::int8_t port, DeviceKind expected) {
-        return SensorCheck{.label = label, .port = port, .expected = expected};
+    const auto check = [](std::string label, std::int8_t port, DeviceKind expected) {
+        return SensorCheck{.label = std::move(label), .port = port, .expected = expected};
     };
-    gui.addPage(std::make_unique<DiagnosticsPage>(
-        std::vector<SensorCheck>{
-            check("Front-left drive motor", ports::kFrontLeft, DeviceKind::motor),
-            check("Front-right drive motor", ports::kFrontRight, DeviceKind::motor),
-            check("Back-left drive motor", ports::kBackLeft, DeviceKind::motor),
-            check("Back-right drive motor", ports::kBackRight, DeviceKind::motor),
-            check("Middle-left drive motor", ports::kMiddleLeft, DeviceKind::motor),
-            check("Middle-right drive motor", ports::kMiddleRight, DeviceKind::motor),
-            check("IMU", ports::kImu, DeviceKind::imu),
-            check("Vertical tracking wheel", ports::kVerticalTracking, DeviceKind::rotation),
-            check("Horizontal tracking wheel", ports::kHorizontalTracking, DeviceKind::rotation),
-            check("Lift motor A", ports::kLiftA, DeviceKind::motor),
-            check("Lift motor B", ports::kLiftB, DeviceKind::motor),
-            check("Lift rotation sensor", ports::kLiftSensor, DeviceKind::rotation),
-            check("Intake motor", ports::kIntake, DeviceKind::motor),
-            check("Roller claw motor", ports::kClawMotor, DeviceKind::motor),
-            check("Pin distance sensor", ports::kClawDistance, DeviceKind::distance),
-            check("North distance sensor", ports::kDistanceFront, DeviceKind::distance),
-            check("East distance sensor", ports::kDistanceRight, DeviceKind::distance),
-            check("South distance sensor", ports::kDistanceBack, DeviceKind::distance),
-            check("West distance sensor", ports::kDistanceLeft, DeviceKind::distance),
-        },
-        &gui));
+    std::vector<SensorCheck> checks{
+        check("Front-left drive motor", ports::kFrontLeft, DeviceKind::motor),
+        check("Front-right drive motor", ports::kFrontRight, DeviceKind::motor),
+        check("Back-left drive motor", ports::kBackLeft, DeviceKind::motor),
+        check("Back-right drive motor", ports::kBackRight, DeviceKind::motor),
+        check("Middle-left drive motor", ports::kMiddleLeft, DeviceKind::motor),
+        check("Middle-right drive motor", ports::kMiddleRight, DeviceKind::motor),
+        check("IMU", ports::kImu, DeviceKind::imu),
+        check("Vertical tracking wheel", ports::kVerticalTracking, DeviceKind::rotation),
+        check("Horizontal tracking wheel", ports::kHorizontalTracking, DeviceKind::rotation),
+    };
+    // However many the lift has, lettered as the controller's LEFT readout
+    // letters them. The bottom switch and the pistons are on 3-wire ports,
+    // which this can't check: debug mode can (docs/NEW_CHASSIS.md, step 1).
+    for (std::size_t i = 0; i < ports::kLiftMotors.size(); ++i) {
+        checks.push_back(check(std::string("Lift motor ") + static_cast<char>('A' + i),
+                               ports::kLiftMotors[i], DeviceKind::motor));
+    }
+    checks.push_back(check("Pin distance sensor", ports::kClawDistance, DeviceKind::distance));
+    checks.push_back(check("North distance sensor", ports::kDistanceFront, DeviceKind::distance));
+    checks.push_back(check("East distance sensor", ports::kDistanceRight, DeviceKind::distance));
+    checks.push_back(check("South distance sensor", ports::kDistanceBack, DeviceKind::distance));
+    checks.push_back(check("West distance sensor", ports::kDistanceLeft, DeviceKind::distance));
+    gui.addPage(std::make_unique<DiagnosticsPage>(std::move(checks), &gui));
 
     auto pidTunerPage = std::make_unique<PidTunerPage>();
     registerTuning(*pidTunerPage);
