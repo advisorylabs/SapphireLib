@@ -45,6 +45,56 @@ constexpr std::uint32_t kParticleEvery = 5;
 constexpr std::size_t kParticleRows = 4;
 constexpr std::size_t kParticlesPerRow = 6;
 
+// "traj.plan": at most about this many rows per trajectory (every few
+// samples, about 2in apart on a long path), plus its stops and its last
+// point. Written in one burst, so the channel's ring holds them all.
+constexpr std::size_t kPlanRows = 180;
+
+// followTrajectory()'s record: the plan once as it starts ("traj.plan"), and
+// the reference every tick ("traj"), so the analyzer can draw the plan under
+// a replay even when a match cut the motion short. A chain (a branch at
+// speed) adds each trajectory's plan as the robot carries on into it, its
+// times and sections running on from the one before. Called on the motion's
+// task; record() only copies into a ring.
+class TrajectoryLog : public sapphirelib::motion::TrajectoryObserver {
+public:
+    TrajectoryLog(Channel& plan, Channel& ticks) : plan_(plan), ticks_(ticks) {}
+
+    void onTrajectoryStart(const sapphirelib::motion::Trajectory& trajectory) override {
+        recordPlan(trajectory, 0.0, 0);
+    }
+
+    void onTrajectoryContinue(const sapphirelib::motion::Trajectory& trajectory, double startTimeS,
+                              std::size_t firstSection) override {
+        recordPlan(trajectory, startTimeS, firstSection);
+    }
+
+    void onTrackingTick(const sapphirelib::motion::TrackingTick& tick) override {
+        const auto& r = tick.reference;
+        ticks_.record({tick.referenceTimeS, r.xIn, r.yIn, r.headingDeg, r.forwardInPerS,
+                       r.strafeInPerS, r.omegaDegPerS, tick.feedforward.forward,
+                       tick.feedforward.strafe, tick.feedforward.turn, tick.errors.alongTrackIn,
+                       tick.paused ? 1.0 : 0.0, static_cast<double>(tick.section)});
+    }
+
+private:
+    Channel& plan_;
+    Channel& ticks_;
+
+    void recordPlan(const sapphirelib::motion::Trajectory& trajectory, double startTimeS,
+                    std::size_t firstSection) {
+        const auto& samples = trajectory.samples();
+        const std::size_t stride = (samples.size() + kPlanRows - 1) / kPlanRows;
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            const bool last = i + 1 == samples.size();
+            if (i % stride != 0 && !samples[i].stop && !last) continue;
+            const auto& s = samples[i];
+            plan_.record({startTimeS + s.tS, s.xIn, s.yIn, s.headingDeg, s.speedInPerS,
+                          static_cast<double>(firstSection + s.section), s.stop ? 1.0 : 0.0});
+        }
+    }
+};
+
 } // namespace
 
 Logger& logger() {
@@ -76,6 +126,22 @@ void startTelemetry() {
     log.pid("drive", chassis.drivePID());
     log.pid("turn", chassis.turnPID());
     log.pid("hold", chassis.headingHoldPID());
+    log.pid("trackFwd", chassis.trackingForwardPID());
+    log.pid("trackStrafe", chassis.trackingStrafePID());
+    log.pid("trackTurn", chassis.trackingTurnPID());
+
+    // followTrajectory(): the plan once per trajectory, then the reference,
+    // the feedforward volts per axis, how far behind the robot was (lag, in),
+    // whether the plan waited for it, and the section, every tick. ref_t is
+    // the plan's clock, which stops while it waits.
+    Channel& planLog = log.channel("traj.plan", {"t_plan", "x", "y", "hdg", "v", "sec", "stop"},
+                                   {.capacity = 256, .decimals = 3});
+    Channel& trajLog = log.channel("traj",
+                                   {"ref_t", "ref_x", "ref_y", "ref_hdg", "ref_vf", "ref_vs",
+                                    "ref_w", "ff_f", "ff_s", "ff_t", "lag", "paused", "sec"},
+                                   {.decimals = 3});
+    static TrajectoryLog trajectoryLog(planLog, trajLog);
+    chassis.setTrajectoryObserver(&trajectoryLog);
 
     // x, y, heading at 100Hz: the corrected pose, what every motion drives by.
     // And raw_x, raw_y, the tracking wheels and IMU alone: fitting the chassis

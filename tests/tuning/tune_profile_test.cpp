@@ -36,7 +36,7 @@ void expectError(const char* text, std::size_t line, const char* error) {
 // the robot program's own schema, as src/robot/tune.cpp declares it
 TuneSchema robotSchema() {
     return TuneSchema{
-        .pids = {"drive", "turn", "hold", "lift"},
+        .pids = {"drive", "turn", "hold", "lift", "trackFwd", "trackStrafe", "trackTurn"},
         .models = {"fwd", "strafe", "turn"},
         .values = {{.key = "lift.gravityVolts", .min = -12, .max = 12},
                    {.key = "mcl.periodMs", .min = 10, .max = 1000, .whole = true}},

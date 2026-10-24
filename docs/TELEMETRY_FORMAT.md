@@ -158,11 +158,19 @@ and an end:
 
 ```
 E,<t_us>,motion,start,<kind>,<key>=<value>,...
-E,<t_us>,motion,end,<kind>,reason=<settled|timeout|aborted>,error=<finalError>,ms=<elapsedMs>
+E,<t_us>,motion,end,<kind>,reason=<settled|timeout|aborted|interrupted>,error=<finalError>,ms=<elapsedMs>
 ```
 
-`kind` is one of `driveDistance`, `turnToHeading`, `moveToPoint`, `moveToPose`, `followPath`.
-Floats are written `%.3f`, milliseconds as integers.
+and a `followTrajectory` that carries on into the next trajectory of a chain (a branch at speed,
+see `docs/TRAJECTORIES.md`) logs each junction between them:
+
+```
+E,<t_us>,motion,continue,followTrajectory,piece=<n>,sections=<n>,samples=<n>,length_in=<in>,duration_ms=<ms>,start_ms=<ms>
+E,<t_us>,motion,nocontinue,followTrajectory,piece=<n>,why=<none|mismatched>
+```
+
+`kind` is one of `driveDistance`, `turnToHeading`, `moveToPoint`, `moveToPose`, `followPath`,
+`followTrajectory`. Floats are written `%.3f`, milliseconds as integers.
 
 | kind | start keys |
 |---|---|
@@ -171,6 +179,7 @@ Floats are written `%.3f`, milliseconds as integers.
 | `moveToPoint` | `x,y,hold_deg,threshold,settle_ms,timeout_ms` (a tank drivetrain steers to face the point, so it has no `hold_deg`) |
 | `moveToPose` | `x,y,heading_deg,pos_threshold,heading_threshold,settle_ms,timeout_ms` |
 | `followPath` | `waypoints,lookahead_in,cruise_v,timeout_ms` |
+| `followTrajectory` | `sections,samples,length_in,duration_ms,overtime_ms` (`duration_ms` is the plan's; the motion can run `overtime_ms` past it). A chain's are its first trajectory's |
 
 - Units: inches and degrees. `threshold` is the exit tolerance (inches for drive/point motions,
   degrees for turns); `settle_ms` is how long the error must stay inside it; a `timeout_ms` of 0
@@ -182,7 +191,15 @@ Floats are written `%.3f`, milliseconds as integers.
 - A motion that can't start (no odometry set, an empty path) logs a `start` with no keys, then an
   `end` with `reason=aborted`.
 - A motion cut short by a competition state change (PROS deletes the autonomous task wherever it
-  is) has a `start` and no `end`; the `phase` event marks where it stopped.
+  is) has a `start` and no `end`; the `phase` event marks where it stopped. One running on a task
+  of its own (a `MotionQueue`'s), which outlives `autonomous()`, notices the mode change itself
+  and ends with `reason=interrupted` instead of driving on into the next period.
+- `continue` comes as the plan carries on into piece `<n>` of a chain (1 for the second
+  trajectory): that trajectory's sections, samples, length and planned duration, and `start_ms`,
+  where it starts on the plan's clock (`traj`'s `ref_t`). The motion's one `end` comes after the
+  last piece. `nocontinue` means a trajectory planned to end moving had nothing to carry on into
+  (`none`: `next` gave nothing; `mismatched`: what it gave doesn't start where that one ends), so
+  the robot settled on its last point from speed.
 - Look keys up by name and tolerate missing or extra ones. Pair each `end` with the most recent
   open `start` of the same kind (motions don't nest today, but a reader shouldn't assume that).
   `slt_read.py`'s `motions()` does all of this.
@@ -195,6 +212,7 @@ Which pid channels a motion drives (see the channel table below):
 | `turnToHeading` | `turn` |
 | `moveToPoint`, `moveToPose` | `drive` (distance to the target) and `turn` (heading hold, or steering on a tank) |
 | `followPath` | `turn` while pursuing; then `drive` and `turn` for the final approach |
+| `followTrajectory` | `trackFwd`, `trackStrafe`, `trackTurn` (each with the robot-frame error as the target and 0 as the measurement; the D term is the measured velocity error, not a difference), plus `traj` every tick and a `traj.plan` burst as it starts, and another at each `continue` |
 
 ### Device events
 
@@ -238,6 +256,16 @@ volts that hold it against gravity.
   with the mount the localizer uses from then on, or `mount_calibration,failed,<why>` if the spin
   didn't finish. A file's `#meta mcl.sensorN` lines record the mounts the program started with, so
   after one of these the events are what's current.
+- `teach`: teach mode (`src/robot/teach.cpp`, `docs/TEACH.md`). `start` and
+  `stop,ms=<recorded ms>,samples=<n>` around a recording in driver control; once it's on the card,
+  `saved,bytes=<n>,ms=<write and read-back ms>,verified=<1|0>` (0: it didn't read back as written)
+  or `save_failed`; and `replay,ms=<planned ms>,scale=<fraction of the driver's speed>` as the
+  Taught Route auton starts (its `followTrajectory` follows).
+- `sdtest`: the SD Stress Test auton's result,
+  `rounds=<n>,verified=<n>,bytes=<n>,avg_ms=<ms>,max_ms=<ms>,dropped=<rows>,logger=<ok|faulted>`:
+  how many rounds of writing a full-size taught drive read back as written while this file was
+  being logged, how long each took, the rows the logger dropped meanwhile, and whether it kept
+  logging to this file.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button), `macro`.
 
 ## Channels on 96671H's robot
@@ -253,6 +281,9 @@ names to match on.
 | `drive` | pid | pid columns | The drivetrain's `drivePID()`: distance loops. |
 | `turn` | pid | pid columns | The drivetrain's `turnPID()`: turns, heading hold/steering in point and path motions. |
 | `hold` | pid | pid columns | The drivetrain's `headingHoldPID()`: driver-control heading hold. |
+| `trackFwd`, `trackStrafe`, `trackTurn` | pid | pid columns | `followTrajectory()`'s tracking PDs (`trackingForwardPID()`...): volts per inch of robot-frame error ahead and to the right, and per degree of heading. Each resets as a trajectory starts, at an error near 0, so a reset here is not a step response. |
+| `traj.plan` | samples | `t_plan,x,y,hdg,v,sec,stop` | A trajectory's plan, written all at once as `followTrajectory()` starts (within a tick of its `motion,start` event), and for a chain, each next trajectory's as the plan carries on into it (within a tick of its `motion,continue`), its `t_plan` and `sec` running on from the one before, so the bursts together are the chain as driven: the plan's time (s), position (in), heading (°, continuous, so it may run past 0–360), speed along the path (in/s), section, and 1 where the plan is at rest (its start, each stop, its end). Every few samples, at most about 180 rows plus the stops and the last point, so a motion cut short still has its whole plan. |
+| `traj` | samples | `ref_t,ref_x,ref_y,ref_hdg,ref_vf,ref_vs,ref_w,ff_f,ff_s,ff_t,lag,paused,sec` | Every tick of `followTrajectory()`: the plan's clock (s; it stops while `paused`, so it can trail the time since the start), the reference pose (in, in, °), its velocity in the robot frame at the planned heading (in/s ahead, in/s right, °/s), the feedforward volts per axis (0 once the plan has ended and the robot is settling), how far the robot was behind the reference along the path (in; the plan waits while this is over `maxLagIn`), 1/0 for whether the plan waited this tick, and the section. The robot's own pose at the same moment is `odom`'s. |
 | `odom` | samples | `x,y,heading,raw_x,raw_y` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. The corrected pose, the one every motion drives by: raw odometry plus whatever correction the localizer has eased in (see `mcl`). `raw_x,raw_y` are raw odometry's position from the same snapshot, before any correction: what fitting the chassis from a log should differentiate, since a correction easing in (up to `maxCorrectionRateInPerS`) moves `x,y` without the motors doing anything. Older logs have only `x,y,heading`. |
 | `mcl` | samples | `x,y,spread,neff,used,agree,correcting,corr_x,corr_y,us,raw_x,raw_y` | The Monte Carlo localizer, one row per update (every 50 ms by default) while enabled, recorded by the localizer's own task ([`docs/LOCALIZATION.md`](LOCALIZATION.md)): its estimate (inches), the particles' RMS spread around it (inches), the effective particle count, how many of the four distance sensors gave a usable reading and how many of those agree with the walls, 1/0 for whether that update set odometry's correction, the correction odometry is easing toward (inches), how long the update took (`us`, microseconds of wall time: an upper bound on its CPU), and raw odometry's position (inches) before any correction. The correction is how far raw odometry had drifted; `x,y` minus `raw_x,raw_y` is the same thing, for every update rather than only correcting ones. |
 | `mcl.beams` | samples | `m0,e0,v0,m1,e1,v1,m2,e2,v2,m3,e3,v3` | Each distance sensor in that update, in the order the localizer was given them (96671H: front, right, back, left): `m` the reading in inches after latency compensation (`nan` when unusable: nothing in range, low confidence, dropped, or skipped mid-spin), `e` what the map says it should read from the estimate (inches; `inf` when the beam would see nothing in range), and `v` how fast the sensor was closing on what it points at (in/s, by odometry). `m - e` is the reading's error against the map. The simulator's Tune tab calibrates the localizer's world from these (sensor noise, blocked and missing readings, the latency left uncompensated, mount errors and the tracking wheels' scale): [`docs/TUNING.md`](TUNING.md). Four sensors fill 12 of a row's 13 columns. |

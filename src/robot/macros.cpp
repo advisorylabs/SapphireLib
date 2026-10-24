@@ -558,6 +558,8 @@ void setDebug(bool on) { debugMode.store(on); }
 
 bool debug() { return debugMode.load(); }
 
+bool pinInClaw() { return pieceInClaw(); }
+
 sapphirelib::mechanism::PositionMechanism& liftMechanism() { return lift; }
 
 MechanismCharacterizationConfig liftExperiment() {

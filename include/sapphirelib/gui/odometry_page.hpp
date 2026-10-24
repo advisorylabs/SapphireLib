@@ -68,7 +68,8 @@ public:
      * really sit
      *
      * Spins the chassis in place, one turn each way, and fits each sensor's mount against the
-     * field walls, then applies the ones it could pin down to the running localizer (see
+     * walls in view (one, two at a corner, or a whole field), then applies the ones it could pin
+     * down to the running localizer (see
      * localization::MonteCarloLocalizer::calibrateSensorMounts(), which says where to set the
      * robot). The status line shows each sensor's forward and right offsets, and the terminal logs
      * them in full. Runs on a background task, so the screen doesn't freeze. Must be called before

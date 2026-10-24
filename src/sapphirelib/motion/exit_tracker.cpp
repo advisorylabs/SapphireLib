@@ -10,6 +10,7 @@ const char* exitReasonName(ExitReason reason) {
         case ExitReason::settled: return "settled";
         case ExitReason::timedOut: return "timeout";
         case ExitReason::aborted: return "aborted";
+        case ExitReason::interrupted: return "interrupted";
     }
     return "unknown"; // only reachable by casting an out-of-range value
 }
@@ -38,5 +39,9 @@ ExitReason ExitTracker::update(bool withinThreshold, std::uint32_t nowMs) {
 }
 
 std::uint32_t ExitTracker::elapsedMs() const { return elapsedMs_; }
+
+void ExitTracker::extendTimeout(std::uint32_t extraMs) {
+    if (timeoutMs_ > 0) timeoutMs_ += extraMs;
+}
 
 } // namespace sapphirelib::motion

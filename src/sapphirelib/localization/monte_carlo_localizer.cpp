@@ -423,8 +423,11 @@ MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
 
     // what it found, ready to copy into the code that builds the localizer
     SAPPHIRELIB_LOG_INFO(
-        "mcl", "sensor mounts: %u readings, %u used%s%s", static_cast<unsigned>(result.readings),
-        static_cast<unsigned>(result.readingsUsed), result.ok ? "" : ": ", result.error);
+        "mcl", "sensor mounts: %u readings, %u used%s%s%s", static_cast<unsigned>(result.readings),
+        static_cast<unsigned>(result.readingsUsed),
+        result.spacingFromMounts ? ", from walls on one or two sides: spacing kept from the mounts"
+                                 : "",
+        result.ok ? "" : ": ", result.error);
     for (std::size_t s = 0; s < result.sensors.size(); ++s) {
         const SensorMountFit& sensor = result.sensors[s];
         const bool calibrated = sensor.status == MountFitStatus::calibrated;

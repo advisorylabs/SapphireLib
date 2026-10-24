@@ -415,10 +415,8 @@
       const index = Number(stepSel.value) || 0;
       const recordedStep = steps[index];
       if (!recordedStep) {
-        chartBox.append(h('p', { class: 'muted' }, controller.pid === 'hold'
-          ? 'Heading hold runs all through driver control, following the driver\'s stick, so there\'s no ' +
-            'step to replay. It\'s designed from the same turn model as Turn, to a softer spec.'
-          : `No ${controller.pid} step responses in this range to replay (pick a match with motions, or ` +
+        chartBox.append(h('p', { class: 'muted' }, controller.noSteps ||
+          `No ${controller.pid} step responses in this range to replay (pick a match with motions, or ` +
             'the Practice session a Run Test happened in).'));
         return;
       }

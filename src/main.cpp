@@ -3,8 +3,8 @@
  *
  * PROS's competition callbacks, and nothing else: each one hands off to the
  * robot program in src/robot/ (ports in include/robot/config.hpp, devices,
- * screen, autons, tuning, telemetry, driver control, and the intake/claw/lift
- * macros).
+ * screen, autons, tuning, telemetry, driver control, teach mode, and the
+ * intake/claw/lift macros).
  *
  * Team 96671H: Hitmen
  */
@@ -14,6 +14,7 @@
 #include "robot/driver.hpp"
 #include "robot/macros.hpp"
 #include "robot/screen.hpp"
+#include "robot/teach.hpp"
 #include "robot/telemetry.hpp"
 #include "sapphirelib/api.hpp"
 
@@ -34,6 +35,10 @@ void initialize() {
     // Blocks ~2-3s while the IMU calibrates. Also zeroes the lift, so start
     // the program with the lift all the way down.
     robot::initDevices();
+
+    // The drive taught last (TEACH.TXT), for the Taught Route auton. Before
+    // telemetry starts, so the logger has the SD card to itself after.
+    robot::teach::load();
 
     // Before anything can run a motion or opcontrol, since it attaches
     // observers to PIDs those would be running. Costs initialize() nothing:
@@ -115,6 +120,10 @@ void opcontrol() {
         // test or Auto-Tune run) is driving the chassis on its own, see
         // robot::screenBusy().
         if (!robot::screenBusy()) robot::drive(controller);
+
+        // Teach mode: X+A starts and stops recording this drive, the pose
+        // and the buttons, for the Taught Route auton (see teach.hpp).
+        robot::teach::update(controller);
 
         // X+UP runs the selected auton, off the field only. Every tick, busy
         // or not, see shortcuts().

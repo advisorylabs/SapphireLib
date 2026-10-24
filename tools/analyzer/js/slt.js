@@ -480,6 +480,54 @@
     return done.sort((a, b) => a.start - b.start);
   }
 
+  /**
+   * Each followTrajectory() motion with what the robot logged of it (see
+   * docs/TELEMETRY_FORMAT.md): its plan, from the "traj.plan" burst written as
+   * it started, and the [first, end) rows of "traj" while it ran. `plan` is
+   * null for a log without the plan (only the reference then), `rows` null
+   * without "traj". A motion cut short still has its whole plan. A chain (a
+   * branch at speed) writes one more burst at each junction, its times and
+   * sections running on from the one before, so `plan` is the whole chain as
+   * driven, and `pieces` its trajectories' starts: { t (log time), startS
+   * (plan time) }.
+   */
+  function trajectories(log) {
+    if (log._trajectories) return log._trajectories;
+    const planCh = log.get('traj.plan');
+    const trajCh = log.get('traj');
+    const list = motions(log).filter((m) => m.kind === 'followTrajectory');
+    const continues = log.events.filter((e) => e.tag === 'motion' && e.msg.startsWith('continue,followTrajectory'));
+    log._trajectories = list.map((motion, i) => {
+      const next = i + 1 < list.length ? list[i + 1].start : Infinity;
+      const stop = motion.stop ?? log.end;
+      const pieces = [{ t: motion.start, startS: 0 }];
+      for (const e of continues) {
+        if (e.t < motion.start || e.t > stop + 1e-3) continue;
+        const keys = parseKeys(e.msg.split(',').slice(2));
+        pieces.push({ t: e.t, startS: typeof keys.start_ms === 'number' ? keys.start_ms / 1000 : NaN });
+      }
+      let plan = null;
+      if (planCh) {
+        // each burst lands within a tick of its event (the start, or a junction), before the next
+        // motion's: up to a quarter second after the last of them
+        const last = pieces[pieces.length - 1].t;
+        const [a, b] = planCh.range(motion.start - 1e-3, Math.min(last + 0.25, next - 1e-6));
+        if (b > a) {
+          const pick = (name) => planCh.cols[name].subarray(a, b);
+          plan = { t: pick('t_plan'), x: pick('x'), y: pick('y'), hdg: pick('hdg'), v: pick('v'), sec: pick('sec'),
+            stop: pick('stop'), durationS: planCh.cols.t_plan[b - 1] };
+        }
+      }
+      let rows = null;
+      if (trajCh) {
+        const [a, b] = trajCh.range(motion.start - 1e-3, stop + 1e-3);
+        if (b > a) rows = [a, b];
+      }
+      return { motion, plan, rows, pieces };
+    });
+    return log._trajectories;
+  }
+
   /** Autonomous routines: { name, start, end|null }. */
   function autons(log) {
     const out = [];
@@ -701,6 +749,7 @@
     lastAtOrBefore,
     firstAtOrAfter,
     motions,
+    trajectories,
     autons,
     phases,
     periods,

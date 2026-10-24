@@ -2,8 +2,10 @@
  * SapphireLib simulator: recorder.js
  *
  * Writes a simulated run as the robot would log it (docs/TELEMETRY_FORMAT.md):
- * the same channels src/robot/telemetry.cpp records for odometry and the
- * localizer ("odom", "chassis", "mcl", "mcl.beams", "mcl.state", "mcl.pts"),
+ * the same channels src/robot/telemetry.cpp records for odometry, the
+ * localizer and followTrajectory() ("odom", "chassis", "mcl", "mcl.beams",
+ * "mcl.state", "mcl.pts", "traj.plan", "traj", with followTrajectory()'s
+ * motion events),
  * the same #meta lines
  * (the localizer's settings and sensor mounts), formatted by the analyzer's
  * own writer (demo.js), which rounds every value the way the robot's encoder
@@ -37,6 +39,11 @@
   const BEAM_COLUMNS = ['m0', 'e0', 'v0', 'm1', 'e1', 'v1', 'm2', 'e2', 'v2', 'm3', 'e3', 'v3'];
   const STATE_COLUMNS = ['sxx', 'syy', 'sxy', 'fit', 'fit_ratio', 'recovered', 'resampled', 'blocked', 'hdg'];
   const POINT_COLUMNS = ['dx0', 'dy0', 'dx1', 'dy1', 'dx2', 'dy2', 'dx3', 'dy3', 'dx4', 'dy4', 'dx5', 'dy5'];
+  // followTrajectory()'s channels, as src/robot/telemetry.cpp's TrajectoryLog records them
+  const PLAN_COLUMNS = ['t_plan', 'x', 'y', 'hdg', 'v', 'sec', 'stop'];
+  const TRAJ_COLUMNS = ['ref_t', 'ref_x', 'ref_y', 'ref_hdg', 'ref_vf', 'ref_vs', 'ref_w', 'ff_f', 'ff_s', 'ff_t',
+    'lag', 'paused', 'sec'];
+  const kPlanRows = 180;
   // "mcl.pts" as src/robot/telemetry.cpp records it: every 5th update, four rows of six particles
   const kParticleEvery = 5;
   const kParticleRows = 4;
@@ -81,6 +88,11 @@
       this.beams = this.writer.chan('mcl.beams', 'samples', 2, BEAM_COLUMNS);
       this.state = this.writer.chan('mcl.state', 'samples', 4, STATE_COLUMNS);
       this.points = this.writer.chan('mcl.pts', 'samples', 2, POINT_COLUMNS);
+      this.plan = this.writer.chan('traj.plan', 'samples', 3, PLAN_COLUMNS);
+      this.traj = this.writer.chan('traj', 'samples', 3, TRAJ_COLUMNS);
+      // followTrajectory() reports to this, as the robot's TrajectoryLog does, plus the motion
+      // events the robot's drivetrain logs itself
+      sim.robot.drivetrain.setTrajectoryObserver(this);
       this.mclUpdates = 0;
       const t = this.us(sim.world.timeMs);
       this.writer.event(t, 'file', `open,${file}`);
@@ -93,6 +105,54 @@
 
     us(timeMs) {
       return kStartUs + (timeMs - this.t0Ms) * 1000;
+    }
+
+    // --- TrajectoryObserver ---
+
+    onTrajectoryStart(trajectory, config) {
+      const t = this.us(this.sim.world.timeMs);
+      const samples = trajectory.samples;
+      this.writer.event(t, 'motion', `start,followTrajectory,sections=${trajectory.sectionCount()},` +
+        `samples=${samples.length},length_in=${trajectory.lengthIn().toFixed(3)},` +
+        `duration_ms=${Math.ceil(trajectory.durationS() * 1000)},overtime_ms=${config.overtimeMs}`);
+      this.recordPlan(t, trajectory, 0, 0);
+    }
+
+    /** A chain carrying on into its next trajectory, logged as the robot's drivetrain and TrajectoryLog do. */
+    onTrajectoryContinue(trajectory, startTimeS, firstSection, piece) {
+      const t = this.us(this.sim.world.timeMs);
+      this.writer.event(t, 'motion', `continue,followTrajectory,piece=${piece},sections=${trajectory.sectionCount()},` +
+        `samples=${trajectory.samples.length},length_in=${trajectory.lengthIn().toFixed(3)},` +
+        `duration_ms=${Math.ceil(trajectory.durationS() * 1000)},start_ms=${Math.round(startTimeS * 1000)}`);
+      this.recordPlan(t, trajectory, startTimeS, firstSection);
+    }
+
+    onTrajectoryNoContinue(why, piece) {
+      this.writer.event(this.us(this.sim.world.timeMs), 'motion',
+        `nocontinue,followTrajectory,piece=${piece},why=${why === 'noNext' ? 'none' : 'mismatched'}`);
+    }
+
+    recordPlan(t, trajectory, startTimeS, firstSection) {
+      const samples = trajectory.samples;
+      const stride = Math.ceil(samples.length / kPlanRows);
+      samples.forEach((s, i) => {
+        if (i % stride !== 0 && !s.stop && i + 1 !== samples.length) return;
+        this.writer.sample(this.plan, t, [startTimeS + s.tS, s.xIn, s.yIn, s.headingDeg, s.speedInPerS,
+          firstSection + s.section, s.stop ? 1 : 0]);
+      });
+    }
+
+    onTrackingTick(tick) {
+      const r = tick.reference;
+      this.writer.sample(this.traj, this.us(this.sim.world.timeMs), [tick.referenceTimeS, r.xIn, r.yIn,
+        r.headingDeg, r.forwardInPerS, r.strafeInPerS, r.omegaDegPerS, tick.feedforward.forward,
+        tick.feedforward.strafe, tick.feedforward.turn, tick.errors.alongTrackIn, tick.paused ? 1 : 0, tick.section]);
+    }
+
+    onTrajectoryEnd(result) {
+      const reason = result.reason === 'timeout' ? 'timeout' : result.reason;
+      this.writer.event(this.us(this.sim.world.timeMs), 'motion', `end,followTrajectory,reason=${reason},` +
+        `error=${result.finalError.toFixed(3)},ms=${result.elapsedMs}`);
     }
 
     afterTick(sim) {
@@ -153,5 +213,5 @@
     }
   }
 
-  return { LogRecorder, MCL_COLUMNS, BEAM_COLUMNS, STATE_COLUMNS, POINT_COLUMNS };
+  return { LogRecorder, MCL_COLUMNS, BEAM_COLUMNS, STATE_COLUMNS, POINT_COLUMNS, PLAN_COLUMNS, TRAJ_COLUMNS };
 });

@@ -29,8 +29,11 @@ constexpr std::int32_t kBtnPlusX = 188;
 
 constexpr std::int32_t kSelectorColumnX = 240;
 constexpr std::int32_t kSelectorButtonW = 88;
-constexpr std::int32_t kSelectorButtonH = 32;
+// a row per controller: 36px each while they fit, then the page's height shared between them, so
+// a drivetrain's three tracking controllers fit beside Drive, Turn, Hold and Lift
 constexpr std::int32_t kSelectorRowHeight = 36;
+constexpr std::int32_t kSelectorButtonGap = 4;
+constexpr std::int32_t kPageHeight = 179;
 
 // the Run Test/Auto-Tune row, and the optional toggle under it, which ends at y=162
 constexpr std::int32_t kActionRowY = kRowY0 + 3 * kRowHeight + 6;
@@ -90,7 +93,8 @@ void PidTunerPage::build(lv_obj_t* container) {
     // zero padding so positions are exactly the 480x179 the page gets. The readout runs to x=476
     lv_obj_set_style_pad_all(container_, 0, 0);
 
-    for (std::size_t i = 0; i < entries_.size(); ++i) addSelectorButton(*entries_[i], i);
+    for (auto& entry : entries_) addSelectorButton(*entry);
+    layoutSelectorButtons();
 
     kpLabel_ = lv_label_create(container_);
     lv_obj_set_pos(kpLabel_, 4, kRowY0 + 5);
@@ -168,10 +172,11 @@ void PidTunerPage::addController(std::string name, PID& pid, std::function<void(
     entry->axis = std::move(axis);
     entry->response = response;
 
-    if (container_) addSelectorButton(*entry, entries_.size());
+    if (container_) addSelectorButton(*entry);
 
     const bool wasEmpty = entries_.empty();
     entries_.push_back(std::move(entry));
+    if (container_) layoutSelectorButtons();
     if (wasEmpty && container_) select(0);
 }
 
@@ -181,11 +186,20 @@ void PidTunerPage::setToggle(std::function<std::string()> label, std::function<v
     if (toggleButton_) lv_obj_remove_flag(toggleButton_, LV_OBJ_FLAG_HIDDEN);
 }
 
-void PidTunerPage::addSelectorButton(Entry& entry, std::size_t row) {
+void PidTunerPage::layoutSelectorButtons() {
+    if (entries_.empty()) return;
+    const auto count = static_cast<std::int32_t>(entries_.size());
+    const std::int32_t rowHeight = std::min(kSelectorRowHeight, kPageHeight / count);
+    for (std::int32_t row = 0; row < count; ++row) {
+        lv_obj_t* button = entries_[static_cast<std::size_t>(row)]->selectorButton;
+        if (button == nullptr) continue;
+        lv_obj_set_pos(button, kSelectorColumnX, row * rowHeight);
+        lv_obj_set_size(button, kSelectorButtonW, rowHeight - kSelectorButtonGap);
+    }
+}
+
+void PidTunerPage::addSelectorButton(Entry& entry) {
     entry.selectorButton = lv_button_create(container_);
-    lv_obj_set_pos(entry.selectorButton, kSelectorColumnX,
-                   static_cast<std::int32_t>(row) * kSelectorRowHeight);
-    lv_obj_set_size(entry.selectorButton, kSelectorButtonW, kSelectorButtonH);
     lv_obj_t* label = lv_label_create(entry.selectorButton);
     lv_label_set_text(label, entry.name.c_str());
     lv_obj_center(label);

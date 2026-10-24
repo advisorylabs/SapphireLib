@@ -21,7 +21,7 @@
   const S = SIM.sim;
   const M = root.SA.model;
   const TF = root.SA.tunefile;
-  const { ROUTINES } = SIM.routines;
+  const { ROUTINES, TOUR_CHAIN } = SIM.routines;
 
   const kTickMs = S.kTickMs;
   const kMaxTicksPerFrame = 400;
@@ -37,6 +37,8 @@
   let kidnapArmed = false;
   let draggingDefender = false;
   let selectedRoutine = ROUTINES[0];
+  // the Paths tab (pathview.js), which takes over the field while it's open
+  let pathview = null;
   const keys = new Set();
 
   // what the field draws; the toggles in the Show tab
@@ -85,6 +87,7 @@
     buildRobot();
     buildMcl();
     buildTune();
+    buildPaths();
     buildLegend();
     buildHelp();
     bindField();
@@ -108,6 +111,7 @@
       if (!button) return;
       for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-selected', String(b === button));
       for (const body of document.querySelectorAll('.tab-body')) body.hidden = body.dataset.body !== button.dataset.tab;
+      if (pathview) pathview.setActive(button.dataset.tab === 'paths');
     });
   }
 
@@ -414,6 +418,8 @@
           // the running chassis too: PlantSim reads its model every step
           const m = options.world.models[axis];
           sim.world.plants[axis].model = M.mechanismModel(M.feedforward(m.kS, m.kV, m.kA));
+          // and the Paths tab's plan, which uses these unless it's planning with a TUNE.CFG's
+          if (pathview) pathview.modelsChanged();
         });
         grid.append(input);
       }
@@ -603,12 +609,30 @@
     $('tabs').addEventListener('click', () => requestAnimationFrame(() => SIM.tuneview.drawHistory()));
   }
 
+  // --- Paths tab -------------------------------------------------------------------------------
+
+  function buildPaths() {
+    pathview = SIM.pathview.build({
+      $, el, fmt, segmented,
+      options,
+      renderer,
+      defaultChain: TOUR_CHAIN,
+      tuneModels: () => SIM.tuneview.profileModels(),
+      runPath: (routine) => {
+        sim.runRoutine(routine);
+        $('routine-result').hidden = true;
+        if (!playing) setPlaying(true);
+      },
+    });
+  }
+
   /** The world's errors from a calibration (Tune tab), and a fresh run in it. */
   function applyWorld(world) {
     const { models, ...rest } = world;
     Object.assign(options.world, rest);
     if (models) options.world.models = JSON.parse(JSON.stringify(models));
     syncSliders();
+    if (pathview) pathview.modelsChanged();
     runRoutine(selectedRoutine);
   }
 
@@ -649,8 +673,18 @@
       const p = renderer.toField(px, py);
       return Math.abs(p.xIn - d.xIn) <= d.sizeIn / 2 && Math.abs(p.yIn - d.yIn) <= d.sizeIn / 2;
     };
+    // the Paths tab edits its path on the field instead of the defender
+    let editingPath = false;
+    canvas.addEventListener('contextmenu', (event) => {
+      if (pathview && pathview.isActive()) event.preventDefault();
+    });
     canvas.addEventListener('pointerdown', (event) => {
       const [px, py] = at(event);
+      if (!kidnapArmed && pathview && pathview.isActive()) {
+        editingPath = pathview.pointerDown(px, py, event);
+        if (editingPath) canvas.setPointerCapture(event.pointerId);
+        return;
+      }
       if (kidnapArmed) {
         const p = renderer.toField(px, py);
         sim.world.kidnap(p.xIn, p.yIn);
@@ -667,6 +701,10 @@
     });
     canvas.addEventListener('pointermove', (event) => {
       const [px, py] = at(event);
+      if (pathview && pathview.isActive() && !kidnapArmed) {
+        canvas.style.cursor = pathview.pointerMove(px, py, event);
+        return;
+      }
       if (draggingDefender) {
         const p = renderer.toField(px, py);
         const d = options.world.defender;
@@ -683,6 +721,10 @@
     const end = () => {
       draggingDefender = false;
       canvas.classList.remove('dragging');
+      if (editingPath) {
+        editingPath = false;
+        pathview.pointerUp();
+      }
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
@@ -705,6 +747,10 @@
       }
       if (key === 'escape') {
         toggleHelp(false);
+        return;
+      }
+      if ((key === 'delete' || key === 'backspace') && pathview && pathview.isActive()) {
+        if (pathview.deleteSelected()) event.preventDefault();
         return;
       }
       if (['w', 'a', 's', 'd', 'q', 'e', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'shift'].includes(key)) {
@@ -746,6 +792,7 @@
       }
       if (ticks === kMaxTicksPerFrame) accumulatorMs = 0;
     }
+    view.pathEditor = pathview && pathview.isActive() ? pathview.editorView() : null;
     renderer.draw(sim, view);
     if (nowMs - lastDomMs > 120) {
       updateDom();
@@ -776,6 +823,7 @@
     const source = options.correctOdometry ? 'odometry + MCL' : 'odometry alone';
     box.textContent = `${r.name}, by ${source}: done at ${fmt(r.atMs / 1000, 1)} s, ${fmt(r.errors.corrected, 2)} in ` +
       `off (odometry alone ${fmt(r.errors.raw, 2)} in).`;
+    if (pathview) pathview.showRunResult(box.textContent);
   }
 
   // --- readouts ---------------------------------------------------------------------------

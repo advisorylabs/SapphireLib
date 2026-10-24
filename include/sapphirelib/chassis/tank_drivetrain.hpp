@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <initializer_list>
 
+#include "sapphirelib/chassis/competition_watch.hpp"
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/control/pid.hpp"
@@ -185,7 +186,10 @@ public:
      *
      * Aims at a carrot point behind the target along its heading (see
      * motion::PoseExitConditions::boomerangLeadPct), so the chassis curves into the final heading
-     * instead of turning in place at the end
+     * instead of turning in place most of the way. Whether it drives forward or backs in is picked
+     * once, at the start. Within exit.settleRadiusIn it settles: it heads for the point itself,
+     * then turns in place to the final heading, which the exit also requires. See
+     * motion::boomerangStep()
      *
      * @param xIn target x, in inches
      * @param yIn target y, in inches
@@ -301,7 +305,7 @@ private:
     // moveToPoint()'s loop. Logs no events of its own, so followPath()'s final approach shows up
     // as part of the path
     motion::MotionResult approachPoint(double xIn, double yIn, const odom::Odometry& odometry,
-                                       ExitConditions exit);
+                                       ExitConditions exit, const CompetitionWatch& watch);
 };
 
 } // namespace sapphirelib::chassis

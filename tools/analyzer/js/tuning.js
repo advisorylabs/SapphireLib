@@ -38,10 +38,23 @@
     { axis: 'Strafe', char: 'char.strafe', column: 'strafe_v', unit: 'in', minSpeed: 2 },
     { axis: 'Turn', char: 'char.turn', column: 'turn_v', unit: 'deg', minSpeed: 5 },
   ];
+  // `noSteps`: why a controller has no step responses to replay, for those that never take one
+  const TRACKING_NO_STEPS = 'followTrajectory()\'s tracking PDs only correct a moving reference the feedforward ' +
+    'already drives, so there\'s no step to replay. Each is designed from its own axis\'s model; the Motions ' +
+    'view shows how closely a trajectory was tracked.';
   const DRIVE_CONTROLLERS = [
     { name: 'Drive', pid: 'drive', axis: 'Fwd', spec: M.responseSpec(0.6, 1, 50), threshold: 1 },
     { name: 'Turn', pid: 'turn', axis: 'Turn', spec: M.responseSpec(0.5, 1, 50), threshold: 2 },
-    { name: 'Hold', pid: 'hold', axis: 'Turn', spec: M.responseSpec(0.9, 1, 50), threshold: 2 },
+    { name: 'Hold', pid: 'hold', axis: 'Turn', spec: M.responseSpec(0.9, 1, 50), threshold: 2,
+      noSteps: 'Heading hold runs all through driver control, following the driver\'s stick, so there\'s no ' +
+        'step to replay. It\'s designed from the same turn model as Turn, to a softer spec.' },
+    // `tracking`: a reset starts a motion near zero error, not a step, so replaySteps() skips them
+    { name: 'Track F', pid: 'trackFwd', axis: 'Fwd', spec: M.responseSpec(0.4, 1, 50), threshold: 1,
+      tracking: true, noSteps: TRACKING_NO_STEPS },
+    { name: 'Track S', pid: 'trackStrafe', axis: 'Strafe', spec: M.responseSpec(0.4, 1, 50), threshold: 1,
+      tracking: true, noSteps: TRACKING_NO_STEPS },
+    { name: 'Track T', pid: 'trackTurn', axis: 'Turn', spec: M.responseSpec(0.4, 1, 50), threshold: 2,
+      tracking: true, noSteps: TRACKING_NO_STEPS },
   ];
   const MECHANISM_SPEC = M.responseSpec(0.5, 1, 50);
 
@@ -440,7 +453,7 @@
   function replaySteps(log, system, fit, controller, { gains, t0, t1, maxResponses = 12,
     maxResponseS = 10 }) {
     const ch = log.get(controller.pid);
-    if (!ch) return [];
+    if (!ch || controller.tracking) return [];
     const flags = ch.cols.flags;
     const out = [];
     let i = ch.range(t0, t1)[0];
@@ -519,18 +532,27 @@
     return lines.join('\n');
   }
 
+  // the controllers set after construction, by their accessors
+  const SET_GAINS_ACCESSORS = {
+    Hold: 'headingHoldPID()',
+    'Track F': 'trackingForwardPID()',
+    'Track S': 'trackingStrafePID()',
+    'Track T': 'trackingTurnPID()',
+  };
+
   /** C++ for the drivetrain: each controller's config and the axis models. */
   function driveSnippet(fits, designs, sourceName) {
     const lines = [`// Drivetrain: designed by the telemetry analyzer from ${sourceName}`];
     for (const [name, d] of Object.entries(designs)) {
       if (!d || !d.ok) continue;
+      const accessor = SET_GAINS_ACCESSORS[name];
       const which = name === 'Drive' ? 'drivePIDConfig' : name === 'Turn' ? 'turnPIDConfig'
-        : 'headingHoldPID() (setGains)';
+        : `${accessor} (setGains)`;
       lines.push(`// ${name} → ${which}: settles in ${d.settleTimeS.toFixed(2)}s, phase margin ` +
         `${d.phaseMarginDeg.toFixed(0)}°${d.limitedByDelay ? ' (slowed for delay)' : ''}, ` +
         `friction band ±${d.staticErrorBound.toPrecision(2)}`);
-      if (name === 'Hold') {
-        lines.push(`drivetrain().headingHoldPID().setGains(${gainsLiteral(d.gains)});`);
+      if (accessor) {
+        lines.push(`drivetrain().${accessor}.setGains(${gainsLiteral(d.gains)});`);
       } else {
         lines.push(`PID::Config{.gains = ${gainsLiteral(d.gains)}, .outputLimit = 12.0},`);
       }
@@ -544,7 +566,7 @@
         ` // ${modelComment(fit)}`);
     }
     if (models.length) {
-      lines.push('// Axis models, for DriverInputMode::velocity (initDevices()):');
+      lines.push('// Axis models, for DriverInputMode::velocity and followTrajectory() (initDevices()):');
       lines.push('drivetrain().setAxisModels({');
       lines.push(...models);
       lines.push('});');

@@ -135,6 +135,10 @@ struct LoggerStatus {
  * bytes and moves on, and all SD work happens on the logger's own low priority task. Recording is
  * safe from any task and never blocks
  *
+ * That task holds the SD card (SdCardLock) for each of its passes, so other files on the card are
+ * written between them, never in the middle: anything else using the card while the Logger runs
+ * should hold it too (readCardFile() and writeCardFile() do)
+ *
  * @note make exactly one, with static storage, and register channels in initialize(). Registering
  * from autonomous() or opcontrol() isn't safe
  *
@@ -471,6 +475,8 @@ private:
     // writer time outside SD writes since the last H row (fmt_us), and SD write time this pass
     std::uint32_t writerBusyUs_ = 0;
     std::uint32_t passWriteUs_ = 0;
+    // whether the writer has said the card lock was stuck (see writerPass()), once a run
+    bool warnedCardLock_ = false;
     bool reopenPending_ = false; // the next file opened follows a fault
 
     std::unique_ptr<pros::Task> sampler_;
