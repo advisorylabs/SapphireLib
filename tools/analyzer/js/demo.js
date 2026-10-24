@@ -721,7 +721,7 @@
       this.ids.lift = w.chan('lift', 'pid', 3, pidCols);
       this.ids.liftAct = w.chan('lift.act', 'samples', 3, ['target', 'pos', 'volts', 'law']);
       this.ids.mech = w.chan('mech', 'samples', 2,
-        ['intake_v', 'claw_v', 'piston', 'piece_mm', 'level', 'mode', 'phase', 'deployed']);
+        ['intake_v', 'claw_v', 'piston', 'piece_mm', 'level', 'mode', 'phase', 'deployed', 'top']);
       for (const axis of ['fwd', 'strafe', 'turn', 'lift']) {
         this.ids[`char.${axis}`] = w.chan(`char.${axis}`, 'samples', 4, ['volts', 'pos']);
       }
@@ -741,6 +741,7 @@
       this.connected = 1;
       this.level = 0;
       this.deployed = false;
+      this.top = false; // the top piston, as macros.cpp's topWanted() would have it
       this.phase = -1;
       this.intakeV = 0;
       this.clawV = 0;
@@ -926,8 +927,12 @@
       this.claw.drive(this.clawV, this.clawV === 0 ? 0 : (this.lift.piece ? 0 : 180),
         this.lift.piece && this.clawV > 0 ? 2.4 : 0);
       this.intake.drive(this.intakeV, this.intakeV === 0 ? 0 : 190);
+      // Out once the lift reaches the top level (within kLiftToleranceDeg), in
+      // as soon as it's on any other.
+      const atTopLevel = this.deployed && this.level === LEVELS.length - 1;
+      this.top = atTopLevel && (this.top || Math.abs(this.lift.x - LEVELS[this.level]) <= 15);
       this.w.sample(this.ids.mech, this.us() + 80, [this.intakeV, this.clawV, this.deployed ? 1 : 0,
-        this.lift.piece ? 32 : 9999, this.level, 0, this.phase, this.deployed ? 1 : 0]);
+        this.lift.piece ? 32 : 9999, this.level, 0, this.phase, this.deployed ? 1 : 0, this.top ? 1 : 0]);
     }
 
     computeLift(config, target, reading) {

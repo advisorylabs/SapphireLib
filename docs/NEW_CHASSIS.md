@@ -35,14 +35,15 @@ Contents: [Before you start](#before-you-start) · [1. Macros and lift heights](
 - [ ] **Take `TUNE.CFG` off the SD card** (rename it, keep it for reference). It was tuned for the old
   chassis, and the robot applies it at every startup over the code's values: `pid.*`, `model.*`,
   `lift.gravityVolts` and `mcl.*`. The Home page should read "Tune: code values (no TUNE.CFG)".
-- [ ] Ports in [`config.hpp`](../include/robot/config.hpp), then uncomment each real one in the
-  Diagnostics list in [`screen.cpp`](../src/robot/screen.cpp). The Diagnostics page is all green.
-- [ ] **Turn stick driving back on.** It's switched off in `drive()` in
-  [`driver.cpp`](../src/robot/driver.cpp) right now (the "DISABLED" comment): uncomment `turn` and the
-  `holonomicFieldCentricHeadingHold()` call, and drop the two `[[maybe_unused]]`. Steps 3, 5 and 6
-  spin and drive the robot with the sticks. The right stick steers a heading, held by the heading-hold
-  PID that step 5 tunes, so expect turning to feel soft or loose until then.
-- [ ] `kDriveWheelDiameterIn` and the drivetrain's gear ratio in
+- [ ] Ports in [`config.hpp`](../include/robot/config.hpp). The Diagnostics page checks every smart port
+  device straight from it, so it should be all green. It doesn't check the 3-wire ports: the claw
+  piston on G and the top piston on H get their check in step 1.
+- [ ] **The drive controls** ([`driver.cpp`](../src/robot/driver.cpp)). Driving is robot-centric
+  holonomic split arcade: the left stick drives and strafes, the right stick turns, and B swaps front
+  and back. Steps 3, 5 and 6 spin and drive the robot with the sticks. DOWN orbits a pivot behind the
+  robot, turning it with the heading-hold PID that step 5 tunes and telling turning from moving with
+  step 3's wheel offsets, so leave orbiting alone until both are in.
+- [ ] `kDriveWheelDiameterIn` in `config.hpp` and the drivetrain's `externalGearRatio` in
   [`devices.cpp`](../src/robot/devices.cpp). Push each stick: every wheel turns the way it should.
 - [ ] The `sl` folder exists on the card; the Home page's SD line says "ready".
 - [ ] The robot is in match configuration (everything mounted, match weight), with a charged battery
@@ -68,28 +69,41 @@ Yours to finish first. Everything here is a constant at the top of
 
 | Constant | Now | What it is |
 |---|---|---|
-| `ladder` | placeholders | each scoring mode's level heights, in lift sensor degrees. Entry 0 is level 0 (lift down, claw deployed); each entry after it is one L1 press, so the count sets how many levels the mode has. Names show on the controller, 8 characters at most |
+| `ladder` | placeholders | each goal's level heights, in lift sensor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift stows and intakes, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has; the last is the goal's top level, where the top piston (H) deploys. Names show on the controller, 8 characters at most |
 | `kPieceDetectMm` | 50 | the claw's distance sensor reading at or under which a piece counts as in the claw |
-| `kIntakeMv`, `kClawMv` | 12700 | intake and claw speed, in millivolts (12000 is full) |
-| `kClawHoldMv` | 12700 | claw spin while it holds a detected piece. It's stalled most of that time: turn this down first if the claw motor runs hot |
-| `kPistonDeployMs` | 400 | how long the claw piston gets to deploy before anything outtakes past it |
-| `kHeightOuttakeMs` | 500 | how long the claw outtakes on a score above level 0 |
-| `kReseatRetractMs`, `kReseatDeployMs` | 250, 250 | the re-seat after releasing Y: piston retracted this long, then redeployed this long |
-| `kLiftToleranceDeg` | 15 | how close the lift must get before a sequence waiting on it moves on (the score's dip, the re-seat's lowering) |
-| `kLiftDescendTimeoutMs` | 1000 | how long a sequence waits for the lift before moving on anyway |
+| `kIntakeMv`, `kClawMv` | 12700 | intake and roller claw speed, in millivolts (12000 is full) |
+| `kClawHoldMv` | 12700 | roller claw spin while it holds a detected piece. It's stalled most of that time: turn this down first if the claw motor runs hot |
+| `kPistonMoveMs` | 400 | how long the claw piston (G) gets to finish moving before anything runs past it: a score's outtake waits for it to have deployed this long, R1's intake for it to have retracted this long |
+| `kScoreOuttakeMs` | 500 | how long the roller claw outtakes on a score |
+| `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
+| `kDipBottomMs` | 100 | after releasing Y, how long the lift sits at the bottom before coming back up to level 1 |
+| `kLiftToleranceDeg` | 15 | how close the lift must get before a sequence waiting on it moves on (a score's dip, the dip after Y, R1's stow), and how close to its goal's top level before the top piston deploys |
+| `kLiftDescendTimeoutMs`, `kStowTimeoutMs` | 1000, 2000 | how long a sequence waits for the lift before moving on anyway. Stowing can start from the top, so it gets longer |
+| `kLiftDebugVolts` | 12 | debug mode: the volts L1 and L2 put on the lift motors while held |
 
+- [ ] **Debug mode** (Home page, **Debug**) for the checks below: L1 and L2 drive the lift motors
+  directly, up and down, sensor or no sensor, and nothing else moves the lift. If L1 drives it down,
+  negate both `kLiftA` and `kLiftB` in `config.hpp`.
+- [ ] **Pistons.** Still in debug mode, A flips the claw piston (G) and X the top piston (H), one press
+  each. The controller's top line shows both, `DBG G:OUT H:IN`. Each should move the way the line
+  says; one that's backward has its valve plumbed the other way: swap its air lines, or give its
+  `Piston` in `macros.cpp` `extendedIsLow = true`. X is also half of the X+UP auton shortcut, so that
+  flips H too.
 - [ ] **Lift sensor sign.** Raising the lift makes the controller's `LIFT` reading grow. If it
   shrinks, negate `kLiftSensor` in `config.hpp`. Backward, Auto-Tune can't fit the lift ("no fit"),
   since a positive voltage has to make the reading grow.
 - [ ] **Zero.** `macros::initialize()` zeroes the lift sensor wherever the lift is when the program
   starts. Always start with the lift all the way down, and never restart with it up.
-- [ ] **Level heights.** The controller's third line shows `LIFT reading/target`. The macros have no
-  manual lift control, so either iterate (guess a height, step to it with L1, look, adjust, rebuild),
-  or add a temporary hold-to-raise button with `lift.setVolts()` while held and `lift.holdPosition()`
-  on release ([`MACROS.md`](MACROS.md#positionmechanism) has the pattern) and read the number off
-  line 3 at each goal.
+- [ ] **Level heights.** The controller's third line shows `LIFT reading/target` (LEFT cycles it to
+  the lift motors' volts, current and temperature, and back). In debug mode it shows just the reading,
+  so drive the lift to each of a goal's heights with L1 and L2 and copy the numbers into its table.
+  Leaving debug mode puts the lift back on its level, so expect it to move.
 - [ ] **The top of travel.** Read the sensor with the lift at its highest safe point. Step 2's window
-  is set from it.
+  is set from it, and no goal's top level should be above it.
+- [ ] **The top piston.** Out of debug mode, step a goal up to its top level with L1: H deploys once
+  the lift gets within `kLiftToleranceDeg` of it, stays out through a score there, and retracts the
+  moment L2, R1 or Y sends the lift to another level. A lift that hangs further below the top than
+  that never deploys it: check again after step 2's gravity volts.
 - [ ] **`kPieceDetectMm`.** Start log, sit a piece in the claw, take it out, a few times. In the
   analyzer's **Charts**, the `mech` channel's `piece_mm` shows both readings; pick a value between.
 
@@ -277,8 +291,8 @@ Run it again whenever a wheel is remounted or the diameter or IMU scale changes.
 
 ## 4. MCL sensor mounts: Calibrate Sensors
 
-Needs step 3 (the fit trusts odometry's record of the spin), the distance sensors' real ports in
-`config.hpp`, and their Diagnostics entries uncommented. Independent of step 5.
+Needs step 3 (the fit trusts odometry's record of the spin), and the distance sensors' real ports in
+`config.hpp`, green on the Diagnostics page. Independent of step 5.
 
 ### What it does
 
@@ -381,7 +395,7 @@ The status line: "Sensors, fwd,right in (applied):" then each sensor's numbers, 
 `Front --` for one left as it was. The terminal has more, one line per sensor:
 
 ```
-sensor 0 (front, port 1): calibrated, {.forwardIn = 7.12, .rightIn = 0.00, .facingDeg = 0}, +0.12 in along the beam (+-0.04), sideways kept
+sensor 0 (front, port 8): calibrated, {.forwardIn = 7.12, .rightIn = 0.00, .facingDeg = 0}, +0.12 in along the beam (+-0.04), sideways kept
 ```
 
 `+0.12 in along the beam` is how far the face moved from what you measured (positive is farther out),
@@ -456,7 +470,7 @@ All in [`tuning.cpp`](../src/robot/tuning.cpp):
 | `kTurnStepVolts` | 6 | the Turn steps' volts |
 | `kDriveResponse` | 0.6 s, damping 1 | the Drive controller's spec (`driveDistance()`, and the drive term of the point motions) |
 | `kTurnResponse` | 0.5 s, damping 1 | the Turn controller's spec (`turnToHeading()`) |
-| `kHeadingHoldResponse` | 0.9 s, damping 1 | the heading hold's spec: softer on purpose, since the driver steers its target |
+| `kHeadingHoldResponse` | 0.9 s, damping 1 | the heading hold's spec, which orbiting turns the robot with: softer on purpose, since the driver steers the robot around the pivot |
 
 Each spec also has `minPhaseMarginDeg` (50 unless set). More travel or volts gives the fit more
 samples at speed; fewer volts if the robot lurches or tips.
@@ -480,8 +494,9 @@ facing along it, works.
    the top speed the model predicts, in in/s for Fwd and °/s for Turn. Far from what the robot really
    does, suspect the wheel diameter or the IMU scale.
 5. [ ] **Run Test** on Drive: `driveDistance(24)`, then `driveDistance(-24)`. On Turn:
-   `turnToHeading(90)`, then back to 0. Hold has no test: it's what the right stick drives through.
-   Let go of the stick and push the robot's nose aside: it should come back without ringing.
+   `turnToHeading(90)`, then back to 0. Hold has no Run Test: it's what orbiting turns the robot
+   with. Press DOWN to orbit, let go of the sticks, and push the robot's nose aside: it should come
+   back to facing away from the pivot without ringing. DOWN again to stop.
 6. [ ] Home page: **Stop log**. Copy the card.
 
 ### Judge it and hardcode it
@@ -531,7 +546,7 @@ So tweaking means changing the spec, not the gains:
 | Asking for faster changes nothing | `lag-capped` | the measured delay limits it. Lowering `minPhaseMarginDeg` (50) buys speed for ringing: 45 to 60 is usual |
 | You'd trade a little overshoot for speed | | `dampingRatio` under 1 (0.8, say) |
 | Motions stop a hair short, or time out just outside the threshold | `fric ±` wider than the exit threshold (1 in, 2°) | friction can hold the error at kS/kP, and there's no kI: a faster spec (more kP), or a wider `errorThreshold` on that motion |
-| Heading hold feels twitchy, fights the driver | | raise `kHeadingHoldResponse.settleTimeS` |
+| Orbiting feels twitchy, snapping round to face away from the pivot | | raise `kHeadingHoldResponse.settleTimeS` |
 | No fit, or a low `R2` | | sensor signs, then more travel or volts |
 | Overshoots although damping is 1 | | the model is off: delay, or a different load. Step 6's Refine finds the model the real motions imply |
 
@@ -575,7 +590,7 @@ void fieldCheck() {
 // in registerAutons(): selector.addRoutine("Field Check", &fieldCheck);
 ```
 
-Off the field, B+DOWN runs the selected routine from driver control.
+Off the field, X+UP runs the selected routine from driver control.
 
 ### The loop
 

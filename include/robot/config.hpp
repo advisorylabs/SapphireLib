@@ -27,7 +27,7 @@ constexpr std::int8_t kFrontLeft = 3;
 constexpr std::int8_t kFrontRight = -15;
 constexpr std::int8_t kBackLeft = 14;
 constexpr std::int8_t kBackRight = -6;
-constexpr std::int8_t kMiddleLeft = 5;
+constexpr std::int8_t kMiddleLeft = 2;
 constexpr std::int8_t kMiddleRight = -20;
 constexpr std::uint8_t kImu = 19;
 
@@ -49,15 +49,18 @@ constexpr std::int8_t kClawMotor = 17; // the roller claw
 // opposite ways: A clockwise going up, B counterclockwise. B is reversed so
 // + is up for both; with both the same sign they fight each other and lock
 // up. If L1 in debug mode drives the lift down, negate both.
-constexpr std::int8_t kLiftA = 16;
+constexpr std::int8_t kLiftA = 7;
 constexpr std::int8_t kLiftB = -9;
 // Negate this if the sensor's reading goes down as the lift goes up.
-constexpr std::int8_t kLiftSensor = 7;
+constexpr std::int8_t kLiftSensor = 16;
 // Sees a pin in the roller claw.
 constexpr std::uint8_t kClawDistance = 12;
-// TODO: the claw's solenoid wasn't in the competition robot's port list;
-// 'A' is the test chassis's. A 3-wire port on the brain, not a smart port.
-constexpr char kClawPiston = 'A';
+// The two pistons, on the brain's 3-wire ports (not smart ports). G deploys
+// the claw, the moment L1 or Y takes the lift off the bottom. H deploys once
+// the lift reaches the top of its travel: its goal's top level. In debug
+// mode, A and X toggle them by hand (see macros.hpp).
+constexpr char kClawPiston = 'G';
+constexpr char kTopPiston = 'H';
 
 // --- Localization distance sensors (devices.cpp) ---
 // One per side, for Monte Carlo localization. The team calls them by
@@ -65,7 +68,7 @@ constexpr char kClawPiston = 'A';
 constexpr std::uint8_t kDistanceFront = 8;  // north
 constexpr std::uint8_t kDistanceRight = 10; // east
 constexpr std::uint8_t kDistanceBack = 18;  // south
-constexpr std::uint8_t kDistanceLeft = 2;   // west
+constexpr std::uint8_t kDistanceLeft = 5;   // west
 
 } // namespace robot::ports
 

@@ -87,8 +87,9 @@ constexpr double kTurnStepVolts = 6.0;
 // are designed from the same axis measurements; only these specs differ.
 constexpr ResponseSpec kDriveResponse{.settleTimeS = 0.6, .dampingRatio = 1.0};
 constexpr ResponseSpec kTurnResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
-// Softer on purpose: the driver is steering the target heading, and a hold
-// that snaps onto it as hard as an autonomous turn feels twitchy and fights
+// Softer on purpose: orbiting (driver.cpp) turns the robot with the hold, to
+// keep its back to the pivot while the driver steers it around, and a hold
+// that snaps onto that as hard as an autonomous turn feels twitchy and fights
 // them whenever the robot gets bumped.
 constexpr ResponseSpec kHeadingHoldResponse{.settleTimeS = 0.9, .dampingRatio = 1.0};
 // The lift, designed from its own measurement (with gravity), see
