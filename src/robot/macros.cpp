@@ -30,6 +30,7 @@
 #include "pros/error.h"
 #include "pros/motors.hpp"
 #include "robot/config.hpp"
+#include "robot/devices.hpp"
 #include "sapphirelib/mechanism/piston.hpp"
 #include "sapphirelib/mechanism/position_mechanism.hpp"
 #include "sapphirelib/mechanism/preset_ladder.hpp"
@@ -58,6 +59,8 @@ using sapphirelib::mechanism::PresetLadder;
 using sapphirelib::tuning::GravityKind;
 using sapphirelib::tuning::MechanismCharacterizationConfig;
 
+constexpr double kPi = 3.14159265358979323846;
+
 // --- Claw and autoClaw ---
 // Anything the claw's distance sensor reads at or closer than this counts as
 // a pin in the claw: between what the sensor reads with a pin loaded and
@@ -69,8 +72,29 @@ constexpr std::int32_t kPieceDetectMm = 80;
 constexpr std::uint32_t kAutoClawDetectMs = 0;
 // Once the claw opens on a pin, autoClaw waits for the sensor to have seen
 // nothing for this long before it can close again, so one reading that
-// misses the pin still sitting in the open claw doesn't count as it gone.
-constexpr std::uint32_t kAutoClawClearMs = 200;
+// misses the pin still sitting in the open claw doesn't count as it gone. 0
+// arms it again on the first reading that sees nothing: if the claw ever
+// snaps shut on a pin it was just opened to drop, raise this (it was 200).
+constexpr std::uint32_t kAutoClawClearMs = 0;
+// Driving onto a pin, autoClaw closes early: between the reading that sees
+// the pin and the claw actually shut, the robot carries the pin this many ms
+// further in, so at speed a claw that waits for kPieceDetectMm closes behind
+// the pin, or on it. The reach grows by how fast the robot is driving the
+// claw's way (odometry's velocity, in mm per ms) times this: at 1 m/s (39
+// in/s), 100ms reaches 100mm further. Standing still it's kPieceDetectMm.
+// TODO: tune on the robot. A pin taken at speed that still ends up past the
+// claw or pushed out of it wants more; one that closes before the pin gets
+// there, less. The log's autoclaw events have the reading and reach of each
+// grab.
+constexpr std::uint32_t kAutoClawLeadMs = 100;
+// The furthest out the lead reaches, however fast the robot goes, so driving
+// at a wall or another robot doesn't close the claw half a field away.
+constexpr std::int32_t kAutoClawMaxReachMm = 200;
+// Which way the claw's mouth faces, in degrees clockwise from the robot's
+// front (0 the front, 180 the back): only driving that way counts toward the
+// lead. TODO: check on the robot. If it's wrong, the lead never kicks in
+// driving onto a pin, and autoClaw closes at kPieceDetectMm as before.
+constexpr double kClawFacingDeg = 0.0;
 
 // --- Timing ---
 // How long a score waits after opening the claw before lowering the lift:
@@ -250,8 +274,9 @@ State state;
 // into state.debug once a tick, so a whole tick runs in one mode.
 std::atomic<bool> debugMode{false};
 
-// Whether the claw's distance sensor has seen a pin, and since when, for
-// autoClaw's kAutoClawDetectMs.
+// Whether the claw's distance sensor has seen a pin within autoClaw's reach
+// (see autoClawReachMm()), and since when, for kAutoClawDetectMs and
+// kAutoClawClearMs.
 TimedFlag pinSeen;
 
 // The score: dip halfway to the level below, open the claw and give it
@@ -278,10 +303,30 @@ std::atomic<double> liftTestTarget{std::numeric_limits<double>::quiet_NaN()};
 // The "mech" telemetry channel, once attachTelemetry() has made it.
 sapphirelib::telemetry::Channel* mechLog = nullptr;
 
-bool pieceInClaw(std::int32_t distanceMm) {
+bool pieceInClaw(std::int32_t distanceMm, std::int32_t reachMm = kPieceDetectMm) {
     // get_distance() reads 9999 when it sees nothing and PROS_ERR (INT32_MAX)
     // when unplugged, so neither counts as a pin.
-    return distanceMm <= kPieceDetectMm;
+    return distanceMm <= reachMm;
+}
+
+/// How fast the robot is driving the claw's mouth onto whatever is in front
+/// of it, in mm per ms (the same number as m/s): odometry's field velocity
+/// along the way the claw faces. 0 backing away from it or moving across it.
+double clawApproachMmPerMs() {
+    const sapphirelib::odom::Odometry::Snapshot snapshot = odometry().snapshot();
+    // Heading 0 faces +y and 90 faces +x (see Pose). The raw pose, since the
+    // velocity is the raw pose's.
+    const double facingRad = (snapshot.rawPose.headingDeg + kClawFacingDeg) * (kPi / 180.0);
+    const double inPerS = snapshot.rawVelocity.xInPerS * std::sin(facingRad) +
+                          snapshot.rawVelocity.yInPerS * std::cos(facingRad);
+    return std::max(0.0, inPerS * 25.4 / 1000.0);
+}
+
+/// Where autoClaw closes on a pin at this approach speed: kPieceDetectMm,
+/// plus kAutoClawLeadMs of travel, up to kAutoClawMaxReachMm.
+std::int32_t autoClawReachMm(double approachMmPerMs) {
+    const double reachMm = kPieceDetectMm + approachMmPerMs * kAutoClawLeadMs;
+    return static_cast<std::int32_t>(std::min(reachMm, static_cast<double>(kAutoClawMaxReachMm)));
 }
 
 bool switchPressed() { return bottomSwitch.get_value() == 1; }
@@ -344,8 +389,8 @@ bool seekingBottom(std::uint32_t now, bool atBottom) {
 }
 
 /// autoClaw (see macros.hpp): the claw is open, the lift is down on its
-/// bottom switch and meant to be there, and the sensor has seen a pin for
-/// kAutoClawDetectMs.
+/// bottom switch and meant to be there, and the sensor has seen a pin within
+/// the reach for kAutoClawDetectMs.
 bool autoClawWants(std::uint32_t now, bool atBottom) {
     return !state.clawClosed && state.autoClawArmed && atBottom &&
            ladder.level() == kBottomLevel && pinSeen.trueFor(kAutoClawDetectMs, now);
@@ -417,9 +462,13 @@ void update(Controller& controller) {
         state.seekGaveUp = false;
     }
 
-    // One reading of each sensor for the whole tick.
+    // One reading of each sensor for the whole tick. The pin counts as seen
+    // out at the reach, so autoClaw (and its arming) works from where the
+    // claw has to start closing at this speed, not from where it ends up.
     const std::int32_t pieceMm = clawSensor.get_distance();
-    const bool pin = pieceInClaw(pieceMm);
+    const double approachMmPerMs = clawApproachMmPerMs();
+    const std::int32_t reachMm = autoClawReachMm(approachMmPerMs);
+    const bool pin = pieceInClaw(pieceMm, reachMm);
     const bool atBottom = switchPressed();
     pinSeen.set(pin, now);
     zeroAtBottom(atBottom);
@@ -469,8 +518,9 @@ void update(Controller& controller) {
             state.clawClosed = !state.clawClosed;
         } else if (autoClawWants(now, atBottom)) {
             state.clawClosed = true;
-            sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d",
-                                          static_cast<int>(pieceMm));
+            sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d,reach_mm=%d,speed=%.2f",
+                                          static_cast<int>(pieceMm), static_cast<int>(reachMm),
+                                          approachMmPerMs);
         }
         if (controller.repeated(Button::l1, kLevelRepeatDelayMs, kLevelRepeatPeriodMs)) {
             ladder.up();

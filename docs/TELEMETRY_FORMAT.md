@@ -266,8 +266,10 @@ volts that hold it against gravity.
   how many rounds of writing a full-size taught drive read back as written while this file was
   being logged, how long each took, the rows the logger dropped meanwhile, and whether it kept
   logging to this file.
-- `macro`: 96671H's driver macros (`src/robot/macros.cpp`). `autoclaw,piece_mm=<mm>` when autoClaw
-  closes the claw on a pin at the bottom, with the distance reading that did it; `seek_failed` when
+- `macro`: 96671H's driver macros (`src/robot/macros.cpp`). `autoclaw,piece_mm=<mm>,reach_mm=<mm>,
+  speed=<m/s>` when autoClaw closes the claw on a pin at the bottom: the distance reading that did
+  it, how far out it was closing at that moment (`kPieceDetectMm` plus the speed lead), and how fast
+  the robot was driving the claw onto it; `seek_failed` when
   the lift, heading for the bottom, didn't reach its bottom switch in time and gave up (a switch
   unplugged, broken, or out of reach).
 - Suggested for team code: `mark` (a driver's "that looked wrong" button).

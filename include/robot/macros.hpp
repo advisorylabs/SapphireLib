@@ -29,10 +29,12 @@
  *              then each lift motor's volts, current, and temperature.
  *
  * autoClaw: with the claw open and the lift down on its bottom switch, a pin
- * the claw's distance sensor sees closes the claw. Once the claw opens on a
- * pin (R1, or a score at the bottom), autoClaw waits for the sensor to see
- * the pin gone before it closes again, so opening the claw to drop a pin
- * doesn't snap it shut on the same one.
+ * the claw's distance sensor sees closes the claw, on the first reading.
+ * Driving onto the pin, it closes further out the faster the robot goes, so
+ * the claw is shut by the time the pin is in it rather than closing behind
+ * it. Once the claw opens on a pin (R1, or a score at the bottom), autoClaw
+ * waits for the sensor to see the pin gone before it closes again, so opening
+ * the claw to drop a pin doesn't snap it shut on the same one.
  *
  * The lift: its motors (config.hpp's kLiftMotors, three of them) hold each
  * level on a PID loop around their own encoders, in motor degrees. A limit
