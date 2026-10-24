@@ -37,6 +37,10 @@ double readRotationDeg(const pros::Rotation& sensor) {
 
 PositionMechanism::PositionMechanism(std::initializer_list<std::int8_t> motorPorts,
                                      PositionSource position, PositionConfig config)
+    : PositionMechanism(std::vector<std::int8_t>(motorPorts), std::move(position), config) {}
+
+PositionMechanism::PositionMechanism(const std::vector<std::int8_t>& motorPorts,
+                                     PositionSource position, PositionConfig config)
     : motors_(motorPorts), source_(std::move(position)), config_(config), pid_(config.pid),
       gravityConstantVolts_(config.gravity.constantVolts),
       gravityCosineVolts_(config.gravity.cosineVolts),
@@ -228,9 +232,10 @@ PositionStep PositionMechanism::step(std::uint32_t nowMs, bool disabled) {
             case PositionMode::voltage:
                 // reset every update, so going back to closed loop starts clean
                 pid_.reset();
-                command = {.law = PositionLaw::manual,
-                           .volts = std::clamp(volts_.load(), -config_.maxVolts, config_.maxVolts),
-                           .brake = false};
+                command = {
+                    .law = PositionLaw::manual,
+                    .volts = std::clamp(volts_.load(), -config_.downVoltsLimit(), config_.maxVolts),
+                    .brake = false};
                 break;
             case PositionMode::off:
                 pid_.reset();
