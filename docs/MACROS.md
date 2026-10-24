@@ -15,8 +15,8 @@ machine.
 
 [`examples/macros.cpp`](../examples/macros.cpp) is the complete example this guide builds up to, and
 it's [at the end](#a-complete-example) too. [`src/robot/macros.cpp`](../src/robot/macros.cpp) is
-96671H's real one: three goals' worth of levels, a roller claw with a distance sensor, and three
-sequences.
+96671H's real one: three goals' worth of levels on a lift zeroed by a limit switch, a pneumatic claw
+that closes itself on a pin its distance sensor sees, and a score sequence.
 
 Contents: [The primitives](#the-primitives) · [The per-tick pattern](#the-per-tick-pattern) ·
 [Where things live](#where-things-live-namespace-scope) · [Mechanisms](#mechanisms) ·

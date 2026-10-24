@@ -266,7 +266,11 @@ volts that hold it against gravity.
   how many rounds of writing a full-size taught drive read back as written while this file was
   being logged, how long each took, the rows the logger dropped meanwhile, and whether it kept
   logging to this file.
-- Suggested for team code: `mark` (a driver's "that looked wrong" button), `macro`.
+- `macro`: 96671H's driver macros (`src/robot/macros.cpp`). `autoclaw,piece_mm=<mm>` when autoClaw
+  closes the claw on a pin at the bottom, with the distance reading that did it; `seek_failed` when
+  the lift, heading for the bottom, didn't reach its bottom switch in time and gave up (a switch
+  unplugged, broken, or out of reach).
+- Suggested for team code: `mark` (a driver's "that looked wrong" button).
 
 ## Channels on 96671H's robot
 
@@ -291,11 +295,11 @@ names to match on.
 | `mcl.pts` | samples | `dx0,dy0,...,dx5,dy5` | A sample of the particle cloud: every 5th update, 24 particles picked by weight (`sampleParticles()`, systematic), as four rows of six (x, y) offsets from that update's estimate, in inches. The four rows of one sample are recorded within microseconds of each other; group rows less than 10 ms apart. Add the `mcl` row's `x,y` for field positions. |
 | `chassis` | samples | `fwd_v,strafe_v,turn_v` | The volts the drivetrain last commanded on each axis, before each motor's ±12 V clamp, every 10 ms while enabled. A snapshot, possibly one tick torn across the three fields; `strafe_v` is always 0 on a tank. |
 | `batt` | samples | `volts,pct,amps,temp` | Battery voltage, charge (%), current drawn (A) and pack temperature (°C), every 200 ms. A failed read is `nan`. |
-| `motor.<name>` | samples | `volts,amps,temp,rpm,eff,faults` | One per motor, every 100 ms: see [Motor channels](#motor-channels). 96671H logs `motor.fl`, `fr`, `bl`, `br`, `ml`, `mr` (drivetrain), `motor.liftA`, `liftB`, `intake` and `claw`. |
+| `motor.<name>` | samples | `volts,amps,temp,rpm,eff,faults` | One per motor, every 100 ms: see [Motor channels](#motor-channels). 96671H logs `motor.fl`, `fr`, `bl`, `br`, `ml`, `mr` (drivetrain) and one per lift motor, `motor.liftA`, `liftB`, `liftC`. Logs from before the three-motor lift also have `intake` and `claw` (the roller claw). |
 | `driver` | samples | `lx,ly,rx,ry,buttons,connected` | The controller, every opcontrol tick (20 ms): sticks in −1…1, the held buttons as a bitmask (bit *i* = `input::Button` *i*: L1, L2, R1, R2, Up, Down, Left, Right, X, B, Y, A), and 1/0 for whether the controller is connected. |
 | `lift` | pid | pid columns | The lift's position PID. |
-| `lift.act` | samples | `target,pos,volts,law` | Every lift update: target and position in degrees (`pos` is `nan` if the rotation sensor didn't answer), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking; `nan` while Auto-Tune has the motors), and which branch of the control law ran (`law`, below). |
-| `mech` | samples | `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed,top` | The macro system, every opcontrol tick: volts sent to the intake and roller claw, the claw piston on port G (1 extended), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 stowed) and goal (0 alliance, 1 medium, 2 center), the running sequence step (−1 none; else 0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), whether the claw is deployed, and the top piston on port H (1 extended). Logs from before the top piston end at `deployed`. |
+| `lift.act` | samples | `target,pos,volts,law` | Every lift update: target and position in degrees (motor degrees from the lift motors' encoders, zeroed on the bottom switch; the rotation sensor's degrees in older logs; `pos` is `nan` if nothing answered), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking; `nan` while Auto-Tune has the motors), and which branch of the control law ran (`law`, below). |
+| `mech` | samples | `claw,extender,piece_mm,level,mode,phase,bottom` | The macro system, every opcontrol tick: the claw piston (1 closed) and the extender (1 out), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 the bottom) and goal (0 alliance, 1 medium, 2 center), the running score step (−1 none; else 0 scoreDescend, 1 scoreRelease), and the lift's bottom switch (1 pressed). Logs from before the three-motor lift have `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed,top` instead: volts sent to the intake and roller claw, the claw piston (1 extended), the distance sensor, level (0 stowed) and goal, the sequence step (0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), whether the claw was deployed, and the top piston (1 extended; missing from logs older still). |
 | `char.fwd`, `char.strafe`, `char.turn`, `char.lift` | samples | `volts,pos` | Auto-Tune characterization runs, one row per sample the runner takes. Declared in every file; rows appear only while Auto-Tune runs. See [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows). |
 
 `mcl.state`'s `blocked` is `LocalizationStatus::blockedBy`, a sum of these bits; a reader should

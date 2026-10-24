@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 
 #include "pros/error.h"
@@ -293,17 +294,20 @@ void startTelemetry() {
     log.motor("motor.br", ports::kBackRight);
     log.motor("motor.ml", ports::kMiddleLeft);
     log.motor("motor.mr", ports::kMiddleRight);
-    log.motor("motor.liftA", ports::kLiftA);
-    log.motor("motor.liftB", ports::kLiftB);
-    log.motor("motor.intake", ports::kIntake);
-    log.motor("motor.claw", ports::kClawMotor); // the roller claw
+    // motor.liftA, liftB, ...: however many the lift has, lettered as the
+    // controller's LEFT readout letters them.
+    for (std::size_t i = 0; i < ports::kLiftMotors.size(); ++i) {
+        char name[16];
+        std::snprintf(name, sizeof(name), "motor.lift%c", static_cast<char>('A' + i));
+        log.motor(name, ports::kLiftMotors[i]);
+    }
 
     // The driver's sticks and buttons, recorded by logDriver() each opcontrol
     // tick. Capacity 128 is 2.5s at 20ms.
     driverLog = &log.channel("driver", {"lx", "ly", "rx", "ry", "buttons", "connected"},
                              {.capacity = 128, .decimals = 3});
 
-    // "lift" PID + "lift.act".
+    // "lift" PID, "lift.act" and "mech".
     macros::attachTelemetry(log);
 
     // #meta lines at the top of every file: which TUNE.CFG revision this run

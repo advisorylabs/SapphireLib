@@ -11,11 +11,10 @@
 #include "robot/autons.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <vector>
 
-#include "pros/motors.hpp"
 #include "pros/rtos.hpp"
-#include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
 #include "robot/teach.hpp"
@@ -39,33 +38,30 @@ namespace {
 
 void doNothingAuton() {}
 
-// The lift's own motors, driven directly (the driver macros' lift loop only
-// runs from opcontrol, so the two never command them at once).
-pros::Motor winch(ports::kLiftA);
-pros::Motor winch2(ports::kLiftB);
+// The lift's own motors, every one in config.hpp's kLiftMotors, driven
+// directly (the driver macros' lift loop only runs from opcontrol, so the two
+// never command them at once). Its position is the macros' too: motor
+// degrees, zeroed on the bottom switch, so start it with the lift down.
+// TODO: 1000 motor degrees of travel was the test chassis's lift; check this
+// one's before running it, or the up stroke drives into the top hard stop
+// and never ends.
 void liftTesting() {
-    winch.set_encoder_units_all(pros::v5::MotorUnits::degrees);
-    winch2.set_encoder_units_all(pros::v5::MotorUnits::degrees);
-    // + is up for both lift motors (see config.hpp), so winch's position
-    // counts UP while moving at +127. Zero it so the thresholds are relative
-    // to where the lift starts. TODO: 1000 motor degrees of travel was the
-    // test chassis's lift; check this one's before running it, or the up
-    // stroke drives into the top hard stop and never ends.
-    winch.tare_position();
-    winch2.tare_position();
+    sapphirelib::mechanism::PositionMechanism& lift = macros::liftMechanism();
     for (int i = 0; i < 18; i++) {
-        winch.move(127);
-        winch2.move(127);
-        while (winch.get_position() < 1000) {
+        // + is up for every lift motor (see config.hpp). With no reading
+        // (every motor unplugged), both waits end at once: NaN compares
+        // false.
+        lift.motors().move(127);
+        while (lift.position() < 1000) {
             pros::delay(2);
         }
-        winch.move(-127);
-        winch2.move(-127);
-        while (winch.get_position() > 15) {
+        // Down no harder than the macros ever drive it (kLiftMaxDownVolts).
+        lift.motors().move_voltage(
+            -static_cast<std::int32_t>(lift.config().downVoltsLimit() * 1000.0));
+        while (lift.position() > 15 && !macros::liftAtBottom()) {
             pros::delay(2);
         }
-        winch.move(0);
-        winch2.move(0);
+        lift.motors().move(0);
         pros::delay(6000);
     }
 }

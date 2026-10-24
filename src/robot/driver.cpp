@@ -2,7 +2,7 @@
  * \file driver.cpp
  *
  * Driver control: stick shaping, split arcade driving with its invert and
- * orbit modes, and the X+UP testing shortcut. The intake, claw, and lift
+ * orbit modes, and the X+UP testing shortcut. The claw, lift, and extender
  * buttons are in macros.cpp.
  *
  * Team 96671H: Hitmen
@@ -216,7 +216,7 @@ void shortcuts(Controller& controller) {
     if (screenBusy()) return;
 
     // Nothing calls macros::update() until the routine returns, and the
-    // mechanisms would otherwise keep their last command the whole time.
+    // lift would otherwise keep its last command the whole time.
     macros::stop();
     runSelectedAuton();
 }

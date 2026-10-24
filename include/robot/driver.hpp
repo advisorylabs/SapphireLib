@@ -47,8 +47,8 @@ void drive(sapphirelib::input::Controller& controller);
 ///   - X+UP (pressed together, either order) runs the autonomous routine
 ///     picked on the brain screen, but only with no competition switch or
 ///     field connected, so it can't fire during a real match, and not while a
-///     GUI routine is driving the chassis. It stops the intake, claw, and lift
-///     first (macros::stop()), and blocks until the routine ends.
+///     GUI routine is driving the chassis. It brakes the lift first
+///     (macros::stop()), and blocks until the routine ends.
 ///
 /// X+A, teach mode's start and stop, is teach::update()'s (robot/teach.hpp).
 /// While it records, line 1 says so instead of the drive mode.
