@@ -14,6 +14,7 @@ const T = require('../js/tuner.js');
 const W = require('../js/world.js');
 const L = require('../js/mcl.js');
 const cal = require('../../analyzer/js/mclcal.js');
+const slt = require('../../analyzer/js/slt.js');
 const TF = require('../../analyzer/js/tunefile.js');
 
 const KNOWN = { sensorNoiseScale: 2, sensorDropoutPct: 8, sensorOutlierPct: 5, sensorDelayMs: 40,
@@ -162,6 +163,22 @@ test('paired comparisons cancel shared noise', () => {
   assert.ok(Math.abs(p.mean - Math.log(1 / 1.1)) < 1e-12);
   assert.ok(p.se < 1e-12);
   assert.equal(p.n, 5);
+});
+
+test('a recorded run logs the axis models it plans with, as tune.cpp does, and they read back', () => {
+  const log = T.recordedLog({ id: 'tour', routine: 'tour', world: {} }, T.defaultConfig(), 3, 900051);
+  const models = W.defaultSettings().models;
+  const back = slt.axisModels(log);
+  const chassis = cal.chassisOf([log]);
+  for (const [key, axis] of [['fwd', 'forward'], ['strafe', 'strafe'], ['turn', 'turn']]) {
+    assert.equal(back[key].from, 'logged');
+    for (const term of ['kS', 'kV', 'kA']) {
+      assert.ok(Math.abs(back[key][term] - models[axis][term]) <= 1e-8 * Math.abs(models[axis][term]), `${key} ${term}`);
+      // so calibrating from logs brings the robot's chassis in with them
+      assert.equal(chassis[axis][term], back[key][term]);
+    }
+  }
+  assert.equal(chassis.delayS, undefined, 'no Auto-Tune, no measured delay');
 });
 
 test('a recorded run logs mcl.state every update and mcl.pts every 5th, like telemetry.cpp', () => {

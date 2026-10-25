@@ -29,6 +29,14 @@ The robot's own odometry, Monte Carlo localizer, motions and Auto-Tune gain desi
 ports, held to the C++ tests' golden values) on a simulated field. It opens running the Field
 tour routine.
 
+**The field** is Override's (2026-27), to scale, from the game manual's Appendix A drawings
+(`js/field.js`), seen from the audience: red's Alliance Station on the left, blue's on the right. The
+tile seams (23.55 in apart), the Autonomous Line (the double diagonal), the other diagonal and the
+Midfield, the Load Zones, the nine Goals (the tall one in the middle), the four Loaders and Toggles,
+and the Cups and Pins a Head-to-Head match starts with. Hover anywhere for the cursor's x and y in
+inches and what's there (bottom right). The Goals and Loaders are only a picture until Events →
+Field elements puts them in the world, where the robot runs into them and the sensors see them.
+
 **On screen:** the real robot (solid), odometry alone (orange dashed), the corrected pose the
 motions use (blue), the particles (amber explains the readings best, grey worst; size is weight),
 the estimate (×) and its ellipse, and each sensor's beam. Tiles under the field: odometry's and the
@@ -62,12 +70,23 @@ Driving stops a running routine. Hover a label or slider for what it means.
   robot's footprint along it; under it the duration, each section's start, the peaks per axis, and
   a chart of speed and the worst wheel's volts. **Run** drives it in the simulator. **Copy C++**
   writes the chain for `autons.cpp`; **Paste C++** reads one back. Plans with the Robot tab's
-  chassis model, or with the models in the TUNE.CFG open in the Tune tab, which is what the robot
-  plans with. Drafts stay in this browser. The guide: [`TRAJECTORIES.md`](TRAJECTORIES.md).
-- **Show**: which layers the field draws.
+  chassis model, with the models in the TUNE.CFG open in the Tune tab, or (**Logged models**) with
+  the ones an `SL*.CSV` says the robot ran (**Open log…**, or drop it there or on the Tune tab),
+  which is what the robot plans with. Drafts stay in this browser. The guide: [`TRAJECTORIES.md`](TRAJECTORIES.md).
+  Planning on the field: set **Robot** to your footprint (across × front to back), and the line
+  under the plan says where the routine starts against SG1 (which alliance's side of the
+  Autonomous Line, which Quadrant, touching the perimeter, clear of the Load Zones) and what the
+  footprint runs into on the way, Goals, Loaders or walls, at what time; each one is outlined in red
+  on the field with the robot where it first hits. **Other alliance** turns the path half a turn
+  about the middle (the field turns into itself, red for blue); **Other quadrant** mirrors it across
+  the y = x diagonal into your alliance's other Quadrant (the Goals, tape, Toggles and wall objects
+  line up; the Loaders don't, being on the side walls only).
+- **Show**: which layers the field draws, the field's own included: tile seams, tape and Load
+  Zones, Goals/Loaders/Toggles, and the starting Cups and Pins.
 - **Events**: bump (6 in, wheels don't see it), pick up and put down, relocalize globally, the
-  defender (sensors see it, the map doesn't), field elements in the world and/or the map, and
-  scenarios (worn wheels, wrong offsets, noisy sensors, crowded field) that reset the world.
+  defender (sensors see it, the map doesn't), field elements (Override's Goals and Loaders) in the
+  world and/or the map, and scenarios (worn wheels, wrong offsets, noisy sensors, crowded field)
+  that reset the world.
 - **Robot**: the world's errors the robot program doesn't know about (wheel scale and slip, IMU
   drift, sensor noise, delay, dropouts, outliers), and the chassis model Auto-Tune measures.
 - **MCL**: every `LocalizerConfig` setting, live. The panel below writes the changes as
@@ -88,6 +107,9 @@ Driving stops a running routine. Hover a label or slider for what it means.
   long it takes to find the robot.
 - *Blocked sensors:* Events → Crowded field. Beams through the defender turn red; the estimate
   holds.
+- *Plan an auton:* Paths → New, set Robot to your footprint, click the start against your wall,
+  then the points to each Goal. Fix whatever the line under the plan says it runs into, **Run** it,
+  **Copy C++** into `autons.cpp`. **Other alliance** and **Other quadrant** make its twins.
 
 ## Analyzer
 

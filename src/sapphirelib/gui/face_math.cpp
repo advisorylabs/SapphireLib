@@ -53,6 +53,15 @@ constexpr std::uint32_t kSurpriseHoldMs = 1200;
 constexpr double kSurpriseRiseMs = 60.0;
 constexpr double kSurpriseFallMs = 300.0;
 
+// wink: the eye on the screen's right shuts, holds, and opens again, slower than a blink so it
+// reads as meant, and its brow dips toward it
+constexpr int kWinkEye = 1;
+constexpr std::uint32_t kWinkCloseMs = 80;
+constexpr std::uint32_t kWinkShutMs = 280;
+constexpr std::uint32_t kWinkOpenMs = 160;
+constexpr std::uint32_t kWinkMs = kWinkCloseMs + kWinkShutMs + kWinkOpenMs;
+constexpr double kWinkBrowDropPx = 22.0;
+
 // frames further apart than this ease as if they weren't, so a stalled frame never jumps a mood
 // all the way
 constexpr std::uint32_t kMaxStepMs = 100;
@@ -75,7 +84,9 @@ void FaceAnimator::reset(std::uint32_t nowMs) {
     lastMs_ = nowMs;
     blinking_ = false;
     surprised_ = false;
+    winking_ = false;
     blink_ = 0.0;
+    wink_ = 0.0;
     squint_ = 0.0;
     surprise_ = 0.0;
     doubleBlinkNext_ = false;
@@ -95,21 +106,41 @@ FaceShape FaceAnimator::update(std::uint32_t nowMs, bool squinting, bool bumped)
                          stepMs / (surprised_ ? kSurpriseRiseMs : kSurpriseFallMs));
     squint_ = approach(squint_, squinting ? 1.0 : 0.0, stepMs / kSquintEaseMs);
 
+    if (winking_ && elapsedMs(winkStartMs_, nowMs) >= kWinkMs) winking_ = false;
+
     if (blinking_) {
         if (elapsedMs(blinkStartMs_, nowMs) >= kBlinkMs) {
             blinking_ = false;
             waitForNextBlink(nowMs);
         }
-    } else if (elapsedMs(waitStartMs_, nowMs) >= waitMs_ && surprise_ < kNoBlinkSurprise) {
-        // a blink that came due while surprised waits for the surprise to fade, then goes
+    } else if (elapsedMs(waitStartMs_, nowMs) >= waitMs_ && surprise_ < kNoBlinkSurprise &&
+               !winking_) {
+        // a blink that came due while surprised or winking waits for that to end, then goes, so
+        // the open eye stays open through a wink
         blinking_ = true;
         blinkStartMs_ = nowMs;
     }
     blink_ = blinkAt(nowMs);
+    wink_ = winkAt(nowMs);
     return shape();
 }
 
+void FaceAnimator::startWink(std::uint32_t nowMs) {
+    const std::uint32_t t = elapsedMs(winkStartMs_, nowMs);
+    if (!winking_ || t >= kWinkMs) {
+        winking_ = true;
+        winkStartMs_ = nowMs;
+    } else if (t > kWinkCloseMs) {
+        // shut or opening again: back to just shut, so the eye holds shut a little longer
+        // (elapsedMs() is unsigned arithmetic, so this is right even this close to boot)
+        winkStartMs_ = nowMs - kWinkCloseMs;
+    }
+    // still closing: it's on its way to shut anyway
+}
+
 double FaceAnimator::blink() const { return blink_; }
+
+double FaceAnimator::wink() const { return wink_; }
 
 double FaceAnimator::squint() const { return squint_; }
 
@@ -121,6 +152,15 @@ double FaceAnimator::blinkAt(std::uint32_t nowMs) const {
     if (t < kBlinkCloseMs) return t / kBlinkCloseMs;
     if (t < kBlinkCloseMs + kBlinkShutMs) return 1.0;
     if (t < kBlinkMs) return 1.0 - (t - kBlinkCloseMs - kBlinkShutMs) / kBlinkOpenMs;
+    return 0.0;
+}
+
+double FaceAnimator::winkAt(std::uint32_t nowMs) const {
+    if (!winking_) return 0.0;
+    const double t = elapsedMs(winkStartMs_, nowMs);
+    if (t < kWinkCloseMs) return t / kWinkCloseMs;
+    if (t < kWinkCloseMs + kWinkShutMs) return 1.0;
+    if (t < kWinkMs) return 1.0 - (t - kWinkCloseMs - kWinkShutMs) / kWinkOpenMs;
     return 0.0;
 }
 
@@ -148,7 +188,6 @@ FaceShape FaceAnimator::shape() const {
 
     const double eyeSizePx = kEyeSizePx * scale * (1.0 + (kSurpriseEyeScale - 1.0) * surprise);
     const double openHeightPx = eyeSizePx * (1.0 - (1.0 - kSquintHeight) * squint);
-    const double eyeHeightPx = openHeightPx * (1.0 - (1.0 - kShutHeight) * blink_);
 
     const double browY = eyeY - kBrowRaisePx * scale + kSquintBrowDropPx * scale * squint -
                          kSurpriseBrowLiftPx * scale * surprise;
@@ -164,15 +203,20 @@ FaceShape FaceAnimator::shape() const {
         // -1 the left eye, +1 the right: outward is this way
         const double outward = side == 0 ? -1.0 : 1.0;
         const double eyeX = middleX + outward * kEyeSpacingPx * scale;
+        // the winking eye is as shut as the more shut of its blink and its wink
+        const double wink = side == kWinkEye ? wink_ : 0.0;
+        const double eyeHeightPx =
+            openHeightPx * (1.0 - (1.0 - kShutHeight) * std::max(blink_, wink));
+        const double sideBrowY = browY + kWinkBrowDropPx * scale * wink;
         face.eyes[side] = EyeShape{.centerX = px(eyeX),
                                    .centerY = px(eyeY),
                                    .widthPx = px(eyeSizePx),
                                    .heightPx = std::max<std::int32_t>(1, px(eyeHeightPx))};
         face.brows[side] =
             BrowShape{.outerX = px(eyeX + outward * halfDx),
-                      .outerY = px(browY - halfDy),
+                      .outerY = px(sideBrowY - halfDy),
                       .innerX = px(eyeX - outward * halfDx),
-                      .innerY = px(browY + halfDy),
+                      .innerY = px(sideBrowY + halfDy),
                       .thicknessPx = std::max<std::int32_t>(1, px(kBrowThicknessPx * scale))};
     }
     return face;

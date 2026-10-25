@@ -75,9 +75,10 @@ HolonomicDrivetrain::HolonomicDrivetrain(std::int8_t frontLeftPort, std::int8_t 
                                          std::optional<AsteriskConfig> asterisk)
     : frontLeft_({frontLeftPort}, gearset), frontRight_({frontRightPort}, gearset),
       backLeft_({backLeftPort}, gearset), backRight_({backRightPort}, gearset),
-      imu_(imuPort, imuHeadingScale), config_(config), drivePID_(drivePIDConfig),
-      turnPID_(turnPIDConfig), headingHoldPID_(turnPIDConfig), trackingForwardPID_(drivePIDConfig),
-      trackingStrafePID_(drivePIDConfig), trackingTurnPID_(turnPIDConfig), asterisk_(asterisk) {
+      imu_(imuPort, imuHeadingScale), config_(config), wheelDiameterIn_(config.wheelDiameterIn),
+      drivePID_(drivePIDConfig), turnPID_(turnPIDConfig), headingHoldPID_(turnPIDConfig),
+      trackingForwardPID_(drivePIDConfig), trackingStrafePID_(drivePIDConfig),
+      trackingTurnPID_(turnPIDConfig), asterisk_(asterisk) {
     if (asterisk_) {
         const std::initializer_list<std::int8_t> middleLeftPorts{asterisk_->middleLeftPort};
         const std::initializer_list<std::int8_t> middleRightPorts{asterisk_->middleRightPort};
@@ -663,8 +664,20 @@ motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Traject
 }
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {
-    const double wheelCircumferenceIn = config_.wheelDiameterIn * kPi;
+    const double wheelCircumferenceIn = wheelDiameterIn_.load() * kPi;
     return (degrees / 360.0 / config_.externalGearRatio) * wheelCircumferenceIn;
+}
+
+double HolonomicDrivetrain::forwardTravelIn() const {
+    return degreesToInches(cornerAverageDegrees());
+}
+
+double HolonomicDrivetrain::wheelDiameterIn() const { return wheelDiameterIn_.load(); }
+
+void HolonomicDrivetrain::setWheelDiameterIn(double wheelDiameterIn) {
+    // the negated comparison also turns away NaN
+    if (!(wheelDiameterIn > 0.0)) return;
+    wheelDiameterIn_.store(wheelDiameterIn);
 }
 
 double HolonomicDrivetrain::cornerAverageDegrees() const {

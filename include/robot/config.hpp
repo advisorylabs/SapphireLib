@@ -38,7 +38,7 @@ constexpr std::uint8_t kImu = 4;
 // constructor in devices.cpp. TODO: confirm both on this robot: on the Odom
 // page, driving forward must raise Y and strafing right must raise X.
 // Negate whichever one goes the wrong way.
-constexpr std::int8_t kVerticalTracking = 6;
+constexpr std::int8_t kVerticalTracking = -6;
 constexpr std::int8_t kHorizontalTracking = 3;
 
 // --- Lift, claw, and extender (macros.cpp) ---
@@ -81,13 +81,22 @@ constexpr std::uint8_t kDistanceLeft = 12;   // west
 
 namespace robot {
 
+// --- Practice mode (the Home page's Practice button, driver.cpp) ---
+// While practice mode is on, pushing any drive stick (forward, strafe, or
+// turn) past this percent of full power cuts the drive motors' power, and it
+// comes back once every drive stick is under it again. The percent is of
+// the power the stick asks for, after the joystick curve, so it's what the
+// motors would get. 100 never cuts.
+constexpr double kPracticeMaxThrottlePct = 80.0;
+
 // --- Drivetrain and odometry geometry ---
-constexpr double kDriveWheelDiameterIn = 4.0;
+// All six drive wheels, at 600rpm (see the gearset in devices.cpp).
+constexpr double kDriveWheelDiameterIn = 2.0;
 
 // TODO: measure your actual tracking wheels and set this to their real
 // diameter (2.75in is just a common off-the-shelf omni size), odometry
 // distance is directly proportional to this value.
-constexpr double kTrackingWheelDiameterIn = 2.75;
+constexpr double kTrackingWheelDiameterIn = 2.0;
 
 // Each tracking wheel's mounting offset from the tracking center, in inches
 // (see OdometryConfig). TODO: these are the test chassis's numbers, so they're
@@ -109,8 +118,8 @@ constexpr double kTrackingWheelDiameterIn = 2.75;
 // phantom travel into the pose. TODO: check once on the robot: on the Odom
 // page, spin in place a few turns and watch x/y, which should barely move;
 // or run "Calibrate Offsets" and compare its signs with these.
-constexpr double kVerticalWheelOffsetIn = 3.59;
-constexpr double kHorizontalWheelOffsetIn = 4.18;
+constexpr double kVerticalWheelOffsetIn = 0.01;
+constexpr double kHorizontalWheelOffsetIn = 0.0;
 
 // Where each localization distance sensor's face sits, measured from the
 // tracking center (see DistanceSensorMount): inches forward (negative is
@@ -125,13 +134,13 @@ constexpr double kHorizontalWheelOffsetIn = 4.18;
 // the robot, face to face: front to back (kFrontSensorForwardIn -
 // kBackSensorForwardIn) plus right to left (kRightSensorRightIn -
 // kLeftSensorRightIn). It finds everything else, the tracking center too.
-constexpr double kFrontSensorForwardIn = 7.0;
-constexpr double kFrontSensorRightIn = 0.0;
-constexpr double kRightSensorForwardIn = 0.0;
-constexpr double kRightSensorRightIn = 7.0;
-constexpr double kBackSensorForwardIn = -7.0;
-constexpr double kBackSensorRightIn = 0.0;
-constexpr double kLeftSensorForwardIn = 0.0;
-constexpr double kLeftSensorRightIn = -7.0;
+constexpr double kFrontSensorForwardIn = 0.25;
+constexpr double kFrontSensorRightIn = 5.75;
+constexpr double kRightSensorForwardIn = 0.25;
+constexpr double kRightSensorRightIn = 4.28;
+constexpr double kBackSensorForwardIn = -1.55;
+constexpr double kBackSensorRightIn = -5.5;
+constexpr double kLeftSensorForwardIn = 1.0;
+constexpr double kLeftSensorRightIn = -4.42;
 
 } // namespace robot

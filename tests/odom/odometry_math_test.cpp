@@ -1,5 +1,6 @@
-// Host-side unit test for sapphirelib::odom::computeOdometryDelta and
-// calibrateTrackingWheelOffsetIn, no PROS/embedded dependencies, so it
+// Host-side unit test for sapphirelib::odom::computeOdometryDelta,
+// calibrateTrackingWheelOffsetIn and calibrateWheelDiameterIn, no
+// PROS/embedded dependencies, so it
 // builds and runs with a normal desktop compiler.
 //
 // Build & run:
@@ -12,10 +13,12 @@
 #include <cstdio>
 #include <initializer_list>
 #include <limits>
+#include <utility>
 
 #include "sapphirelib/odom/odometry_math.hpp"
 
 using sapphirelib::odom::calibrateTrackingWheelOffsetIn;
+using sapphirelib::odom::calibrateWheelDiameterIn;
 using sapphirelib::odom::computeOdometryDelta;
 using sapphirelib::odom::correctionStep;
 using sapphirelib::odom::velocityFromDelta;
@@ -254,6 +257,34 @@ void testVelocityFromDelta() {
     }
 }
 
+void testCalibrateWheelDiameter() {
+    // A 2in wheel that read 49in over a run the tape says was 48in reads long: it's really
+    // 48/49 of 2in across.
+    expectNear(calibrateWheelDiameterIn(2.0, 49.0, 48.0), 2.0 * 48.0 / 49.0, "diameter: reads long");
+    expectNear(calibrateWheelDiameterIn(2.0, 47.0, 48.0), 2.0 * 48.0 / 47.0, "diameter: reads short");
+    // Driving backward reads negative and measures negative: the same ratio.
+    expectNear(calibrateWheelDiameterIn(2.75, -50.0, -48.0), 2.75 * 48.0 / 50.0, "diameter: backward");
+    // A drive wheel geared or angled differently from its config comes out as the diameter that
+    // makes it read true, however far off: an X-drive corner rolls 0.707in per inch forward.
+    expectNear(calibrateWheelDiameterIn(2.0, 48.0 * std::sqrt(0.5), 48.0), 2.0 / std::sqrt(0.5),
+               "diameter: x-drive corner");
+    // Then the corrected diameter reads the run true.
+    const double corrected = calibrateWheelDiameterIn(2.0, 49.3, 48.25);
+    expectNear(49.3 * corrected / 2.0, 48.25, "diameter: corrected reads true");
+
+    // No answer from a wheel that didn't turn, a run too short to judge, a wheel reading backward,
+    // or a NaN.
+    for (const auto& [measuredIn, actualIn] :
+         {std::pair{0.0, 48.0}, std::pair{0.5, 0.5}, std::pair{48.0, 0.2}, std::pair{-48.0, 48.0},
+          std::pair{std::nan(""), 48.0}, std::pair{48.0, std::nan("")}}) {
+        if (!std::isnan(calibrateWheelDiameterIn(2.0, measuredIn, actualIn))) {
+            std::printf("FAIL diameter: expected NaN from measured %g, actual %g\n", measuredIn,
+                        actualIn);
+            assert(false);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -266,6 +297,7 @@ int main() {
     testOffsetSignsMatchWhereTheWheelsAre();
     testCorrectionStep();
     testVelocityFromDelta();
+    testCalibrateWheelDiameter();
     std::puts("odometry_math_test: all assertions passed");
     return 0;
 }

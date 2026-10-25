@@ -36,21 +36,29 @@ HolonomicDrivetrain& drivetrain() {
     // back drift while strafing, see AsteriskConfig and setDriftSource()
     // in initDevices(). The two sides' motors are mounted mirrored, so one
     // side's ports are reversed in config.hpp.
+    //
+    // All six wheels are 2in and spin at 600rpm: the corners on blue
+    // cartridges, direct, and the center pair on 5.5W motors (fixed 200rpm)
+    // geared up 3:1, so the center wheels keep pace with the corners. The
+    // gearset must match the corners' cartridges, since driveDistance() and
+    // drift correction turn their encoder degrees into inches. The center
+    // motors take it too, but they're only ever driven by voltage and read
+    // for temperature, so it doesn't matter that theirs is really 200rpm.
     static HolonomicDrivetrain instance(
-        ports::kFrontLeft, ports::kFrontRight, ports::kBackLeft, ports::kBackRight, Gearset::green,
+        ports::kFrontLeft, ports::kFrontRight, ports::kBackLeft, ports::kBackRight, Gearset::blue,
         ports::kImu,
         DrivetrainConfig{.wheelDiameterIn = kDriveWheelDiameterIn,
                          .externalGearRatio = 1.0,
                          .headingCorrectionKP = 0.4},
-        // kI/kD are continuous-time gains (per second), not per control
-        // tick, see PIDGains' comment. The kD values below are the
-        // previous per-tick numbers (0.1 / 0.02) converted at the
-        // drivetrain's 10ms loop period, so they behave identically; run
-        // Auto-Tune to replace them with measured ones.
+        // Auto-Tune's gains for the PID page's Drive and Turn entries,
+        // designed from the axis models in initDevices(). kI/kD are
+        // continuous-time gains (per second), not per control tick, see
+        // PIDGains' comment. The heading hold and tracking PIDs start from
+        // these too, and initDevices() gives them their own.
         /*drivePIDConfig=*/
-        PID::Config{.gains = {.kP = 1.2, .kI = 0.0, .kD = 0.001}, .outputLimit = 12.0},
+        PID::Config{.gains = {.kP = 2.086, .kI = 0.0, .kD = 0.396}, .outputLimit = 12.0},
         /*turnPIDConfig=*/
-        PID::Config{.gains = {.kP = 0.35, .kI = 0.0, .kD = 0.0002}, .outputLimit = 12.0},
+        PID::Config{.gains = {.kP = 0.2587, .kI = 0.0, .kD = 0.0125}, .outputLimit = 12.0},
         /*imuHeadingScale=*/1.0,
         /*asterisk=*/
         // TODO: driftCorrectionKP starts conservative (volts per in/sec of
@@ -201,9 +209,27 @@ void initDevices() {
     chassis.setOdometry(&odometry());
 
     // Lift/claw/extender driver macros, see macros.hpp. Zeroes the lift's
-    // encoders here, so start the program with the lift all the way down
-    // (its bottom switch zeroes them again the first time it's pressed).
+    // encoders here, and driver control's homing zeroes them again on the
+    // bottom switch (the only time the switch does).
     macros::initialize();
+
+    // Auto-Tune's measured axis models (its readout and the SD log print
+    // them), for velocity sticks and trajectories. TUNE.CFG's model.* lines
+    // override them below.
+    chassis.setAxisModels({
+        .forward = {.kS = 0.30, .kV = 0.1698, .kA = 0.0383},
+        .strafe = {.kS = 2.21, .kV = 0.3234, .kA = 0.0838},
+        .turn = {.kS = 1.10, .kV = 0.0318, .kA = 0.0019},
+    });
+
+    // Auto-Tune's gains for the PID page's other entries (Drive and Turn are
+    // in drivetrain()). Hold's kD is 0 by design: at its slow 0.9s settle,
+    // the turn axis's own drag already damps it. TUNE.CFG's pid.* lines
+    // override these below.
+    chassis.headingHoldPID().setGains({.kP = 0.0798, .kI = 0.0, .kD = 0.0});
+    chassis.trackingForwardPID().setGains({.kP = 2.086, .kI = 0.0, .kD = 0.396});
+    chassis.trackingStrafePID().setGains({.kP = 17.817, .kI = 0.0, .kD = 2.120});
+    chassis.trackingTurnPID().setGains({.kP = 0.405, .kI = 0.0, .kD = 0.024});
 
     // TUNE.CFG's gains, axis models and lift gravity, over the values above
     // and in macros.cpp, now that everything it sets exists and before any

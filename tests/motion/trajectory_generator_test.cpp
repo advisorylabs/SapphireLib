@@ -420,6 +420,39 @@ void testEndingMovingAndCarryingOn() {
     assert(!empty.ok && empty.error == "the trajectory to continue from is empty");
 }
 
+void testWaypointDistances() {
+    // how far along the path the plan reaches each of the sections' points, for timing a
+    // mechanism off TrajectoryProgress::distanceIn: straight up 50in, stopping, then back 15
+    const TrajectoryResult result = generateTrajectory(
+        {{.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0}, {.xIn = 0, .yIn = 20}}},
+         {.waypoints = {{.xIn = 0, .yIn = 30}, {.xIn = 0, .yIn = 50}}, .stopAtEnd = true},
+         {.waypoints = {{.xIn = 0, .yIn = 35}}}},
+        kModels);
+    assert(result.ok);
+    const double expectedIn[] = {0.0, 20.0, 30.0, 50.0, 65.0};
+    assert(result.waypointIn.size() == 5);
+    for (std::size_t j = 0; j < 5; ++j) {
+        expectNear(result.waypointIn[j], expectedIn[j], 1e-9, "waypoint distance");
+    }
+    expectNear(result.waypointIn.back(), result.trajectory.lengthIn(), 1e-9, "the last is the end");
+
+    // carrying on from another trajectory, the point it starts from isn't one of the sections':
+    // the first is the first point after the junction, measured from the junction
+    const std::vector<TrajectorySection> kTrunk{
+        {.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0}, {.xIn = 0, .yIn = 60}}}};
+    const Trajectory trunk = plan(kTrunk, {.endSpeedInPerS = 30.0});
+    const TrajectoryResult branch = generateTrajectory(
+        {{.waypoints = {{.xIn = 0, .yIn = 80}, {.xIn = 0, .yIn = 100}}}}, kModels, {.from = &trunk});
+    assert(branch.ok);
+    assert(branch.waypointIn.size() == 2);
+    expectNear(branch.waypointIn[0], 20.0, 1e-9, "first point after the junction");
+    expectNear(branch.waypointIn[1], 40.0, 1e-9, "the branch's end");
+
+    // and a plan that failed has none
+    assert(generateTrajectory({{.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0}}}}, kModels)
+               .waypointIn.empty());
+}
+
 // --- The golden case (keep in step with tools/sim/test/trajectory.test.js) --------------------
 
 void testGolden() {
@@ -532,6 +565,7 @@ int main() {
     testSampleInterpolates();
     testRejections();
     testEndingMovingAndCarryingOn();
+    testWaypointDistances();
     testGolden();
     testGoldenBranch();
     std::puts("trajectory_generator_test: all assertions passed");

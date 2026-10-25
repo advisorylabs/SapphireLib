@@ -150,6 +150,17 @@
   --raw: var(--series-2);
   --corrected: var(--accent);
   --beam: var(--series-3);
+  /* Override's field: white tape, the alliances' red and blue, black neutral Goals, yellow Toggles
+     and Pins, clear Cups (drawn as dark rims) */
+  --tape: #ffffff;
+  --tape-edge: rgba(14, 17, 23, 0.42);
+  --alliance-red: #d63a3a;
+  --alliance-blue: #2b78d0;
+  --goal-neutral: #30353d;
+  --goal-edge: rgba(14, 17, 23, 0.6);
+  --toggle: #f0c419;
+  --pin-yellow: #f2c200;
+  --cup: rgba(48, 53, 61, 0.75);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -160,6 +171,15 @@
     --element: rgba(138, 147, 161, 0.45);
     --robot-fill: rgba(19, 24, 32, 0.85);
     --robot-line: #f2f4f8;
+    --tape: #c9d1dc;
+    --tape-edge: rgba(0, 0, 0, 0.45);
+    --alliance-red: #e45b5b;
+    --alliance-blue: #4f98ee;
+    --goal-neutral: #3b4350;
+    --goal-edge: #8a93a1;
+    --toggle: #e8bd2c;
+    --pin-yellow: #f1cb3c;
+    --cup: rgba(200, 208, 220, 0.7);
   }
 }
 
@@ -170,6 +190,15 @@
   --element: rgba(138, 147, 161, 0.45);
   --robot-fill: rgba(19, 24, 32, 0.85);
   --robot-line: #f2f4f8;
+  --tape: #c9d1dc;
+  --tape-edge: rgba(0, 0, 0, 0.45);
+  --alliance-red: #e45b5b;
+  --alliance-blue: #4f98ee;
+  --goal-neutral: #3b4350;
+  --goal-edge: #8a93a1;
+  --toggle: #e8bd2c;
+  --pin-yellow: #f1cb3c;
+  --cup: rgba(200, 208, 220, 0.7);
 }
 
 /* --- Base ------------------------------------------------------------------------------ */
@@ -540,6 +569,17 @@ table.data-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
 .path-table .heading-cell { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
 .path-table .heading-cell input[type="checkbox"] { accent-color: var(--accent); }
 .path-table .actions { display: flex; gap: 4px; justify-content: flex-end; }
+.act-dot { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.point-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 8px; }
+.mech-select {
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.mech-select.set { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .sec-sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 .mini {
   padding: 1px 7px;

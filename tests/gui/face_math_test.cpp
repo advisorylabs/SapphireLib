@@ -206,6 +206,82 @@ void testNoBlinkWhileSurprised() {
     CHECK(blinked);
 }
 
+void testWink() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    const FaceShape open = run(face, now, 200, false);
+    face.startWink(now);
+    const FaceShape winking = run(face, now, 400, false);
+    CHECK(face.wink() == 1.0);
+    // the screen's right eye shut, its brow dipped toward it but still flat
+    CHECK(shut(winking.eyes[1]));
+    CHECK(winking.eyes[1].widthPx == kEyePx);
+    CHECK(browMiddleY(winking.brows[1]) > browMiddleY(open.brows[1]));
+    CHECK(flat(winking.brows[1]));
+    // the other eye and brow just as they were
+    CHECK(winking.eyes[0] == open.eyes[0]);
+    CHECK(winking.brows[0] == open.brows[0]);
+    // open again about half a second after it started
+    const FaceShape after = run(face, now, 760, false);
+    CHECK(face.wink() == 0.0);
+    CHECK(after == open);
+}
+
+void testWinkEasesShut() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    run(face, now, 200, false);
+    face.startWink(now);
+    now += kFrameMs;
+    // one frame in, partway: not snapped shut
+    const FaceShape first = face.update(now, false, false);
+    CHECK(first.eyes[1].heightPx < kEyePx && first.eyes[1].heightPx > 60);
+}
+
+void testWinkDuringAWinkHoldsItShut() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    const FaceShape open = run(face, now, 200, false);
+    face.startWink(now);
+    run(face, now, 500, false);
+    // shut 300ms in: another keeps it shut past where the first would open
+    face.startWink(now);
+    const FaceShape held = run(face, now, 780, false);
+    CHECK(shut(held.eyes[1]));
+    const FaceShape after = run(face, now, 1100, false);
+    CHECK(after == open);
+}
+
+void testWinkOverAMood() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    run(face, now, 300, false, /*bumpFirstFrame=*/true);
+    face.startWink(now);
+    const FaceShape shape = run(face, now, 500, false);
+    // surprised: the open eye is wide, the winking one shut anyway
+    CHECK(shape.eyes[0].heightPx > kEyePx * 1.2);
+    CHECK(shut(shape.eyes[1]));
+}
+
+void testNoBlinkWhileWinking() {
+    FaceAnimator face(480, 272, 13);
+    std::uint32_t now = 0;
+    face.reset(now);
+    // a wink every 300ms keeps one going for 20s: the open eye never blinks
+    for (; now <= 20000; now += kFrameMs) {
+        if (now % 300 == 0) face.startWink(now);
+        const FaceShape shape = face.update(now, false, false);
+        CHECK(shape.eyes[0].heightPx == kEyePx);
+    }
+    // and both blink again once left alone
+    bool blinked = false;
+    for (; now <= 30000; now += kFrameMs) {
+        const FaceShape shape = face.update(now, false, false);
+        if (shut(shape.eyes[0]) && shut(shape.eyes[1])) blinked = true;
+    }
+    CHECK(blinked);
+}
+
 void testSameSeedSameFace() {
     FaceAnimator a(480, 272, 42);
     FaceAnimator b(480, 272, 42);
@@ -259,6 +335,11 @@ int main() {
     testSurprise();
     testSurpriseBeatsSquint();
     testNoBlinkWhileSurprised();
+    testWink();
+    testWinkEasesShut();
+    testWinkDuringAWinkHoldsItShut();
+    testWinkOverAMood();
+    testNoBlinkWhileWinking();
     testSameSeedSameFace();
     testScalesToTheScreen();
     testClockWrap();

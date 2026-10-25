@@ -103,7 +103,15 @@ const TuneStatus& tuneStatus() {
     return status;
 }
 
-LocalizerConfig localizerSettings() { return profile().applyTo(LocalizerConfig{}); }
+LocalizerConfig localizerSettings() {
+    LocalizerConfig config;
+    // The library's 4in/s let odometry run 10in behind the localizer on the
+    // auto cycle's drive to the goal (SL000021), so the robot hit it at full
+    // power still thinking it was short. TUNE.CFG's mcl.maxCorrectionRateInPerS
+    // still overrides this.
+    config.maxCorrectionRateInPerS = 18.0;
+    return profile().applyTo(config);
+}
 
 std::uint32_t localizerPeriodMs() {
     return static_cast<std::uint32_t>(profile().value("mcl.periodMs", kDefaultLocalizerPeriodMs));
@@ -192,6 +200,20 @@ void describeTuning(sapphirelib::telemetry::Logger& logger) {
         case TuneStatus::State::noCard: logger.addMeta("tune", "no_card"); break;
         default: logger.addMeta("tune", "none"); break;
     }
+
+    // The axis models trajectories plan with, file or code (setAxisModels() in initDevices()),
+    // as TUNE.CFG's model.* lines write them, so the tools plan and refine with the robot's own
+    // without a TUNE.CFG. Only measured ones: an axis with none plans nothing anyway. An
+    // Auto-Tune later in the run logs its own (tuning.cpp's installModel()).
+    const HolonomicAxisModels models = drivetrain().axisModels();
+    const auto addModel = [&logger](const char* name, const MotorFeedforward& model) {
+        if (!model.valid()) return;
+        const std::string text = number(model.kS) + "," + number(model.kV) + "," + number(model.kA);
+        logger.addMeta((std::string("model.") + name).c_str(), text.c_str());
+    };
+    addModel("fwd", models.forward);
+    addModel("strafe", models.strafe);
+    addModel("turn", models.turn);
 
     // The localizer's settings in full, so a log can be tuned from without
     // knowing what the code's defaults were when it ran.

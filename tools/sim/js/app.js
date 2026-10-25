@@ -19,6 +19,7 @@
   const W = SIM.world;
   const R = SIM.robot;
   const S = SIM.sim;
+  const F = SIM.field;
   const M = root.SA.model;
   const TF = root.SA.tunefile;
   const { ROUTINES, TOUR_CHAIN } = SIM.routines;
@@ -46,8 +47,10 @@
     particles: true, weightColor: true, weightSize: true, ellipse: true,
     beams: true, expected: true,
     raw: true, corrected: true, estimate: true, correctionArrow: true, trails: true, target: true,
-    mounts: true, grid: true,
+    mounts: true, grid: true, tape: true, fieldElements: true, objects: true,
     zoom: 1,
+    // the cursor, in field inches, for the readout in the corner; null off the field
+    hover: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -229,7 +232,10 @@
     ],
     'show-field': [
       ['mounts', 'Tracking wheels and sensors', 'Drawn on the real robot', 'series-7'],
-      ['grid', 'Tiles and origin', '', null],
+      ['grid', 'Tile seams and origin', 'The seams, 23.55 in apart, where the manual measures everything from', null],
+      ['tape', 'Tape lines and Load Zones', 'The Autonomous Line (the double diagonal), the Midfield, the other diagonal, and each Loader\'s zone', 'tape-edge'],
+      ['fieldElements', 'Goals, Loaders, Toggles', 'Override\'s, to scale. The robot only hits them with Field elements on in the Events tab', 'goal-neutral'],
+      ['objects', 'Cups and Pins at the start', 'Where a Head-to-Head match starts them', 'pin-yellow'],
     ],
   };
 
@@ -284,8 +290,9 @@
     },
   ];
 
+  /** Override's Goals and Loaders as the world's elements; field: true, since the field draws them itself. */
   function allElements(inWorld) {
-    return W.exampleElements().map((e) => Object.assign(e, { inWorld }));
+    return F.obstacleBoxes(F.override(options.world.fieldSizeIn)).map((e) => Object.assign(e, { inWorld, field: true }));
   }
 
   function pickErrors(settings) {
@@ -319,7 +326,7 @@
       ['In the world', () => options.world.elements.some((e) => e.inWorld), (v) => {
         for (const e of options.world.elements) e.inWorld = v;
         sim.refreshMaps();
-      }, 'The sensors see them (filled boxes)'],
+      }, 'The robot runs into them and the sensors see them. Off, the robot drives through them'],
       ['In the map', () => options.elementsInMap, (v) => {
         options.elementsInMap = v;
         sim.refreshMaps();
@@ -604,6 +611,8 @@
       setPlaying: (value) => setPlaying(value),
       applyWorld,
       saveText,
+      // the robot's logs, opened for calibrating: the Paths tab's "Logged models" too
+      logsOpened: (logs) => { if (pathview) pathview.useLogs(logs); },
     });
     // the chart sizes itself when the tab is first shown
     $('tabs').addEventListener('click', () => requestAnimationFrame(() => SIM.tuneview.drawHistory()));
@@ -613,7 +622,8 @@
 
   function buildPaths() {
     pathview = SIM.pathview.build({
-      $, el, fmt, segmented,
+      $, el, fmt, segmented, setSegment,
+      slt: root.SA.slt,
       options,
       renderer,
       defaultChain: TOUR_CHAIN,
@@ -699,8 +709,10 @@
         return;
       }
     });
+    canvas.addEventListener('pointerleave', () => { view.hover = null; });
     canvas.addEventListener('pointermove', (event) => {
       const [px, py] = at(event);
+      view.hover = renderer.toField(px, py);
       if (pathview && pathview.isActive() && !kidnapArmed) {
         canvas.style.cursor = pathview.pointerMove(px, py, event);
         return;

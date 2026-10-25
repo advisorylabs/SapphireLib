@@ -10,6 +10,7 @@
  */
 
 #include "main.h"
+#include "robot/autocycle.hpp"
 #include "robot/devices.hpp"
 #include "robot/driver.hpp"
 #include "robot/macros.hpp"
@@ -118,8 +119,14 @@ void opcontrol() {
         // Skip driving from the sticks (and B/DOWN, the drive modes) while a
         // GUI routine (the Odom page's offset calibration, or a PID tuner
         // test or Auto-Tune run) is driving the chassis on its own, see
-        // robot::screenBusy().
-        if (!robot::screenBusy()) robot::drive(controller);
+        // robot::screenBusy(), which also ends an auto cycle. A starts and
+        // ends the cycle (see autocycle.hpp), which drives instead of the
+        // sticks while it runs.
+        if (robot::screenBusy()) {
+            robot::autocycle::cancel();
+        } else if (!robot::autocycle::update(controller)) {
+            robot::drive(controller);
+        }
 
         // Teach mode: X+A starts and stops recording this drive, the pose
         // and the buttons, for the Taught Route auton (see teach.hpp).

@@ -6,7 +6,7 @@
  * the ports are in config.hpp.
  *
  * The mechanics (button edges, controller-screen throttling, piston state,
- * the lift's control law, and the timed score) come from SapphireLib's
+ * the lift's control law, and the score's steps) come from SapphireLib's
  * input/, mechanism/, and util/ primitives. What's left here is this robot's
  * numbers and rules.
  *
@@ -52,7 +52,6 @@ using sapphirelib::input::Button;
 using sapphirelib::input::Controller;
 using sapphirelib::input::ControllerScreen;
 using sapphirelib::mechanism::Piston;
-using sapphirelib::mechanism::PositionLaw;
 using sapphirelib::mechanism::PositionMechanism;
 using sapphirelib::mechanism::PositionStep;
 using sapphirelib::mechanism::PresetLadder;
@@ -65,7 +64,7 @@ constexpr double kPi = 3.14159265358979323846;
 // Anything the claw's distance sensor reads at or closer than this counts as
 // a pin in the claw: between what the sensor reads with a pin loaded and
 // without one.
-constexpr std::int32_t kPieceDetectMm = 80;
+constexpr std::int32_t kPieceDetectMm = 35;
 // autoClaw closes the claw once the sensor has seen a pin for this long
 // without a break, so one stray reading doesn't close it on nothing. 0
 // closes it on the first reading.
@@ -75,7 +74,7 @@ constexpr std::uint32_t kAutoClawDetectMs = 0;
 // misses the pin still sitting in the open claw doesn't count as it gone. 0
 // arms it again on the first reading that sees nothing: if the claw ever
 // snaps shut on a pin it was just opened to drop, raise this (it was 200).
-constexpr std::uint32_t kAutoClawClearMs = 0;
+constexpr std::uint32_t kAutoClawClearMs = 400;
 // Driving onto a pin, autoClaw closes early: between the reading that sees
 // the pin and the claw actually shut, the robot carries the pin this many ms
 // further in, so at speed a claw that waits for kPieceDetectMm closes behind
@@ -86,7 +85,7 @@ constexpr std::uint32_t kAutoClawClearMs = 0;
 // claw or pushed out of it wants more; one that closes before the pin gets
 // there, less. The log's autoclaw events have the reading and reach of each
 // grab.
-constexpr std::uint32_t kAutoClawLeadMs = 100;
+constexpr std::uint32_t kAutoClawLeadMs = 50;
 // The furthest out the lead reaches, however fast the robot goes, so driving
 // at a wall or another robot doesn't close the claw half a field away.
 constexpr std::int32_t kAutoClawMaxReachMm = 200;
@@ -96,25 +95,31 @@ constexpr std::int32_t kAutoClawMaxReachMm = 200;
 // driving onto a pin, and autoClaw closes at kPieceDetectMm as before.
 constexpr double kClawFacingDeg = 0.0;
 
+// --- Scoring ---
+// Once a score opens the claw, the lift holds where it dipped to until the
+// robot has backed this far off the goal, by the vertical tracking wheel, and
+// only then heads for the bottom: lowering with the claw still around the
+// pin drags it back off the goal. Measured from where the robot was as the
+// claw opened, so backing up during the dip doesn't count. Relies on the
+// wheel's sign being right (config.hpp: driving forward must raise it), as
+// odometry does: backwards, the lift waits for the robot to drive forward.
+constexpr double kScoreBackOffIn = 3.0;
+
 // --- Timing ---
-// How long a score waits after opening the claw before lowering the lift:
-// the claw has to open all the way and let go first, or the lift drags the
-// pin back off the goal on its way down.
-constexpr std::uint32_t kScoreReleaseMs = 400;
 // L1/L2 held: one level on the press, another after the delay, then one every
 // period for as long as it's held.
 constexpr std::uint32_t kLevelRepeatDelayMs = 300;
 constexpr std::uint32_t kLevelRepeatPeriodMs = 150;
 
 // --- Lift ---
-// Position loop on the lift motors' encoders, in volts per motor degree.
-// kP = 0.2 is full power at 60 degrees of error; anything much higher is
-// effectively on/off and oscillates at each level. Raising kP won't make a
-// lift that stalls far below its target climb higher: that far out it's
-// already getting the full 12V. TODO: these were tuned on the old lift's
-// rotation sensor, whose degrees aren't these motor degrees: Auto-Tune the
-// lift again (docs/NEW_CHASSIS.md, step 2).
-constexpr sapphirelib::PIDGains kLiftGains{.kP = 0.2, .kI = 0.0, .kD = 0.01};
+// Position loop on the lift motors' encoders, in volts per motor degree:
+// Auto-Tune's gains, designed from its measured lift model (kS 0.71, kV
+// 0.0096, kA 0.0004, kG 1.08, in volts per motor degree, per degree/s and per
+// degree/s^2). Only kG is used outside the design, as kLiftGravityVolts
+// below. kP = 0.049 is full power at about 245 degrees of error. Raising kP
+// won't make a lift that stalls far below its target climb higher: that far
+// out it's already getting the full 12V.
+constexpr sapphirelib::PIDGains kLiftGains{.kP = 0.1, .kI = 0.0, .kD = 0.0};
 // The most the lift is ever driven down with: 75% of full power (12V), so
 // it comes down no harder than this however far it has to go. Its loop, the
 // seat, the seek and debug mode's L2 all stop here, and so do Auto-Tune's
@@ -123,9 +128,9 @@ constexpr sapphirelib::PIDGains kLiftGains{.kP = 0.2, .kI = 0.0, .kD = 0.01};
 // a little faster than 75% of what full power lifts it at.
 constexpr double kLiftMaxDownVolts = 9.0;
 // Constant upward volts added to the loop's output to carry the lift's
-// weight. If the lift settles a little below each level, raise this until it
-// doesn't.
-constexpr double kLiftGravityVolts = 0.0;
+// weight: Auto-Tune's kG. If the lift settles a little below each level,
+// raise this until it doesn't.
+constexpr double kLiftGravityVolts = 1.08;
 // The bottom sits on the lift's hard stop, where the loop alone settles a few
 // degrees short (the gravity volts push up, and what little kP gives that
 // close can't beat friction). So heading for the bottom, the lift drives down
@@ -133,16 +138,18 @@ constexpr double kLiftGravityVolts = 0.0;
 // of zero, then cuts power and rests on the stop rather than pushing into it.
 constexpr double kLiftSeatVolts = 0.0;
 constexpr double kLiftRestDeg = 2.0;
-// If the bottom switch isn't pressed once the lift rests, the encoders have
-// drifted (a skipped tooth, or a restart with the lift up) and the real
-// bottom is further down: the lift drives on down at kLiftSeekVolts until the
-// switch is pressed, which zeroes the encoders there. With the switch
-// unplugged or broken, it gives up after kLiftSeekTimeoutMs and rests where
-// it is, rather than pushing into its hard stop all match. TODO: tune on the
-// robot. Enough to get the lift down onto the switch, not so much that it
-// slams.
-constexpr double kLiftSeekVolts = 3.0;
-constexpr std::uint32_t kLiftSeekTimeoutMs = 1000;
+// Homing: the first time the lift is on its levels (driver control's start),
+// before it heads for any of them, it drives down at kLiftHomeVolts, 45% of
+// full power (12V), until the bottom switch is pressed, which zeroes the
+// encoders there. So the levels are measured from the real bottom wherever the lift
+// was when the program started. Already on the switch, there's nothing to do.
+// That's the only time the switch zeroes the lift: after homing, level 0 is
+// encoder 0, and the lift rests there whether or not the switch is pressed.
+// With the switch unplugged or broken, it gives up after kLiftHomeTimeoutMs
+// and keeps initialize()'s zero. The timeout has to cover the lift's whole
+// travel at that speed, from the top level down.
+constexpr double kLiftHomeVolts = 5.4;
+constexpr std::uint32_t kLiftHomeTimeoutMs = 5000;
 // How close the lift must get before a score's dip moves on to opening the
 // claw, and how long the dip waits for that before moving on anyway.
 constexpr double kLiftToleranceDeg = 15.0;
@@ -155,10 +162,8 @@ constexpr double kLiftDebugVolts = 12.0;
 // Auto-Tune drives the lift up and down between these two heights, stopping
 // each segment once it passes one, so keep both well inside the lift's real
 // travel (it takes a few degrees to brake), and start with the lift down.
-// TODO: these assume the placeholder level heights below; set them from the
-// real ones once those are measured.
 constexpr double kLiftTuneLowerDeg = 60.0;
-constexpr double kLiftTuneUpperDeg = 720.0;
+constexpr double kLiftTuneUpperDeg = 1300.0;
 // Up steps fight gravity, so they get more volts than down steps, which it
 // helps.
 constexpr double kLiftTuneUpVolts = 8.0;
@@ -178,14 +183,15 @@ constexpr std::uint32_t kLiftTestDwellMs = 500;
 // score dips halfway to the level below, however big that gap is. Names are
 // shown on the controller; 8 characters max.
 //
-// TODO: placeholder heights, from the old lift's rotation sensor. Measure
-// each goal's real heights on the motor encoders and put them here: the
-// controller's third line shows the lift's live reading (then its current
-// target), so run the lift to each height in debug mode and copy the number.
+// All measured on the motor encoders. To measure one again: the controller's
+// third line shows the lift's live reading (then its current target), so run
+// the lift to each height in debug mode and copy the number. Switching to a
+// goal with fewer levels (CENTER's 5) from a higher level drops the lift to
+// that goal's top one.
 PresetLadder ladder({
-    {"ALLIANCE", {0, 150, 300, 450, 600, 750, 900}},
-    {"MEDIUM", {0, 180, 360, 540, 720, 900}},
-    {"CENTER", {0, 225, 450, 675, 900}},
+    {"ALLIANCE", {0, 185, 335, 595, 840, 1125, 1385}},
+    {"MEDIUM", {0, 280, 445, 700, 950, 1210, 1470}},
+    {"CENTER", {0, 380, 505, 795, 1050, 1300}},
 });
 constexpr int kBottomLevel = 0; // on the bottom switch, where autoClaw picks up pins
 
@@ -256,16 +262,17 @@ struct State {
     // opens on a pin until the sensor has seen it gone for kAutoClawClearMs,
     // so opening the claw to drop a pin doesn't snap it shut on the same one.
     bool autoClawArmed = false;
-    // The bottom switch has zeroed the lift's encoders for this press (see
-    // zeroAtBottom()).
-    bool zeroedThisPress = false;
-    // Heading for the bottom with the switch not yet pressed (see
-    // seekingBottom()): when the lift started driving down to find it, and
-    // whether it gave up.
-    std::optional<std::uint32_t> seekStartMs;
-    bool seekGaveUp = false;
+    // Homing (see kLiftHomeVolts): when it started, and whether it's over,
+    // the switch found (and the encoders zeroed there) or given up on. Once
+    // over, it stays over.
+    std::optional<std::uint32_t> homeStartMs;
+    bool homed = false;
+    // The vertical tracking wheel's reading as the running score opened the
+    // claw, for kScoreBackOffIn.
+    double releaseWheelIn = 0.0;
     bool debug = false; // the debug mode update() is running, see debugMode
     int readout = 0;    // see kReadoutCount
+    bool autoClawPaused = false; // by the auto cycle, see setAutoClawPaused()
 };
 
 State state;
@@ -279,17 +286,28 @@ std::atomic<bool> debugMode{false};
 // kAutoClawClearMs.
 TimedFlag pinSeen;
 
-// The score: dip halfway to the level below, open the claw and give it
-// kScoreReleaseMs to let go, then down to the bottom. What each step *does*
-// stays level-triggered below (claw, lift target); the sequence only says
-// which step it is and when to move on.
+// Every score that has opened the claw, for the face's wink (scoreCount()).
+std::atomic<std::uint32_t> scoresReleased{0};
+
+// The score: dip halfway to the level below, open the claw, hold there until
+// the robot has backed kScoreBackOffIn off the goal, then down to the bottom.
+// What each step *does* stays level-triggered below (claw, lift target); the
+// sequence only says which step it is and when to move on.
 enum class Phase { scoreDescend, scoreRelease };
 
 bool liftArrived();
+bool backedOff();
 
+void beginRelease() {
+    state.releaseWheelIn = verticalWheel().getDistanceIn();
+    scoresReleased.fetch_add(1);
+}
+
+// No timeout on the release: the lift waits for the robot to back off however
+// long that takes, and L2 is the way out (see update()).
 const std::array<Sequence<Phase>::Step, 2> kScoreSteps{{
     {.id = Phase::scoreDescend, .until = liftArrived, .timeoutMs = kLiftDescendTimeoutMs},
-    {.id = Phase::scoreRelease, .timeoutMs = kScoreReleaseMs},
+    {.id = Phase::scoreRelease, .until = backedOff, .onEnter = beginRelease},
 }};
 const Sequence<Phase>::Program kScore{.steps = kScoreSteps,
                                       .onFinish = [] { ladder.setLevel(kBottomLevel); }};
@@ -342,58 +360,47 @@ double liftTargetDeg() {
 /// reading), so a score waiting on this falls through to its timeout.
 bool liftArrived() { return lift.isNear(liftTargetDeg()); }
 
-/// Zeroes the lift's encoders on the first tick of each press of the bottom
-/// switch, so every level is measured from the real bottom however far the
-/// encoders had drifted. Not while Auto-Tune has the motors: a jump in the
-/// middle of its run would spoil the fit, so with the switch still pressed
-/// it zeroes once the run is over instead.
-void zeroAtBottom(bool atBottom) {
-    if (!atBottom) {
-        state.zeroedThisPress = false;
-        return;
-    }
-    if (state.zeroedThisPress || lift.externalControl()) return;
-    lift.motors().tare_position_all();
-    // The reading just jumped: start the loop fresh, or its derivative kicks.
-    lift.resetController();
-    state.zeroedThisPress = true;
+/// Whether the robot has backed kScoreBackOffIn off the goal since the claw
+/// opened. At the bottom there's no lift to bring down, so no wait. An
+/// unplugged wheel holds its last reading, so this never comes true: L2 ends
+/// the wait instead.
+bool backedOff() {
+    if (ladder.level() == kBottomLevel) return true;
+    return state.releaseWheelIn - verticalWheel().getDistanceIn() >= kScoreBackOffIn;
 }
 
-/// Whether the lift should drive straight down onto its bottom switch this
-/// tick: it's heading for the bottom and its loop has brought it to rest
-/// there (the encoders read 0), but the switch isn't pressed, so the real
-/// bottom is lower. Keeps going until the switch is pressed or
-/// kLiftSeekTimeoutMs passes, then gives up until the lift next leaves the
-/// bottom.
-bool seekingBottom(std::uint32_t now, bool atBottom) {
-    const bool toBottom = liftTargetDeg() <= ladder.levelPosition(kBottomLevel);
-    if (!toBottom || atBottom) {
-        state.seekStartMs.reset();
-        state.seekGaveUp = false;
+/// Whether the lift is still homing this tick (see kLiftHomeVolts): from the
+/// first tick it's on its levels until the bottom switch is pressed, which
+/// zeroes the encoders there, or kLiftHomeTimeoutMs passes. Not while
+/// Auto-Tune has the motors: a jump in the middle of its run would spoil the
+/// fit, so with the switch still pressed it zeroes once the run is over.
+bool homing(std::uint32_t now, bool atBottom) {
+    if (state.homed) return false;
+    if (atBottom) {
+        if (lift.externalControl()) return false;
+        lift.motors().tare_position_all();
+        // The reading just jumped: start the loop fresh, or its derivative kicks.
+        lift.resetController();
+        state.homed = true;
         return false;
     }
-    if (state.seekGaveUp) return false;
-    if (!state.seekStartMs) {
-        // Still on its way down, on the loop: the seek only takes over once
-        // the loop thinks it's there. (Never with no encoders: that's law
-        // "no sensor", braked.)
-        if (lift.law() != PositionLaw::rest) return false;
-        state.seekStartMs = now;
-    }
-    if (sapphirelib::elapsedMs(*state.seekStartMs, now) < kLiftSeekTimeoutMs) return true;
-    state.seekGaveUp = true;
-    SAPPHIRELIB_LOG_WARN("macros", "lift didn't reach its bottom switch (port %c) in %ums",
-                         ports::kLiftBottomSwitch, static_cast<unsigned>(kLiftSeekTimeoutMs));
-    sapphirelib::telemetry::event("macro", "seek_failed");
+    if (!state.homeStartMs) state.homeStartMs = now;
+    if (sapphirelib::elapsedMs(*state.homeStartMs, now) < kLiftHomeTimeoutMs) return true;
+    state.homed = true;
+    SAPPHIRELIB_LOG_WARN("macros", "lift didn't home onto its bottom switch (port %c) in %ums",
+                         ports::kLiftBottomSwitch, static_cast<unsigned>(kLiftHomeTimeoutMs));
+    sapphirelib::telemetry::event("macro", "home_failed");
     return false;
 }
 
-/// autoClaw (see macros.hpp): the claw is open, the lift is down on its
-/// bottom switch and meant to be there, and the sensor has seen a pin within
-/// the reach for kAutoClawDetectMs.
-bool autoClawWants(std::uint32_t now, bool atBottom) {
-    return !state.clawClosed && state.autoClawArmed && atBottom &&
-           ladder.level() == kBottomLevel && pinSeen.trueFor(kAutoClawDetectMs, now);
+/// autoClaw (see macros.hpp): the claw is open, the lift is down at its
+/// bottom level (by its encoders, switch or no switch) and meant to be there,
+/// and the sensor has seen a pin within the reach for kAutoClawDetectMs.
+bool autoClawWants(std::uint32_t now) {
+    return !state.clawClosed && state.autoClawArmed && !state.autoClawPaused &&
+           ladder.level() == kBottomLevel &&
+           lift.isNear(ladder.levelPosition(kBottomLevel)) &&
+           pinSeen.trueFor(kAutoClawDetectMs, now);
 }
 
 void showStatus(Controller& controller, bool atBottom) {
@@ -439,11 +446,10 @@ void showStatus(Controller& controller, bool atBottom) {
 
 void initialize() {
     lift.motors().set_encoder_units_all(pros::v5::MotorUnits::degrees);
-    // Wherever the lift is now is the bottom until the switch says otherwise,
-    // so start the program with the lift down. Already on the switch, this
-    // counts as its press.
+    // Wherever the lift is now is the bottom until the switch says otherwise:
+    // update()'s homing drives it down onto the switch first thing and zeroes
+    // it there (see kLiftHomeVolts).
     lift.motors().tare_position_all();
-    state.zeroedThisPress = switchPressed();
     // Only matters when the lift falls back to brake(), with no encoders, or
     // after stop().
     lift.motors().set_brake_mode_all(pros::v5::MotorBrake::hold);
@@ -458,8 +464,9 @@ void update(Controller& controller) {
     if (controller.resumed()) {
         sequence.cancel();
         lift.resetController();
-        state.seekStartMs.reset();
-        state.seekGaveUp = false;
+        // Homing cut short by a disable starts its clock again, rather than
+        // counting the pause toward its timeout.
+        state.homeStartMs.reset();
     }
 
     // One reading of each sensor for the whole tick. The pin counts as seen
@@ -471,7 +478,6 @@ void update(Controller& controller) {
     const bool pin = pieceInClaw(pieceMm, reachMm);
     const bool atBottom = switchPressed();
     pinSeen.set(pin, now);
-    zeroAtBottom(atBottom);
 
     // controller.update() sampled every button once for this tick, and edges
     // come from comparing samples, so reading (or not reading) a button
@@ -508,15 +514,25 @@ void update(Controller& controller) {
         // L1 and L2's alone (below).
         if (controller.pressed(Button::r1)) state.clawClosed = !state.clawClosed;
     } else if (sequence.running(kScore)) {
-        // R1, L1 and L2 all wait for it to finish. It opens the claw itself
-        // (below), and its onFinish sends the lift to the bottom.
-        sequence.update(now);
+        // R1 and L1 wait for it to finish. It opens the claw itself (below),
+        // and its onFinish sends the lift to the bottom once the robot has
+        // backed off. With the claw open, L2 sends it there now instead: the
+        // way out when the robot can't back up, or the vertical wheel is
+        // unplugged and never sees it. (Checked before update(), so the claw
+        // has been open for at least a tick.)
+        if (sequence.is(Phase::scoreRelease) && controller.pressed(Button::l2)) {
+            sequence.cancel();
+            ladder.setLevel(kBottomLevel);
+            sapphirelib::telemetry::event("macro", "score_lowered_early");
+        } else {
+            sequence.update(now);
+        }
     } else if (controller.pressed(Button::r2) && state.clawClosed) {
         sequence.start(kScore, now);
     } else {
         if (controller.pressed(Button::r1)) {
             state.clawClosed = !state.clawClosed;
-        } else if (autoClawWants(now, atBottom)) {
+        } else if (autoClawWants(now)) {
             state.clawClosed = true;
             sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d,reach_mm=%d,speed=%.2f",
                                           static_cast<int>(pieceMm), static_cast<int>(reachMm),
@@ -555,8 +571,8 @@ void update(Controller& controller) {
         } else {
             lift.stop();
         }
-    } else if (seekingBottom(now, atBottom)) {
-        lift.setVolts(-kLiftSeekVolts);
+    } else if (homing(now, atBottom)) {
+        lift.setVolts(-kLiftHomeVolts);
     } else {
         lift.setTarget(liftTargetDeg());
     }
@@ -614,9 +630,38 @@ void setDebug(bool on) { debugMode.store(on); }
 
 bool debug() { return debugMode.load(); }
 
+void setClawClosed(bool closed) {
+    // As update() does: opening disarms autoClaw, so driver control's first
+    // ticks don't snap the claw shut on a pin autonomous just let go of.
+    if (state.clawClosed && !closed) state.autoClawArmed = false;
+    state.clawClosed = closed;
+    claw.set(closed, sapphirelib::millis());
+    sapphirelib::telemetry::event("macro", "claw,closed=%d", closed ? 1 : 0);
+}
+
+bool clawClosed() { return state.clawClosed; }
+
+void setExtended(bool out) {
+    state.extended = out;
+    extender.set(out, sapphirelib::millis());
+    sapphirelib::telemetry::event("macro", "extender,out=%d", out ? 1 : 0);
+}
+
+bool extended() { return state.extended; }
+
+std::uint32_t scoreCount() { return scoresReleased.load(); }
+
 bool pinInClaw() { return pieceInClaw(clawSensor.get_distance()); }
 
 bool liftAtBottom() { return switchPressed(); }
+
+bool pinWithinMm(std::int32_t mm) { return pieceInClaw(clawSensor.get_distance(), mm); }
+
+bool liftDown() {
+    return ladder.level() == kBottomLevel && lift.isNear(ladder.levelPosition(kBottomLevel));
+}
+
+void setAutoClawPaused(bool paused) { state.autoClawPaused = paused; }
 
 sapphirelib::mechanism::PositionMechanism& liftMechanism() { return lift; }
 
@@ -637,7 +682,9 @@ MechanismCharacterizationConfig liftExperiment() {
                 // The same both ways, so the down ramp's cap is the up
                 // ramp's too.
                 .rampMaxVolts = std::min(10.0, kLiftMaxDownVolts),
-                .maxSegmentMs = 2000,
+                // A segment still short of kLiftTuneLowerDeg/UpperDeg by
+                // then ends anyway: raise this if they keep ending early.
+                .maxSegmentMs = 4000,
                 .minSpeed = 10.0, // motor degrees/s
                 .start = [] { lift.beginExternalControl(); },
                 .finish = [] { lift.endExternalControl(); },

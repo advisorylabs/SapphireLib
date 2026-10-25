@@ -26,10 +26,11 @@ const TURN = RF.CONTROLLERS.find((c) => c.pid === 'turn');
  * logs it: C/G/S/R rows on "turn", motion events, a tune,model event.
  */
 function turnLog({ trueModel, trueDelay, gains = null, fileIndex = 1, rev = null, steps = [30, 0, -45, 15, 90, 0, -20],
-  autoTune = true }) {
+  autoTune = true, meta = [] }) {
   const file = `SL${String(fileIndex).padStart(6, '0')}.CSV`;
   const w = new D.Writer({ file, robot: 'test', openUs: 1e6, build: 'test' });
   if (rev !== null) w.meta.push(['tune', 'loaded'], ['tune.rev', String(rev)]);
+  w.meta.push(...meta);
   const id = w.chan('turn', 'pid', 4, slt.PID_COLUMNS);
   const designed = M.designPositionGains(M.feedforward(MEASURED.kS, MEASURED.kV, MEASURED.kA), TURN.spec, MEASURED_DELAY);
   const pid = new D.LoggedPID(w, id, M.pidConfig({ gains: gains || designed.gains, outputLimit: 12, nominalDtS: 0.01 }));
@@ -113,6 +114,30 @@ test('big turns that saturate are motor-limited: the model is refined, the gains
   // the model is worth saving on its own; the gains aren't touched
   assert.equal(r.saves, 'model');
   assert.deepEqual(RF.tuneChanges([r]).map((c) => c.key), ['model.turn']);
+});
+
+test('with no TUNE.CFG, the models a log says the robot ran are the base, until an Auto-Tune replaces them', () => {
+  const logged = [['model.turn', `${MEASURED.kS},${MEASURED.kV},${MEASURED.kA}`]];
+  const coded = turnLog({ trueModel: MEASURED, trueDelay: MEASURED_DELAY, autoTune: false, fileIndex: 3, meta: logged });
+  let base = RF.baseModel([coded], TURN);
+  assert.equal(base.source, 'the models logged in SL000003.CSV (delay assumed 30ms)');
+  assert.deepEqual(base.model, M.feedforward(MEASURED.kS, MEASURED.kV, MEASURED.kA));
+  assert.equal(base.delayS, 0.03);
+  // a TUNE.CFG opened beside them doesn't override what the robot ran
+  const profile = TF.parse('format=1\nrev=2\nmodel.turn=1,0.05,0.01\n').profile;
+  assert.equal(RF.baseModel([coded], TURN, profile).source, base.source);
+
+  // an Auto-Tune in an older run doesn't outrank what a newer one started with
+  const older = turnLog({ trueModel: MEASURED, trueDelay: MEASURED_DELAY, fileIndex: 2 });
+  assert.equal(RF.baseModel([older, coded], TURN).source, base.source);
+  // one since does, with the delay it measured
+  base = RF.baseModel([coded, turnLog({ trueModel: MEASURED, trueDelay: MEASURED_DELAY, fileIndex: 4, meta: logged })], TURN);
+  assert.equal(base.source, 'Auto-Tune on the robot (SL000004.CSV)');
+  assert.equal(base.delayS, MEASURED_DELAY);
+
+  const r = RF.refine([coded], TURN);
+  assert.ok(r.ok, r.why);
+  assert.equal(r.base.source, 'the models logged in SL000003.CSV (delay assumed 30ms)');
 });
 
 test('too few steps: no proposal, and why', () => {

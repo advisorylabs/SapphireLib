@@ -77,6 +77,12 @@ struct SampledPath {
      * section's last waypoint. Exact even for a section shorter than the sample spacing
      */
     std::vector<double> sectionStartIn;
+    /**
+     * how far along the path each waypoint is, in inches, in the chain's order: the first
+     * section's, then each later section's (which start from the one before's last). Exact, like
+     * sectionStartIn
+     */
+    std::vector<double> waypointIn;
 };
 
 /**

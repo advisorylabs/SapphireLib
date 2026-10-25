@@ -80,6 +80,10 @@ mcl.filter.motionNoise.perInch=0.07
   compiled in. Anything the file leaves out comes from the code too.
 - **Every log says which revision it ran** (`#meta,tune.rev`), and the Home page shows it ("Tune:
   TUNE.CFG r8, 6 settings"), so a run is never a mystery.
+- **Every log carries the axis models it ran** (`#meta,model.fwd`, `model.strafe`, `model.turn`, as
+  `kS,kV,kA`), from the file or the code. So with the values in the code and no `TUNE.CFG`, the
+  analyzer's Refine tab and the simulator's Paths tab (**Logged models**) and calibration still work
+  from the robot's own: open its logs in them.
 - **The tools write it.** The simulator's Tune tab saves the `mcl.*` lines and the analyzer's Refine
   tab the `pid.*` and `model.*` lines. Each opens the current file (copy it off the card with the
   logs), keeps every line it doesn't own, adds one to `rev`, and notes what changed in a changelog
@@ -192,8 +196,9 @@ step's error over time, with the gains in effect.
    not dynamics).
 2. **Identify**: replay each step through the axis model with the gains it ran, and find the model
    (inertia and damping scaled, delay changed; friction kept) whose replays best match what the
-   robot really did. The starting model is the newest Auto-Tune measurement in the logs, else
-   `TUNE.CFG`'s, else a fit to the logs' driving.
+   robot really did. The starting model is what the newest log says the robot ran (an Auto-Tune
+   measured in it, else the models it started with, its `#meta model.*` lines), else `TUNE.CFG`'s,
+   else a fit to the logs' driving.
 3. **Redesign** from that model exactly as the robot's PID page designs (pole placement, slowed to
    keep 50° of phase margin with the delay), and replay the same steps with the new gains to
    predict the effect.

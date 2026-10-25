@@ -36,6 +36,7 @@ using sapphirelib::gui::PidTunerPage;
 using sapphirelib::motion::generateTrajectory;
 using sapphirelib::motion::LocalOffset;
 using sapphirelib::motion::toLocalFrame;
+using sapphirelib::motion::TrajectoryConstraints;
 using sapphirelib::motion::TrajectoryResult;
 using sapphirelib::motion::TrajectorySection;
 using sapphirelib::odom::Pose;
@@ -89,6 +90,57 @@ void trackingTuningTest() {
         return;
     }
     drivetrain().followTrajectory(plan.trajectory);
+}
+
+// --- Wheel size for PidTunerPage ---
+//
+// The Wheel button drives the robot straight ahead, you tape-measure how far
+// it really went, and it corrects each wheel's diameter so an inch reads as
+// an inch: the tracking wheels' (odometry, so every trajectory and
+// moveTo*()) and the drive wheels' (driveDistance(), and the Asterisk's drift
+// correction). See PidTunerPage::enableWheelCalibration().
+
+constexpr double kWheelCalibrationDistanceIn = 48.0;
+
+// Gentle, so the drive wheels don't slip: their encoders would count the
+// slip as travel and the drive wheels would come out too small. At most 6V
+// planned and 24in/s^2 forward, about a second and a half to get going.
+constexpr double kWheelCalibrationVolts = 6.0;
+constexpr double kWheelCalibrationAccelInPerS2 = 24.0;
+
+// The calibration's drive: a trajectory straight ahead from wherever the
+// robot faces, heading held, planned from the axis models. Without models to
+// plan from (no Auto-Tune yet), driveDistance() instead, which measures by
+// the drive wheels it's calibrating: still fine, since the page only compares
+// what each wheel read against the tape, however far that was.
+void wheelCalibrationDrive(double inches) {
+    const Pose start = odometry().getPose();
+    const double rad = start.headingDeg * 3.14159265358979323846 / 180.0;
+    const std::vector<TrajectorySection> chain{
+        {.waypoints = {{.xIn = start.xIn, .yIn = start.yIn, .headingDeg = start.headingDeg},
+                       {.xIn = start.xIn + inches * std::sin(rad),
+                        .yIn = start.yIn + inches * std::cos(rad),
+                        .headingDeg = start.headingDeg}},
+         .constraints = TrajectoryConstraints{
+             .voltageBudget = kWheelCalibrationVolts,
+             .forward = {.maxAcceleration = kWheelCalibrationAccelInPerS2}}},
+    };
+    const TrajectoryResult plan = generateTrajectory(chain, drivetrain().axisModels());
+    if (!plan.ok) {
+        SAPPHIRELIB_LOG_ERROR("tune", "wheel drive: %s; driving by the encoders instead",
+                              plan.error.c_str());
+        drivetrain().driveDistance(inches);
+        return;
+    }
+    drivetrain().followTrajectory(plan.trajectory);
+}
+
+// A corrected diameter, over `pros terminal` and to the SD log, with where to
+// put it: the page shows it only until the next run, and nothing saves it.
+void logWheelDiameter(const char* wheel, const char* constant, double diameterIn) {
+    SAPPHIRELIB_LOG_INFO("tune", "%s wheels: %.4fin across (applied; copy into %s in config.hpp)",
+                         wheel, diameterIn, constant);
+    sapphirelib::telemetry::event("tune", "wheel,%s,diameter_in=%.4f", wheel, diameterIn);
 }
 
 // --- Auto-Tune for PidTunerPage ---
@@ -287,6 +339,32 @@ void registerTuning(PidTunerPage& page) {
                        kTrackingResponse);
     page.addController("Track T", drivetrain().trackingTurnPID(), &trackingTuningTest, "Turn",
                        kTrackingResponse);
+    // Wheel: drive 48in, tape it, Apply (see the Wheel size section above).
+    // The vertical tracking wheel is the one a forward drive measures; the
+    // horizontal one gets the same diameter, since they share
+    // kTrackingWheelDiameterIn and copying the number in does the same. If
+    // strafing reads off afterwards, they need a diameter each.
+    page.enableWheelCalibration(
+        {
+            {.name = "Tracking",
+             .distanceIn = [] { return verticalWheel().getDistanceIn(); },
+             .diameterIn = [] { return verticalWheel().wheelDiameterIn(); },
+             .setDiameterIn =
+                 [](double diameterIn) {
+                     verticalWheel().setWheelDiameterIn(diameterIn);
+                     horizontalWheel().setWheelDiameterIn(diameterIn);
+                     logWheelDiameter("Tracking", "kTrackingWheelDiameterIn", diameterIn);
+                 }},
+            {.name = "Drive",
+             .distanceIn = [] { return drivetrain().forwardTravelIn(); },
+             .diameterIn = [] { return drivetrain().wheelDiameterIn(); },
+             .setDiameterIn =
+                 [](double diameterIn) {
+                     drivetrain().setWheelDiameterIn(diameterIn);
+                     logWheelDiameter("Drive", "kDriveWheelDiameterIn", diameterIn);
+                 }},
+        },
+        &wheelCalibrationDrive, kWheelCalibrationDistanceIn);
     // Driver stick mode - see DriverInputMode. Velocity needs Auto-Tune's
     // models; until an axis has one, that axis quietly keeps voltage behavior.
     page.setToggle(

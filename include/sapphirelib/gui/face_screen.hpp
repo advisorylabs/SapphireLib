@@ -15,7 +15,8 @@ namespace sapphirelib::gui {
  * @brief A face over the whole brain screen: two eyes and two eyebrows on black, nothing else
  *
  * The eyes blink every few seconds, squint while squinting() says so (a lift on its way up, say),
- * and go wide with the brows raised when the IMU feels a bump (see sensors::BumpDetector). It
+ * go wide with the brows raised when the IMU feels a bump (see sensors::BumpDetector), and wink
+ * each time winks() goes up (a count of scores, say). It
  * covers everything, the Gui's header and tabs included, and comes up on its own for a match:
  * autonomous and driver control under competition control, not while disabled, so the auton
  * selector is there before the match. show() puts it up any other time
@@ -29,6 +30,7 @@ namespace sapphirelib::gui {
  * @code {.cpp}
  * static sapphirelib::gui::FaceScreen face({
  *     .squinting = [] { return liftRising(); },
+ *     .winks = [] { return scoreCount(); },
  *     .imu = &drivetrain().imu(),
  * });
  * face.start();
@@ -46,6 +48,14 @@ public:
          * Empty never squints
          */
         std::function<bool()> squinting;
+
+        /**
+         * a count of things worth a wink: the face winks on each frame it's gone up since the
+         * last one. Polled every frame on the GUI's task while the face is up, so keep it quick;
+         * what it counted while the face was down doesn't wink once it's back up. Empty never
+         * winks
+         */
+        std::function<std::uint32_t()> winks;
 
         /** watched for bumps, which make the face look surprised. nullptr for none */
         sensors::Imu* imu = nullptr;
@@ -110,6 +120,8 @@ private:
     // GUI task only. A tap during a match keeps the face down until the period changes
     Period period_ = Period::none;
     bool dismissed_ = false;
+    // Config::winks' count as of the last frame the face was up
+    std::uint32_t winksSeen_ = 0;
 
     lv_obj_t* root_ = nullptr;
     lv_obj_t* eyes_[2] = {};

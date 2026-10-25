@@ -80,7 +80,7 @@ Contents: [File](#file) · [Lines and fields](#lines-and-fields) · [Directives]
 | Line | Meaning |
 |---|---|
 | `#meta,<key>,<value>` | The value is the rest of the line. v1 keys: `writer` (`sapphirelib <version>`), `kernel` (PROS version), `build` (when the robot program was linked), `robot` (`LoggerConfig::robotName`), `file` (this file's name), `dir` (`/usd/sl`, or `/usd` in the root fallback), `open_us` (`t_us` when the file opened), `clock` (`us_since_program_start`). |
-| `#meta,<key>,<value>` (the program's own) | Lines the program adds with `Logger::addMeta()`, after the v1 keys, in every file. Keys are `[A-Za-z0-9_.-]{1,63}`; values are cut to 63 characters. 96671H's: `tune` (`loaded`, `rejected`, `none` or `no_card`: what its `TUNE.CFG` came to), `tune.rev`, `tune.path`, `tune.note`, `tune.error` (`line <n>: <why>` for a rejected file), every `LocalizerConfig` field as `mcl.<path>` (`mcl.filter.motionNoise.perInch`, ..., the settings the localizer ran with, file or code), `mcl.periodMs`, and `mcl.sensor<i>` = `<forward>,<right>,<facing>` for each distance sensor's mount. See [`docs/TUNING.md`](TUNING.md). |
+| `#meta,<key>,<value>` (the program's own) | Lines the program adds with `Logger::addMeta()`, after the v1 keys, in every file. Keys are `[A-Za-z0-9_.-]{1,63}`; values are cut to 63 characters. 96671H's: `tune` (`loaded`, `rejected`, `none` or `no_card`: what its `TUNE.CFG` came to), `tune.rev`, `tune.path`, `tune.note`, `tune.error` (`line <n>: <why>` for a rejected file), `model.fwd`, `model.strafe` and `model.turn` = `<kS>,<kV>,<kA>` (the drivetrain's axis models as the program started, file or code, written as `TUNE.CFG`'s `model.*` lines are; only measured axes; an Auto-Tune later in the run logs its own as a `tune,model` event), every `LocalizerConfig` field as `mcl.<path>` (`mcl.filter.motionNoise.perInch`, ..., the settings the localizer ran with, file or code), `mcl.periodMs`, and `mcl.sensor<i>` = `<forward>,<right>,<facing>` for each distance sensor's mount. See [`docs/TUNING.md`](TUNING.md). |
 | `#chan,<id>,<name>,<kind>,<decimals>[,<col>...]` | Declares a channel. `id` is 0–65535 and unique in the file. `kind` is `samples`, `pid` or `events`. Columns exclude `t_us`. For `pid` the columns are exactly `target,meas,err,p,i,d,u_raw,out,dt,flags`; for `events` there are none. A channel's `#chan` line always comes before any row that uses its id. Ids 0 (`sys`) and 1 (`events`) are always the event channels. **Match channels by name** across files: ids depend on registration order. |
 
 ## Rows
@@ -246,6 +246,12 @@ them, once the run ends (a run that was stopped or failed its fit logs no `model
 axis's: inches for Fwd/Strafe, degrees for Turn and the lift. A mechanism's model adds `kG`, the
 volts that hold it against gravity.
 
+The PID page's Wheel calibration logs each diameter it applies, `Tracking` or `Drive`:
+
+```
+E,<t_us>,tune,wheel,<Tracking|Drive>,diameter_in=<in>
+```
+
 ### Other tags
 
 - `auton`: `start,<routine name>` / `end,<routine name>` around each autonomous routine (a routine
@@ -272,9 +278,17 @@ volts that hold it against gravity.
 - `macro`: 96671H's driver macros (`src/robot/macros.cpp`). `autoclaw,piece_mm=<mm>,reach_mm=<mm>,
   speed=<m/s>` when autoClaw closes the claw on a pin at the bottom: the distance reading that did
   it, how far out it was closing at that moment (`kPieceDetectMm` plus the speed lead), and how fast
-  the robot was driving the claw onto it; `seek_failed` when
+  the robot was driving the claw onto it; `seek_failed` (older logs only) when
   the lift, heading for the bottom, didn't reach its bottom switch in time and gave up (a switch
-  unplugged, broken, or out of reach).
+  unplugged, broken, or out of reach); `score_lowered_early` when L2 lowered the lift while a score
+  was still waiting for the robot to back off the goal; `claw,closed=<0|1>` and
+  `extender,out=<0|1>` when an autonomous routine moves one (driver control's are in the `mech`
+  channel instead).
+- `path`: `robot::followPath()` (`src/robot/paths.cpp`), the claw and extender actions on a path's
+  points. `action,<kind>,point=<n>,in=<in>` as the plan reaches a point and the action happens
+  (`kind` one of `claw_open`, `claw_close`, `extender_out`, `extender_in`; `in` the point's distance
+  along the path); `skipped,<kind>,point=<n>,in=<in>` for one whose point the plan never reached
+  before the motion ended.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button).
 
 ## Channels on 96671H's robot

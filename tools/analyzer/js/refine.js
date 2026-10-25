@@ -246,21 +246,18 @@
   // --- The base model -----------------------------------------------------------------
 
   /**
-   * What the robot designed its gains from, most authoritative first: the
-   * newest Auto-Tune measurement in the logs (a `tune,model` event), the
-   * loaded TUNE.CFG's model, or a fit to the logs' own driving.
+   * What the robot designed its gains from, most authoritative first: what
+   * the newest log says the robot ran (an Auto-Tune measured in it, a
+   * `tune,model` event, or else the models it logged as it started, #meta
+   * model.*), the loaded TUNE.CFG's model, or a fit to the logs' own driving.
    */
   function baseModel(logs, controller, profile = null) {
-    let latest = null;
-    for (const log of logs) {
-      for (const m of slt.tuneEvents(log).models) {
-        if (m.axis === controller.axis && m.kV > 0 && m.kA > 0 && (!latest || m.t >= latest.t || log !== latest.log)) {
-          latest = { log, t: m.t, model: M.feedforward(m.kS, m.kV, m.kA), delayS: m.delayS || 0.03,
-            source: `Auto-Tune on the robot (${log.meta.file || log.fileName})` };
-        }
-      }
+    const latest = slt.axisModels(logs)[controller.modelKey];
+    if (latest) {
+      return { model: M.feedforward(latest.kS, latest.kV, latest.kA), delayS: latest.delayS || 0.03,
+        source: latest.from === 'autotune' ? `Auto-Tune on the robot (${latest.file})`
+          : `the models logged in ${latest.file} (delay assumed 30ms)` };
     }
-    if (latest) return latest;
     const fromFile = profile && profile.models[controller.modelKey];
     if (fromFile) {
       return { model: M.feedforward(fromFile.kS, fromFile.kV, fromFile.kA), delayS: 0.03,

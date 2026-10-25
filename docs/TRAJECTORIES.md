@@ -48,6 +48,11 @@ Open Sapphire Sim (`tools/sim/index.html`) and its **Paths** tab.
   the intake. **Stop at its end** brings the robot to rest at the section's last point; the path may
   then turn sharply there (drive in, stop, back out at an angle). Without it the junction is driven
   through at speed. **Join next** merges a section into the one before it.
+- **Actions** (96671H's robot): select a point (click it, or its row) and pick what the **Claw**
+  (open, close) and the **Extender** (out, in) do as the robot reaches it, in the box under the Points
+  table. A dot in the table and a tag on the field mark every point with one. They stay with their
+  point through edits and **Reverse**, and the alliance and quadrant flips carry them along. The
+  simulated robot has neither, so **Run** drives the path without them.
 
 The path is colored by its planned speed (grey slow, blue fast, amber fastest), with the robot's
 footprint along it so you can see it clear the walls. Under the table: the duration, when each
@@ -57,9 +62,23 @@ dashes instead of a colored path mean it can't be planned; the status line says 
 **Run** puts the simulated robot at the first point and follows the trajectory, the plan's reference
 drawn as a dashed outline it chases. **Reverse** turns the chain around.
 
+**On Override's field.** The field is drawn to scale from the game manual, so plan against it: set
+**Robot** to your footprint (inches across × front to back) and read the line under the plan. It
+says where the routine starts against SG1 (your alliance's side of the Autonomous Line, which
+Quadrant, touching the perimeter, out of the Load Zones) and what the footprint runs into on the way,
+Goals, Loaders or walls, and when; each is outlined in red with the robot drawn where it first hits.
+Hover the field for exact coordinates. **Other alliance** turns the path half a turn about the
+middle, which is the same routine for the other alliance (the field turns into itself, red for
+blue). **Other quadrant** mirrors it across the y = x diagonal into your alliance's other Quadrant;
+the Goals, tape and wall objects land on their twins, the Loaders don't.
+
 **Plan with the robot's models.** The plan depends on the axis models. By default the tab uses the
-Robot tab's chassis model; with the robot's TUNE.CFG open in the Tune tab, pick **Open TUNE.CFG's**
-and the preview is what the robot will plan.
+Robot tab's chassis model. For the robot's own, open one of its SD logs with **Open log…** under the
+buttons (or drop it there, or open it in the Tune tab) and pick **Logged models**: every log records
+the models the robot ran, from the code's `setAxisModels()` or its TUNE.CFG (`#meta model.*`, and
+any Auto-Tune since). Or with the robot's TUNE.CFG open in the Tune tab, pick **Open TUNE.CFG's**.
+Either way the preview is what the robot will plan, as long as the code or the file hasn't changed
+since.
 
 ## In autons.cpp
 
@@ -95,6 +114,32 @@ Planning takes a few milliseconds and allocates, so do it before the motion, nev
 `followTrajectory()` returns a `MotionResult` like every motion: `settled` on the last point,
 `timedOut` if it ran `overtimeMs` past the plan (held in place, say), `aborted` for an empty
 trajectory, no odometry, or no axis models.
+
+**Actions.** A path with any (see [Drawing a path](#drawing-a-path)) gets a second list after its
+sections, named after it, for `robot::followPath()` ([`include/robot/paths.hpp`](../include/robot/paths.hpp)):
+
+```cpp
+// what the claw and the extender do along "rush", by point (robot::followPath())
+const std::vector<robot::PathAction> kRushActions{
+    {.waypoint = 1, .action = robot::PathAction::extenderOut},
+    {.waypoint = 2, .action = robot::PathAction::clawOpen},
+};
+
+void rushAuton() {
+    static TrajectoryResult rush; // the motion reads it to the end
+    if (!planPiece("rush", rush, kRush)) return;
+    odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 0});
+    followPath(rush, kRushActions);
+}
+```
+
+`followPath()` follows the plan and does each action as the plan reaches its point, from the
+routine's task: it compares `trajectoryProgress().distanceIn` against the plan's `waypointIn`, how
+far along the path each of its points is. The robot doesn't slow down for an action; for it to be at
+rest first, end a section at that point with **Stop at its end**. An action whose point the plan
+never reaches (the robot held up until the motion times out) isn't done, so the claw doesn't open
+short of the goal. **Paste C++** reads both lists back. The **Path Actions Test** routine in
+`autons.cpp` checks it on the robot (about 30 in clear ahead).
 
 **Timing a mechanism.** `trajectoryProgress()` says which section the plan is in, how far along it
 is, and whether it's waiting, from any task. Run the trajectory on a `MotionQueue` and wait on it:

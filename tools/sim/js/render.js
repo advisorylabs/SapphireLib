@@ -1,16 +1,18 @@
 /*
  * SapphireLib simulator: render.js
  *
- * Draws the field and everything on it onto a canvas: the robot where it
- * really is, where raw odometry and the corrected pose think it is, the
- * particle cloud (colored by how well each particle explains the readings,
- * sized by its weight), the estimate's uncertainty ellipse, the sensor beams,
- * what the map says each sensor should read from the estimate, and the
- * running motion's target. Plus the error chart under the field.
+ * Draws the field and everything on it onto a canvas: the Override field to
+ * scale (field.js: tiles, tape, Goals, Loaders, Toggles, and the Cups and
+ * Pins a match starts with), the robot where it really is, where raw
+ * odometry and the corrected pose think it is, the particle cloud (colored by
+ * how well each particle explains the readings, sized by its weight), the
+ * estimate's uncertainty ellipse, the sensor beams, what the map says each
+ * sensor should read from the estimate, and the running motion's target.
+ * Plus the error chart under the field.
  *
  * Field frame as odom::Pose: origin in the middle, +x right, +y up the
- * screen (downfield), headings clockwise from +y. Colors come from the page's
- * CSS tokens, so both themes work.
+ * screen (downfield), headings clockwise from +y; seen from the audience, red
+ * on the left. Colors come from the page's CSS tokens, so both themes work.
  *
  * Browser only: window.SIM.render.
  *
@@ -21,6 +23,7 @@
 
   const root = typeof self !== 'undefined' ? self : this;
   const L = root.SIM.mcl;
+  const F = root.SIM.field;
   const kDegToRad = L.kDegToRad;
 
   function cssVar(name) {
@@ -51,7 +54,8 @@
     const p = {};
     for (const name of ['bg', 'surface', 'surface-2', 'ink', 'ink-2', 'muted', 'grid', 'axis', 'accent',
       'good', 'warning', 'critical', 'series-1', 'series-2', 'series-3', 'series-4', 'series-5', 'series-7',
-      'series-8', 'tile', 'tile-line', 'wall', 'element', 'robot-fill', 'robot-line', 'raw', 'corrected', 'beam']) {
+      'series-8', 'tile', 'tile-line', 'wall', 'element', 'robot-fill', 'robot-line', 'raw', 'corrected', 'beam',
+      'tape', 'tape-edge', 'alliance-red', 'alliance-blue', 'goal-neutral', 'goal-edge', 'toggle', 'pin-yellow', 'cup']) {
       p[name] = cssVar(`--${name}`);
     }
     // particle ramp: light (grey) → middling (sapphire) → heavy (amber)
@@ -73,7 +77,9 @@
       this.ctx = canvas.getContext('2d');
       this.colors = palette();
       this.sizePx = 0;
-      this.marginPx = 10;
+      // room outside the walls for the Alliance Stations' strips
+      this.marginPx = 14;
+      this.field = null;
     }
 
     refreshColors() {
@@ -91,6 +97,7 @@
 
     setField(fieldSizeIn) {
       this.fieldSizeIn = fieldSizeIn;
+      if (!this.field || this.field.sizeIn !== fieldSizeIn) this.field = F.override(fieldSizeIn);
     }
 
     /** What the view is centered on, in field inches, and how far it's zoomed in. */
@@ -148,6 +155,29 @@
       if (view.correctionArrow) this.drawArrow(snap.rawPose, snap.pose, c.corrected);
       if (view.estimate && est) this.drawCross(est.xIn, est.yIn, c.accent);
       if (view.zoom > 1) this.drawScaleBar();
+      if (view.hover) this.drawReadout(view.hover);
+    }
+
+    /** Where the cursor is, in field inches, and what's there, in the bottom right corner. */
+    drawReadout(p) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      const what = F.describe(this.field, p.xIn, p.yIn);
+      if (!what) return;
+      const text = `x ${p.xIn.toFixed(1)}  y ${p.yIn.toFixed(1)}  ·  ${what}`;
+      ctx.font = '12px ui-monospace, Consolas, monospace';
+      const w = ctx.measureText(text).width + 14;
+      const x = this.sizePx - w - this.marginPx - 6;
+      const y = this.sizePx - this.marginPx - 28;
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = c.surface;
+      ctx.fillRect(x, y, w, 22);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = c.axis;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 21);
+      ctx.fillStyle = c.ink;
+      ctx.fillText(text, x + 7, y + 15);
     }
 
     /** A 1 inch (or 6 inch) bar in the corner, so a zoomed view still reads in inches. */
@@ -173,21 +203,29 @@
     drawField(sim, view) {
       const ctx = this.ctx;
       const c = this.colors;
+      const field = this.field;
       const half = this.fieldSizeIn / 2;
       const [x0, y0] = this.toPx(-half, half);
       const size = this.fieldSizeIn * this.scale;
+      // the Alliance Stations: red along the left wall, blue along the right
+      for (const [side, color] of [[-1, c['alliance-red']], [1, c['alliance-blue']]]) {
+        const [sx] = this.toPx(side * half, 0);
+        ctx.fillStyle = color;
+        ctx.fillRect(side < 0 ? sx - 11 : sx + 6, y0 + size * 0.1, 5, size * 0.8);
+      }
       ctx.fillStyle = c.tile;
       ctx.fillRect(x0, y0, size, size);
       if (view.grid) {
+        // the seams between tiles, where the manual measures everything from
         ctx.strokeStyle = c['tile-line'];
         ctx.lineWidth = 1;
         ctx.beginPath();
-        for (let i = 1; i < 6; ++i) {
-          const t = (size * i) / 6;
-          ctx.moveTo(x0 + t, y0);
-          ctx.lineTo(x0 + t, y0 + size);
-          ctx.moveTo(x0, y0 + t);
-          ctx.lineTo(x0 + size, y0 + t);
+        for (const seam of field.seams) {
+          const [sx, sy] = this.toPx(seam, seam);
+          ctx.moveTo(sx, y0);
+          ctx.lineTo(sx, y0 + size);
+          ctx.moveTo(x0, sy);
+          ctx.lineTo(x0 + size, sy);
         }
         ctx.stroke();
         // the origin
@@ -204,17 +242,22 @@
         ctx.fillText('+y downfield', x0 + 6, y0 + 14);
         ctx.fillText('+x', x0 + size - 22, y0 + size / 2 - 6);
       }
+      if (view.tape) this.drawTape(field);
+      if (view.fieldElements) this.drawGoalsAndLoaders(field);
       ctx.strokeStyle = c.wall;
       ctx.lineWidth = 4;
       ctx.strokeRect(x0 - 2, y0 - 2, size + 4, size + 4);
+      if (view.fieldElements) this.drawToggles(field);
+      if (view.objects) this.drawObjects(field);
 
-      // field elements: filled if really there, outlined if the map has them
+      // field elements: filled if really there, outlined if the map has them. The Goals and
+      // Loaders (field: true) are drawn above as themselves, there or not
       const o = sim.options;
       for (const e of o.world.elements) {
         const [ex, ey] = this.toPx(e.minXIn, e.maxYIn);
         const w = (e.maxXIn - e.minXIn) * this.scale;
         const h = (e.maxYIn - e.minYIn) * this.scale;
-        if (e.inWorld !== false) {
+        if (e.inWorld !== false && !e.field) {
           ctx.fillStyle = c.element;
           ctx.fillRect(ex, ey, w, h);
         }
@@ -241,6 +284,179 @@
         ctx.textAlign = 'center';
         ctx.fillText('defender', dx + s / 2, dy + s / 2 + 4);
         ctx.textAlign = 'left';
+      }
+    }
+
+    /** Trace an outline of field points ([[x, y], ...]) as a closed path. */
+    tracePolygon(outline) {
+      const ctx = this.ctx;
+      ctx.beginPath();
+      outline.forEach(([xIn, yIn], i) => {
+        const [x, y] = this.toPx(xIn, yIn);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+    }
+
+    /** At least a pixel, so the 3/4 in tape and the Cups' rims don't vanish when zoomed out. */
+    inchesPx(inches, minPx = 1) {
+      return Math.max(minPx, inches * this.scale);
+    }
+
+    allianceColor(name) {
+      const c = this.colors;
+      if (name === 'red') return c['alliance-red'];
+      if (name === 'blue') return c['alliance-blue'];
+      return c['pin-yellow'];
+    }
+
+    /** The Load Zones (tinted) and every tape line, white with a dark edge so it reads on light tiles. */
+    drawTape(field) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      for (const zone of field.zones) {
+        if (!zone.alliance) continue;
+        ctx.fillStyle = rgba(parseColor(this.allianceColor(zone.alliance)), 0.1);
+        this.tracePolygon(zone.outline);
+        ctx.fill();
+      }
+      ctx.lineJoin = 'miter';
+      const trace = (line) => {
+        ctx.beginPath();
+        line.points.forEach(([xIn, yIn], i) => {
+          const [x, y] = this.toPx(xIn, yIn);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        if (line.closed) ctx.closePath();
+      };
+      for (const line of field.tape) {
+        const width = this.inchesPx(line.widthIn);
+        if (line.color === 'white') {
+          trace(line);
+          ctx.strokeStyle = c['tape-edge'];
+          ctx.lineWidth = width + 1.5;
+          ctx.stroke();
+          ctx.strokeStyle = c.tape;
+        } else {
+          trace(line);
+          ctx.strokeStyle = this.allianceColor(line.color);
+        }
+        ctx.lineWidth = width;
+        ctx.stroke();
+      }
+    }
+
+    /** The nine Goals (the tall center one ringed twice) and the four Loaders on the side walls. */
+    drawGoalsAndLoaders(field) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      for (const goal of field.goals) {
+        this.tracePolygon(goal.outline);
+        ctx.fillStyle = goal.kind === 'red' || goal.kind === 'blue' ? this.allianceColor(goal.kind) : c['goal-neutral'];
+        ctx.fill();
+        ctx.strokeStyle = c['goal-edge'];
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // the opening in its top
+        const [x, y] = this.toPx(goal.xIn, goal.yIn);
+        ctx.beginPath();
+        ctx.arc(x, y, this.inchesPx(1.18, 1.5), 0, 2 * Math.PI);
+        ctx.stroke();
+        if (goal.kind === 'center') {
+          ctx.beginPath();
+          ctx.arc(x, y, this.inchesPx(2.1, 2.5), 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+      }
+      for (const loader of field.loaders) {
+        this.tracePolygon(loader.outline);
+        ctx.fillStyle = this.allianceColor(loader.alliance);
+        ctx.fill();
+        ctx.strokeStyle = c['goal-edge'];
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        const [x, y] = this.toPx(loader.xIn, loader.yIn);
+        ctx.beginPath();
+        ctx.arc(x, y, this.inchesPx(1.2, 1.5), 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    }
+
+    /** The Toggles, yellow bars across the middle of every wall. */
+    drawToggles(field) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      for (const toggle of field.toggles) {
+        const [x, y] = this.toPx(toggle.xIn, toggle.yIn);
+        const length = toggle.lengthIn * this.scale;
+        const thick = this.inchesPx(2, 4);
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(toggle.angleDeg * kDegToRad);
+        ctx.fillStyle = c.toggle;
+        ctx.fillRect(-length / 2, -thick / 2, length, thick);
+        ctx.strokeStyle = c['goal-edge'];
+        ctx.lineWidth = 1;
+        ctx.strokeRect(-length / 2, -thick / 2, length, thick);
+        ctx.restore();
+      }
+    }
+
+    /**
+     * The Cups and Pins a Head-to-Head match starts with: Cups as rings, a standing Pin as a dot in
+     * its top color, a lying Pin as its two halves, yellow inward.
+     */
+    drawObjects(field) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      const pinR = this.inchesPx(field.pinIn / 2, 1.5);
+      for (const o of field.objects) {
+        const [x, y] = this.toPx(o.xIn, o.yIn);
+        if (o.kind === 'cup') {
+          ctx.strokeStyle = c.cup;
+          ctx.lineWidth = this.inchesPx(0.4);
+          ctx.beginPath();
+          ctx.arc(x, y, Math.max(2, this.inchesPx(field.cupIn / 2) - ctx.lineWidth / 2), 0, 2 * Math.PI);
+          ctx.stroke();
+        } else if (o.kind === 'pin') {
+          ctx.fillStyle = this.allianceColor(o.color);
+          ctx.strokeStyle = c['goal-edge'];
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(x, y, pinR, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          // lying down, pointing headingDeg: a narrow yellow half, then the wide colored half
+          const k = this.scale;
+          const r0 = o.innerIn * k;
+          const mid = (o.innerIn + field.pinLengthIn / 2) * k;
+          const r1 = (o.innerIn + field.pinLengthIn) * k;
+          const narrow = Math.max(1, 0.3 * field.pinIn * k);
+          const wide = Math.max(1.5, 0.5 * field.pinIn * k);
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(o.headingDeg * kDegToRad);
+          const half = (from, to, w0, w1, color) => {
+            ctx.beginPath();
+            ctx.moveTo(-w0, -from);
+            ctx.lineTo(-w1, -to);
+            ctx.lineTo(w1, -to);
+            ctx.lineTo(w0, -from);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = c['goal-edge'];
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          };
+          const w = (narrow + wide) / 2;
+          half(r0, mid, narrow, w, c['pin-yellow']);
+          half(mid, r1, w, wide, this.allianceColor(o.color));
+          ctx.restore();
+        }
       }
     }
 
@@ -311,7 +527,8 @@
     /**
      * The Paths tab's path: the plan colored by speed (slow grey, fast sapphire, fastest amber),
      * faint footprints of the robot along it, the points in their sections' colors (squares
-     * where a section ends, filled where the robot stops), and each heading's handle.
+     * where a section ends, filled where the robot stops), each heading's handle, and a tag on
+     * each point with what the claw and the extender do there.
      */
     drawPathEditor(editor, settings) {
       const ctx = this.ctx;
@@ -353,6 +570,18 @@
         this.polyline(points.map((w) => ({ x: w.xIn, y: w.yIn })), c.critical, 2, [6, 4], 0.9);
       }
 
+      // where the footprint first runs into each thing it hits, and the thing, in red
+      for (const hit of editor.hits || []) {
+        const element = [...this.field.goals, ...this.field.loaders].find((e) => e.name === hit.name);
+        if (element) {
+          this.tracePolygon(element.outline);
+          ctx.strokeStyle = c.critical;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        this.drawRobot(hit.pose, settings, { outline: c.critical, dash: [4, 3], ghost: true });
+      }
+
       points.forEach((w, j) => {
         const [x, y] = this.toPx(w.xIn, w.yIn);
         const color = colorOf(j);
@@ -392,6 +621,22 @@
         ctx.fillStyle = c['ink-2'];
         ctx.font = '600 11px system-ui, sans-serif';
         ctx.fillText(String(j), x + 9, y + 15);
+        // what the claw and the extender do here, on a tag so it reads over the field
+        const labels = root.SIM.pathview.actionLabels(w);
+        if (labels.length) {
+          const text = labels.join(' · ');
+          ctx.font = '600 10px system-ui, sans-serif';
+          const width = ctx.measureText(text).width + 8;
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = c.surface;
+          ctx.fillRect(x + 8, y + 19, width, 14);
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = c.accent;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x + 8.5, y + 19.5, width - 1, 13);
+          ctx.fillStyle = c.accent;
+          ctx.fillText(text, x + 12, y + 29);
+        }
       });
     }
 
@@ -506,8 +751,8 @@
 
     drawRobot(pose, settings, { outline, fill = null, dash = [], ghost = false, details = false }) {
       const ctx = this.ctx;
-      const c = this.colors;
-      const s = settings.robotSizeIn * this.scale;
+      const w = settings.robotWidthIn * this.scale;
+      const l = settings.robotLengthIn * this.scale;
       const [x, y] = this.toPx(pose.xIn, pose.yIn);
       ctx.save();
       ctx.translate(x, y);
@@ -517,23 +762,23 @@
       ctx.lineWidth = ghost ? 2 : 2;
       if (fill) {
         ctx.fillStyle = fill;
-        ctx.fillRect(-s / 2, -s / 2, s, s);
+        ctx.fillRect(-w / 2, -l / 2, w, l);
       }
-      ctx.strokeRect(-s / 2, -s / 2, s, s);
+      ctx.strokeRect(-w / 2, -l / 2, w, l);
       ctx.setLineDash([]);
       // the front
       ctx.fillStyle = outline;
       ctx.beginPath();
-      ctx.moveTo(0, -s / 2 - 6);
-      ctx.lineTo(-5, -s / 2 + 2);
-      ctx.lineTo(5, -s / 2 + 2);
+      ctx.moveTo(0, -l / 2 - 6);
+      ctx.lineTo(-5, -l / 2 + 2);
+      ctx.lineTo(5, -l / 2 + 2);
       ctx.closePath();
       ctx.fill();
-      if (!ghost) this.drawWheels(s, settings, details);
+      if (!ghost) this.drawWheels(w, l, settings, details);
       ctx.restore();
     }
 
-    drawWheels(s, settings, details) {
+    drawWheels(w, l, settings, details) {
       const ctx = this.ctx;
       const c = this.colors;
       const k = this.scale;
@@ -545,8 +790,8 @@
       // four mecanum corners, rollers alternating so the chassis can strafe
       const corners = [[-1, -1, 1], [1, -1, -1], [-1, 1, -1], [1, 1, 1]];
       for (const [sx, sy, roller] of corners) {
-        const cx = sx * (s / 2 - ww / 2 - 1);
-        const cy = sy * (s / 2 - wl / 2 - 1);
+        const cx = sx * (w / 2 - ww / 2 - 1);
+        const cy = sy * (l / 2 - wl / 2 - 1);
         ctx.fillRect(cx - ww / 2, cy - wl / 2, ww, wl);
         ctx.beginPath();
         for (let i = -1; i <= 1; ++i) {
@@ -557,7 +802,7 @@
       }
       // Asterisk center wheels, straight omnis
       for (const sx of [-1, 1]) {
-        const cx = sx * (s / 2 - ww / 2 - 1);
+        const cx = sx * (w / 2 - ww / 2 - 1);
         ctx.fillRect(cx - ww / 2, -wl / 2.4, ww, wl / 1.2);
       }
       if (!details) return;

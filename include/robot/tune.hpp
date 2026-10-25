@@ -68,8 +68,9 @@ void applyTuneProfile();
 std::string tuneStatusText();
 
 /// Adds #meta lines to every log: which TUNE.CFG revision this run used (or
-/// why none), and the localizer's full settings and sensor mounts. Call from
-/// startTelemetry(), before the logger starts.
+/// why none), the drivetrain's axis models (model.fwd, model.strafe,
+/// model.turn), and the localizer's full settings and sensor mounts. Call
+/// from startTelemetry(), after initDevices() and before the logger starts.
 void describeTuning(sapphirelib::telemetry::Logger& logger);
 
 } // namespace robot
