@@ -214,6 +214,12 @@ void testSectionsLabelTheirSamples() {
     expectNear(path.sectionStartIn[0], 0.0, 0.0, "first section starts at 0");
     expectNear(path.sectionStartIn[1], 20.0, 1e-9, "second section start");
     expectNear(path.sectionStartIn[2], 40.0, 1e-9, "third section start");
+    // and how far along each waypoint is, the junctions included, in the chain's order
+    const double expectedIn[] = {0.0, 20.0, 30.0, 40.0, 60.0};
+    assert(path.waypointIn.size() == 5);
+    for (std::size_t j = 0; j < 5; ++j) {
+        expectNear(path.waypointIn[j], expectedIn[j], 1e-9, "waypoint distance");
+    }
 }
 
 void testHeadingKeyframes() {

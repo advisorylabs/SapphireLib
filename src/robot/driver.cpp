@@ -10,9 +10,12 @@
 
 #include "robot/driver.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 
 #include "pros/misc.hpp"
+#include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
 #include "robot/screen.hpp"
@@ -93,6 +96,30 @@ double stick(const Controller& controller, Axis axis) {
     return sapphirelib::curveJoystick(controller.axis(axis), kJoystickCurve);
 }
 
+// Practice mode, set from the Home page's button on the GUI's task, read here
+// on opcontrol's. Off at startup.
+std::atomic<bool> practice{false};
+// Whether practice mode has the drive's power cut right now.
+bool practiceCut = false;
+
+// Whether practice mode cuts the drive this tick: any drive stick past
+// kPracticeMaxThrottlePct, after the curve, so it's the power the motors
+// would have been asked for. Rumbles once as it cuts.
+bool practiceCutsPower(Controller& controller) {
+    if (!practice.load()) {
+        practiceCut = false;
+        return false;
+    }
+    const double largest =
+        std::max({std::fabs(stick(controller, Axis::leftY)),
+                  std::fabs(stick(controller, Axis::leftX)),
+                  std::fabs(stick(controller, Axis::rightX))});
+    const bool over = largest * 100.0 > kPracticeMaxThrottlePct;
+    if (over && !practiceCut) controller.rumble(".");
+    practiceCut = over;
+    return over;
+}
+
 // Holonomic split arcade: the left stick drives and strafes, the right stick
 // turns. Robot-centric, so inverting can swap front and back: forward and
 // right both flip, while turning doesn't, since clockwise is clockwise
@@ -157,6 +184,8 @@ void showDriveMode(Controller& controller) {
     // the drive mode comes back when it stops.
     if (teach::recording()) {
         controller.screen().setLine(1, "TEACH REC: X+A"); // 15 columns at most
+    } else if (practiceCut) {
+        controller.screen().setLine(1, "PRACTICE: SLOW");
     } else if (orbit.active) {
         controller.screen().setLine(1, "%s %.0fin", inverted ? "ORBIT INV" : "ORBIT",
                                     orbit.targetRadiusIn);
@@ -168,6 +197,10 @@ void showDriveMode(Controller& controller) {
 } // namespace
 
 Controller& controller() { return master; }
+
+void setPracticeMode(bool on) { practice.store(on); }
+
+bool practiceMode() { return practice.load(); }
 
 void drive(Controller& controller) {
     // After autonomous, a disable, or a blocking routine, the robot comes
@@ -191,7 +224,12 @@ void drive(Controller& controller) {
         }
     }
 
-    if (orbit.active) {
+    if (practiceCutsPower(controller)) {
+        // Zero volts, so the drive coasts, as with the power off. A cut
+        // longer than kOrbitResumeGapMs places the orbit's pivot afresh once
+        // power comes back, as a GUI routine taking the chassis would.
+        drivetrain().holonomicVolts(0.0, 0.0, 0.0);
+    } else if (orbit.active) {
         driveOrbit(controller);
     } else {
         driveArcade(controller);

@@ -425,6 +425,9 @@ TrajectoryResult generateTrajectory(const std::vector<TrajectorySection>& givenS
     TrajectoryResult result;
     result.ok = true;
     result.trajectory = Trajectory(std::move(out), std::move(starts));
+    // the sections' own points: not the one carried on from, which joined put first
+    result.waypointIn.assign(path.waypointIn.begin() + (options.from != nullptr ? 1 : 0),
+                             path.waypointIn.end());
     return result;
 }
 

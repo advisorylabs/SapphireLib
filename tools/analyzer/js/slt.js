@@ -387,6 +387,16 @@
     into.files = into.files.concat(next.files);
   }
 
+  /** Logs sorted the way the robot wrote them: by file index, then by name. */
+  function byFileOrder(logs) {
+    return logs.slice().sort((a, b) => {
+      const ia = fileIndex(a.meta.file || a.fileName);
+      const ib = fileIndex(b.meta.file || b.fileName);
+      if (ia !== null && ib !== null && ia !== ib) return ia - ib;
+      return (a.fileName || '').localeCompare(b.fileName || '');
+    });
+  }
+
   /**
    * Groups parsed Logs into program runs. A file that opened after an SD
    * fault on another (its `sd,reopened,prev=<name>` event) continues that
@@ -394,12 +404,7 @@
    * Runs come back in file order.
    */
   function mergeRuns(logs) {
-    const sorted = logs.slice().sort((a, b) => {
-      const ia = fileIndex(a.meta.file || a.fileName);
-      const ib = fileIndex(b.meta.file || b.fileName);
-      if (ia !== null && ib !== null && ia !== ib) return ia - ib;
-      return (a.fileName || '').localeCompare(b.fileName || '');
-    });
+    const sorted = byFileOrder(logs);
     const runs = [];
     const byFile = new Map();
     for (const log of sorted) {
@@ -646,6 +651,46 @@
     return { starts, models };
   }
 
+  // TUNE.CFG's axis names (model.fwd, ...), by Auto-Tune's (its tune,model events' Fwd, ...)
+  const MODEL_AXES = { Fwd: 'fwd', Strafe: 'strafe', Turn: 'turn' };
+
+  /** A #meta model.* value, "kS,kV,kA": { kS, kV, kA }, or null unless TUNE.CFG would take it. */
+  function parseModel(text) {
+    const parts = (text || '').split(',').map((p) => p.trim());
+    if (parts.length !== 3 || !parts.every((p) => NUMBER.test(p))) return null;
+    const [kS, kV, kA] = parts.map(Number);
+    return kS >= 0 && kV > 0 && kA > 0 ? { kS, kV, kA } : null;
+  }
+
+  /**
+   * The drivetrain's axis models the logs say the robot last ran: { fwd,
+   * strafe, turn }, each { kS, kV, kA, delayS, from, file, t } or missing.
+   * A log's #meta model.* lines are what the program started with (the
+   * code's setAxisModels(), with TUNE.CFG's model.* lines over them), and an
+   * Auto-Tune measured later in it (a tune,model event) replaces its axis
+   * from then on. Logs count in file order, whatever order they're given
+   * in, so the newest file's say wins. `from` is 'logged' or 'autotune';
+   * delayS is Auto-Tune's measured delay, or null where nothing measured
+   * one (the robot doesn't keep it).
+   */
+  function axisModels(logs) {
+    const latest = {};
+    for (const log of byFileOrder([].concat(logs))) {
+      const file = log.meta.file || log.fileName;
+      for (const axis of Object.values(MODEL_AXES)) {
+        const m = parseModel(log.meta[`model.${axis}`]);
+        if (m) latest[axis] = { ...m, delayS: null, from: 'logged', file, t: log.start };
+      }
+      for (const m of tuneEvents(log).models) {
+        const axis = MODEL_AXES[m.axis];
+        if (!axis || !(m.kV > 0 && m.kA > 0)) continue;
+        latest[axis] = { kS: m.kS, kV: m.kV, kA: m.kA, delayS: m.delayS > 0 ? m.delayS : null,
+          from: 'autotune', file, t: m.t };
+      }
+    }
+    return latest;
+  }
+
   /**
    * A char.* channel's rows split into the runner's segments, as
    * tuning::CharacterizationRun arrays ({ timeMs, volts, position }, timeMs
@@ -755,6 +800,7 @@
     periods,
     sessions,
     tuneEvents,
+    axisModels,
     characterizationSegments,
     characterizationRuns,
     parseKeys,

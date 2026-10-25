@@ -7,19 +7,23 @@
  * (see EXCLUDE_SRC_FROM_LIB in the Makefile).
  *
  * The robot starts with the claw closed on a preload, the extender in, and
- * the lift at the bottom. Scoring beats every other macro, and nothing
- * interrupts a score once it's started.
+ * the lift at the bottom. Scoring beats every other macro, and once a score
+ * has started nothing interrupts it, but for L2 while it waits on the robot
+ * to back off (see L2).
  *
  * Controls:
  *   R1         Open or close the claw. Ignored during a score, which opens it
  *              itself.
  *   R2         Score, only with the claw closed: dips halfway to the level
- *              below, opens the claw, gives the pin a moment to come off,
- *              then lowers the lift to the bottom. At the bottom there's no
- *              level below to dip to, so it just opens the claw.
+ *              below and opens the claw, then holds the lift there until the
+ *              vertical tracking wheel has seen the robot back 3in off the
+ *              goal, and only then lowers it to the bottom. At the bottom
+ *              there's no level below to dip to, so it just opens the claw.
+ *              The face winks as each score opens the claw.
  *   L1         Up a level. Hold to keep stepping up.
  *   L2         Down a level, all the way to the bottom. Hold to keep stepping
- *              down.
+ *              down. While a score waits for the robot to back off, L2 lowers
+ *              the lift to the bottom now instead.
  *   Y          Push the extender out, or pull it back in. Works at any time,
  *              a score included.
  *   RIGHT      Cycle goal (ALLIANCE, MEDIUM, CENTER), each with its own
@@ -28,19 +32,22 @@
  *   LEFT       Cycle the controller's bottom line: lift position and target,
  *              then each lift motor's volts, current, and temperature.
  *
- * autoClaw: with the claw open and the lift down on its bottom switch, a pin
+ * autoClaw: with the claw open and the lift down at its bottom level, a pin
  * the claw's distance sensor sees closes the claw, on the first reading.
  * Driving onto the pin, it closes further out the faster the robot goes, so
  * the claw is shut by the time the pin is in it rather than closing behind
  * it. Once the claw opens on a pin (R1, or a score at the bottom), autoClaw
  * waits for the sensor to see the pin gone before it closes again, so opening
- * the claw to drop a pin doesn't snap it shut on the same one.
+ * the claw to drop a pin doesn't snap it shut on the same one. It's off while
+ * the auto cycle (A, autocycle.hpp) runs, which closes the claw itself.
  *
  * The lift: its motors (config.hpp's kLiftMotors, three of them) hold each
- * level on a PID loop around their own encoders, in motor degrees. A limit
- * switch at the bottom zeroes them each time it's pressed, and a lift heading
- * for the bottom drives down until it's pressed, so the encoders can't drift
- * for long.
+ * level on a PID loop around their own encoders, in motor degrees. At driver
+ * control's start, before taking any level, the lift homes: it drives down at
+ * 45% power until the limit switch at the bottom is pressed (unless it
+ * already is), and zeroes the encoders there, so it needn't start the program
+ * all the way down. That's the only time the switch zeroes them: after
+ * homing, level 0 is encoder 0, switch pressed or not.
  *
  * Debug mode (the Home page's Debug button), for bringing the lift up: the
  * lift ignores its levels, and L1 and L2 power its motors directly, up and
@@ -48,6 +55,11 @@
  * no encoders. L2 stops at the bottom switch. Nothing else moves the lift: R2
  * never scores, and autoClaw is off. R1 and Y still work the pistons. Leaving
  * debug mode puts the lift back on its level, so expect it to move.
+ *
+ * Autonomous: update() only runs in driver control (and teach mode's
+ * replays), so routines move the claw and the extender with setClawClosed()
+ * and setExtended(), or from a path's actions (paths.hpp). Driver control
+ * carries on with both wherever autonomous left them.
  *
  * Controller screen: line 0 is the goal and level ("DBG" and the pistons in
  * debug mode), line 2 the readout LEFT picks, its label "BTM" instead of
@@ -57,6 +69,8 @@
  */
 
 #pragma once
+
+#include <cstdint>
 
 #include "sapphirelib/input/controller.hpp"
 #include "sapphirelib/mechanism/position_mechanism.hpp"
@@ -68,10 +82,9 @@ class Logger;
 
 namespace robot::macros {
 
-/// Call once from initialize(), with the lift all the way down: this zeroes
-/// the lift's encoders, and every level height is measured up from there. The
-/// first press of the bottom switch zeroes them again anyway. (initDevices()
-/// does.)
+/// Call once from initialize(): this zeroes the lift's encoders where the lift
+/// is, and update()'s homing then drives it down onto the bottom switch, which
+/// zeroes them again at the real bottom, once. (initDevices() does.)
 void initialize();
 
 /// Call every opcontrol() loop tick, right after controller.update(). Reads
@@ -102,6 +115,31 @@ void setDebug(bool on);
 /// from any task.
 bool debug();
 
+// --- The claw and the extender, for autonomous ---
+//
+// Each moves its piston now, since update() isn't running to: for autonomous
+// routines, and for anything else that runs while it isn't (X+UP's routines).
+// Call them from the task running the routine; the macros' state has no lock,
+// so never while update() runs on another task.
+
+/// Closes the claw (true) or opens it (false). Opening disarms autoClaw until
+/// the sensor sees the pin gone, as R1 does, so driver control's first ticks
+/// don't close it again on a pin autonomous just let go of.
+void setClawClosed(bool closed);
+
+/// Whether the claw is closed, or about to be: what it was last told.
+bool clawClosed();
+
+/// Pushes the extender out (true) or pulls it in (false).
+void setExtended(bool out);
+
+/// Whether the extender is out, or about to be: what it was last told.
+bool extended();
+
+/// How many scores have opened the claw since the program started: the
+/// face winks each time it goes up (screen.cpp). Safe from any task.
+std::uint32_t scoreCount();
+
 /// Whether the claw's distance sensor sees a pin: what an autonomous routine
 /// branches on (autons.cpp's Branch routines). Reads the sensor, so it's
 /// current; safe from any task, including a trajectory's next.
@@ -110,6 +148,21 @@ bool pinInClaw();
 /// Whether the lift is pressing its bottom switch. Reads the switch, so it's
 /// current; safe from any task.
 bool liftAtBottom();
+
+// --- For the auto cycle (autocycle.hpp), on opcontrol's task ---
+
+/// Whether the claw's distance sensor reads a pin within `mm`. Reads the
+/// sensor, so it's current; unplugged, it never does.
+bool pinWithinMm(std::int32_t mm);
+
+/// Whether the lift is at its bottom level and there, by its encoders (the
+/// switch needn't be pressed): what the cycle waits on before driving into
+/// the loader. Reads the macros' state, so call it from opcontrol's task.
+bool liftDown();
+
+/// Stops autoClaw closing the claw (true) until it's let go again (false),
+/// for the cycle, which closes it itself. R1 and a score still work.
+void setAutoClawPaused(bool paused);
 
 /// Logs the lift to `logger`: its PID's every step (channel "lift") and
 /// what each update actually commanded (channel "lift.act": target and

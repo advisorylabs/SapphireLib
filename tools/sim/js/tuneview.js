@@ -457,7 +457,10 @@
     state.mystery = null;
     $('tune-cal-problems').textContent = problems.join(' ');
     $('tune-cal-problems').hidden = !problems.length;
-    if (logs.length) calibrate(logs);
+    if (logs.length) {
+      ctx.logsOpened(logs);
+      calibrate(logs);
+    }
   }
 
   function demoLogs() {

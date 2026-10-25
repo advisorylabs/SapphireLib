@@ -45,6 +45,7 @@ Contents: [Before you start](#before-you-start) · [1. Macros and lift heights](
   step 3's wheel offsets, so leave orbiting alone until both are in.
 - [ ] `kDriveWheelDiameterIn` in `config.hpp` and the drivetrain's `externalGearRatio` in
   [`devices.cpp`](../src/robot/devices.cpp). Push each stick: every wheel turns the way it should.
+  Step 3b's Wheel button measures the diameter `driveDistance()` really needs.
 - [ ] The `sl` folder exists on the card; the Home page's SD line says "ready".
 - [ ] The robot is in match configuration (everything mounted, match weight), with a charged battery
   for every Auto-Tune run.
@@ -79,12 +80,11 @@ Yours to finish first. Everything here is a constant at the top of
 | `kAutoClawLeadMs` | 100 | driving onto a pin, autoClaw closes this many ms of travel early: the reach is `kPieceDetectMm` plus the robot's speed toward the claw's side (mm/ms, the same as m/s) times this. More if pins taken at speed end up past the claw or pushed out, less if it closes before the pin gets there |
 | `kAutoClawMaxReachMm` | 200 | the furthest out that lead ever closes the claw, however fast the robot goes |
 | `kClawFacingDeg` | 0 | which way the claw's mouth faces, degrees clockwise from the robot's front (180 the back). Only driving that way counts toward the lead |
-| `kScoreReleaseMs` | 400 | how long a score waits after opening the claw before lowering the lift, for the claw to let go of the pin |
+| `kScoreBackOffIn` | 3 | once a score opens the claw, how far the robot must back off the goal, by the vertical tracking wheel, before the lift lowers to the bottom (L2 lowers it sooner). Needs the wheel's sign right: driving forward must raise it |
 | `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
 | `kLiftToleranceDeg` | 15 | how close the lift must get before a score's dip moves on to opening the claw |
 | `kLiftDescendTimeoutMs` | 1000 | how long a score's dip waits for the lift before opening the claw anyway |
-| `kLiftSeekVolts`, `kLiftSeekTimeoutMs` | 3, 1000 | heading for the bottom, when the encoders read 0 but the switch isn't pressed, the lift drives down at these volts until it is, for this long at most |
-| `kLiftMaxDownVolts` | 9 | the most the lift is ever driven down with, 75% of full power: its loop, the seat, the seek, debug mode's L2, Auto-Tune's ramps and the Lift Testing auton all stop here. Up is still full power |
+| `kLiftMaxDownVolts` | 9 | the most the lift is ever driven down with, 75% of full power: its loop, the seat, debug mode's L2, Auto-Tune's ramps and the Lift Testing auton all stop here. Up is still full power |
 | `kLiftDebugVolts` | 12 | debug mode: the volts L1 and L2 put on the lift motors while held (L2's capped at `kLiftMaxDownVolts`) |
 
 - [ ] **Debug mode** (Home page, **Debug**) for the checks below: L1 and L2 drive the lift motors
@@ -108,18 +108,16 @@ Yours to finish first. Everything here is a constant at the top of
   its reading along with its direction. Once L1 drives the lift up, raising it makes the
   controller's `LIFT` reading grow, which is what Auto-Tune needs to fit it.
 - [ ] **Zero.** `macros::initialize()` zeroes the encoders wherever the lift is when the program
-  starts, and every press of the bottom switch zeroes them again. So a restart with the lift up is
-  wrong only until the lift first comes down: start with it down anyway.
+  starts, and driver control's homing drives it down onto the bottom switch and zeroes them there.
+  That's the only time the switch zeroes them: after homing, level 0 is encoder 0, switch or no
+  switch.
 - [ ] **Level heights.** The controller's third line shows `LIFT reading/target`. In debug mode it
-  shows just the reading, so lower the lift onto the switch first (it zeroes there), then drive it to
+  shows just the reading, so let the lift home first (leave debug mode at driver control's start),
+  then drive it to
   each of a goal's heights with L1 and copy the numbers into its table. Leaving debug mode puts the
   lift back on its level, so expect it to move.
 - [ ] **The top of travel.** Read the encoders with the lift at its highest safe point. Step 2's
   window is set from it, and no goal's top level should be above it.
-- [ ] **The seek.** Out of debug mode, at a level, unplug the bottom switch and press L2 down to the
-  bottom: the lift rests at 0, drives down at `kLiftSeekVolts` for `kLiftSeekTimeoutMs`, then gives
-  up and rests (the terminal says so, and the log has a `macro,seek_failed` event). Plug it back in.
-  If the lift never gets down onto the switch in normal use, raise `kLiftSeekVolts`.
 - [ ] **`kPieceDetectMm`.** Start log, sit a pin in the claw, take it out, a few times. In the
   analyzer's **Charts**, the `mech` channel's `piece_mm` shows both readings; pick a value between.
 - [ ] **autoClaw.** Out of debug mode, lift at the bottom, R1 to open the claw with no pin in it, then
@@ -229,8 +227,7 @@ In the analyzer ([`tools/analyzer`](../tools/analyzer/)):
 5. [ ] **Seat volts.** If the lift heading for level 0 slows to a crawl just above its bottom stop,
    raise `kLiftSeatVolts` (0 now). Heading for level 0 it drives down with at least that many volts,
    without gravity volts, until its encoders read within `kLiftRestDeg` (2) of 0, then cuts power
-   and rests. If the bottom switch isn't pressed by then, the seek (`kLiftSeekVolts`) takes it the
-   rest of the way down onto it.
+   and rests, whether or not the bottom switch is pressed.
 6. [ ] Rebuild, flash, Run Test again: the same behavior, now from the code.
 
 **Tweaking.** `kLiftResponse` in [`tuning.cpp`](../src/robot/tuning.cpp) is what the design aims for:
@@ -262,22 +259,40 @@ you just worked out.
 
 ### 3b. Tracking wheels: directions and diameter
 
-There's no button for the diameter either; a tape measure does it.
+The PID page's **Wheel** button does the diameter, with a tape measure: so an inch the robot thinks
+it drove is an inch on the field.
 
 1. [ ] **Directions**, on the Odom page from a fresh start (heading 0): push the robot straight forward
    and `Y` grows; push it right and `X` grows; turn it clockwise and `H` grows. A wheel that reads
    backward gets its port's sign flipped in `config.hpp` (the vertical one is reversed today; check
-   it again on this chassis).
-2. [ ] **Diameter.** Tape out a long straight line, 96 in or more. Start the program at one end and slide
-   the robot along a wall to the other, heading held still, and read `Y`. The diameter is
-   `kTrackingWheelDiameterIn × actual / Y`. Sideways with `X` for the horizontal wheel. Do each a
-   few times and average.
-3. [ ] Put it in `kTrackingWheelDiameterIn` in `config.hpp`. Both wheels share it; if they come out more
+   it again on this chassis). Do this first: Wheel can't correct a wheel that reads backward, and
+   says so ("reads backward").
+2. [ ] **Diameter.** PID page, **Wheel** (beside Auto-Tune). Put the robot on clear floor with 5 ft
+   free ahead, square to a tile seam, and mark one of its edges on the floor (tape along the front
+   bumper). Tap **Drive 48in**: it drives straight ahead, gently so the drive wheels don't slip, and
+   stops. Tape-measure from the mark to the same edge, set **Actual** to that with **-**/**+** (1/8 in a
+   tap, hold to repeat; it starts at what the tracking wheel read), and tap **Apply**.
+3. [ ] The readout shows how far each wheel read over the run and its new diameter: **Tracking**
+   (what odometry measures with, so every trajectory and `moveTo*()`) and **Drive** (what
+   `driveDistance()` measures with). They're applied to the running program; tap **Drive 48in** again
+   and Tracking should read within an eighth of the tape. Changed Actual after an Apply? Apply again:
+   it corrects the run, it doesn't stack.
+4. [ ] Put them in `kTrackingWheelDiameterIn` and `kDriveWheelDiameterIn` in `config.hpp` (the terminal
+   and the SD log's `tune,wheel` events have them to four places). The two tracking wheels share
+   theirs, and Apply gives the horizontal wheel the vertical's; check it by pushing the robot
+   sideways along a wall a known distance and reading `X` on the Odom page. If they come out more
    than about half a percent apart, give each its own (they're separate constructor arguments in
-   `devices.cpp`).
+   `devices.cpp`): `kTrackingWheelDiameterIn × actual / X`.
 
-Holding the heading still matters: the offsets aren't calibrated yet, so a turn mid-push would put
-their error into the reading. Step 6's log calibration checks the diameter again from real driving.
+**What it does.** Drive notes each wheel's distance, drives `wheelCalibrationDrive()` in
+[`tuning.cpp`](../src/robot/tuning.cpp) (a trajectory 48 in straight ahead, heading held, at most 6 V
+and 24 in/s²; `driveDistance()` instead before there are axis models to plan with), waits for the
+robot to stop, and notes how far each wheel read. Apply sets each diameter to
+`odom::calibrateWheelDiameterIn()`: the diameter it drove with × actual / read. It doesn't matter
+how far the robot really went, only that the tape and the wheels measured the same run. The wheel
+offsets aren't calibrated yet, which is why it holds its heading: a turn mid-run would put their
+error into the reading. Step 6's log calibration checks the tracking diameter again from real
+driving.
 
 ### 3c. Wheel offsets: Calibrate Offsets
 
@@ -729,7 +744,8 @@ window), or too few volts to move it well past friction.
 | Number | Measured by | Lives in |
 |---|---|---|
 | IMU heading scale | 10 turns by hand (3a) | `imuHeadingScale`, `devices.cpp` |
-| Tracking wheel diameter | tape measure (3b); checked by the simulator's log calibration | `kTrackingWheelDiameterIn`, `config.hpp` |
+| Tracking wheel diameter | PID page, Wheel, and a tape measure (3b); checked by the simulator's log calibration | `kTrackingWheelDiameterIn`, `config.hpp` |
+| Drive wheel diameter (for `driveDistance()`) | PID page, Wheel (3b) | `kDriveWheelDiameterIn`, `config.hpp` |
 | Tracking wheel offsets | Odom page, Calibrate Offsets | `kVerticalWheelOffsetIn`, `kHorizontalWheelOffsetIn`, `config.hpp` |
 | Distance sensor mounts | Odom page, Calibrate Sensors | `k*Sensor*In`, `config.hpp` |
 | Field size | tape measure | `FieldMap::centered()` in `localizer()`, `devices.cpp` |
@@ -747,8 +763,8 @@ code's.
 
 - **IMU heading scale.** Only the math, `sensors::calibrateHeadingScale()`; nothing on the robot runs the
   turns or reads the result.
-- **Tracking wheel diameter.** Only indirectly, from the simulator's log calibration, which needs the
-  mounts and the localizer already working. Nothing measures it on the robot.
+- **The horizontal tracking wheel's own diameter.** Wheel (3b) drives forward, so it measures the
+  vertical wheel and gives the horizontal one the same; a strafe run would measure it on its own.
 - **Calibrate Offsets has no timeout** ([`ROADMAP.md`](ROADMAP.md)): a blocked spin never ends, and a
   non-finite IMU reading ends it at once with NaN offsets in the live odometry.
 - **The lift's Auto-Tune window** has to be found by a first run and a look at the log.

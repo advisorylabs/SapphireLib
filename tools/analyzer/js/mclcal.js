@@ -429,20 +429,22 @@
   }
 
   /**
-   * The chassis Auto-Tune last measured on the robot, from the logs' `tune`
-   * events: { forward, strafe, turn, delayS }, each axis { kS, kV, kA } or
-   * missing.
+   * The chassis the robot last ran, from the logs (slt.axisModels(): the
+   * models each logged as it started, and any Auto-Tune measured since):
+   * { forward, strafe, turn, delayS }, each axis { kS, kV, kA } or missing.
+   * The delay is what every Auto-Tune in the logs measured, on average, and
+   * missing without one.
    */
   function chassisOf(logs) {
     const latest = {};
+    const names = { fwd: 'forward', strafe: 'strafe', turn: 'turn' };
+    for (const [key, m] of Object.entries(slt.axisModels(logs))) {
+      latest[names[key]] = { kS: m.kS, kV: m.kV, kA: m.kA };
+    }
     const delays = [];
-    const names = { Fwd: 'forward', Strafe: 'strafe', Turn: 'turn' };
     for (const log of logs) {
       for (const m of slt.tuneEvents(log).models) {
-        const axis = names[m.axis];
-        if (!axis || !(m.kV > 0 && m.kA > 0)) continue;
-        latest[axis] = { kS: m.kS, kV: m.kV, kA: m.kA };
-        if (m.delayS > 0) delays.push(m.delayS);
+        if (m.axis in { Fwd: 1, Strafe: 1, Turn: 1 } && m.kV > 0 && m.kA > 0 && m.delayS > 0) delays.push(m.delayS);
       }
     }
     if (delays.length) latest.delayS = delays.reduce((a, b) => a + b, 0) / delays.length;

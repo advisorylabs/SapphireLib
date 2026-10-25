@@ -173,7 +173,7 @@
   }
 
   function pathFailure(error) {
-    return { ok: false, error, samples: [], lengthIn: 0.0, sectionStartIn: [] };
+    return { ok: false, error, samples: [], lengthIn: 0.0, sectionStartIn: [], waypointIn: [] };
   }
 
   /**
@@ -259,7 +259,7 @@
       });
     }
 
-    const result = { ok: true, error: '', samples: [], lengthIn: pathS, sectionStartIn: [] };
+    const result = { ok: true, error: '', samples: [], lengthIn: pathS, sectionStartIn: [], waypointIn: waypointS };
     for (const waypoint of sectionStartWaypoint) result.sectionStartIn.push(waypointS[waypoint]);
     for (let p = 0; p < pieces.length; ++p) {
       const piece = pieces[p];
@@ -511,7 +511,7 @@
   }
 
   function failure(error) {
-    return { ok: false, error, trajectory: new Trajectory() };
+    return { ok: false, error, trajectory: new Trajectory(), waypointIn: [] };
   }
 
   // a trajectory's direction of travel at a sample, on the field, in degrees clockwise from +y
@@ -738,7 +738,9 @@
         turnAccelDegPerS2: a * point.g[2] + v * v * point.h[2],
       };
     }
-    return { ok: true, error: '', trajectory: new Trajectory(out, starts) };
+    // the sections' own points: not the one carried on from, which options.from put first
+    const waypointIn = path.waypointIn.slice(options.from ? 1 : 0);
+    return { ok: true, error: '', trajectory: new Trajectory(out, starts), waypointIn };
   }
 
   // --- holonomic_tracking.cpp: the follower's math -------------------------------------------

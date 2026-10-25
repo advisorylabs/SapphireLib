@@ -45,6 +45,22 @@ PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double 
 double calibrateTrackingWheelOffsetIn(double wheelDistanceIn, double rotatedRadians);
 
 /**
+ * @brief Work out the wheel diameter that makes a wheel read the distance the robot really went
+ *
+ * What a wheel reads is proportional to its diameter, so one that read measuredIn over a run that
+ * really covered actualIn is off by actualIn / measuredIn. Drive a long run (48in or more) and
+ * tape-measure it, so an eighth of an inch on the tape is a small part of it
+ *
+ * @param diameterIn the diameter the wheel read with, in inches
+ * @param measuredIn how far the wheel read over the run, in inches
+ * @param actualIn how far the robot really went, in inches
+ * @return double the corrected diameter, in inches. NaN when the run can't give one: either
+ * distance under an inch, or the two with opposite signs (a wheel reading backward needs its sign
+ * flipped, not its size)
+ */
+double calibrateWheelDiameterIn(double diameterIn, double measuredIn, double actualIn);
+
+/**
  * @brief Work out how far a position correction moves in one update
  *
  * Odometry eases a correction in (see Odometry::setPositionCorrection()) rather than jumping,

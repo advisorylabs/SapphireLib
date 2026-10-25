@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "pros/rotation.hpp"
+#include "pros/rtos.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
 
 namespace sapphirelib::odom {
@@ -39,10 +40,39 @@ public:
     double getDistanceIn() const override;
     void reset() override;
 
+    /**
+     * @brief Get the wheel diameter it measures with. Thread-safe
+     *
+     * @return double diameter, in inches
+     */
+    double wheelDiameterIn() const;
+
+    /**
+     * @brief Change the wheel diameter, e.g. after calibrating it. Thread-safe
+     *
+     * The distance carries on from what it reads now, measuring with the new diameter from here, so
+     * odometry reading it sees no jump. See calibrateWheelDiameterIn()
+     *
+     * @param wheelDiameterIn the new diameter, in inches
+     */
+    void setWheelDiameterIn(double wheelDiameterIn);
+
 private:
+    // the diameter, and the reading it measures from: setWheelDiameterIn() moves the base up to the
+    // reading it's set at, so getDistanceIn() is baseIn plus the travel since baseCentidegrees
+    struct Scale {
+        double wheelDiameterIn;
+        double baseIn = 0.0;
+        std::int32_t baseCentidegrees = 0;
+    };
+
+    // the sensor's position, or the last good one while it isn't answering
+    std::int32_t readCentidegrees() const;
+    double inchesFor(std::int32_t centidegrees, double wheelDiameterIn) const;
+
     pros::Rotation rotation_;
-    double wheelDiameterIn_;
     double externalGearRatio_;
+    mutable pros::MutexVar<Scale> scale_;
 
     // the last good reading, in centidegrees. Atomic since any reading task updates it
     mutable std::atomic<std::int32_t> lastGoodCentidegrees_{0};

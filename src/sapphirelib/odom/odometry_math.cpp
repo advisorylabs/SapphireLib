@@ -11,6 +11,10 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegToRad = kPi / 180.0;
 
+// the shortest run calibrateWheelDiameterIn() works from: under an inch, the ratio is mostly the
+// tape's error, or the wheel didn't turn
+constexpr double kMinCalibrationRunIn = 1.0;
+
 } // namespace
 
 PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double verticalDeltaIn,
@@ -36,6 +40,15 @@ PoseDelta computeOdometryDelta(double lastHeadingDeg, double headingDeg, double 
 
 double calibrateTrackingWheelOffsetIn(double wheelDistanceIn, double rotatedRadians) {
     return wheelDistanceIn / rotatedRadians;
+}
+
+double calibrateWheelDiameterIn(double diameterIn, double measuredIn, double actualIn) {
+    // the negated comparisons also turn away NaN
+    if (!(std::fabs(measuredIn) >= kMinCalibrationRunIn) ||
+        !(std::fabs(actualIn) >= kMinCalibrationRunIn) || (measuredIn > 0.0) != (actualIn > 0.0)) {
+        return std::nan("");
+    }
+    return diameterIn * actualIn / measuredIn;
 }
 
 PoseDelta correctionStep(double remainingXIn, double remainingYIn, double maxStepIn) {

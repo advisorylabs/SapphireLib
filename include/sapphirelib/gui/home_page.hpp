@@ -63,7 +63,7 @@ public:
      *
      * It reads "<name>: ON" or "<name>: OFF" and is highlighted red while on. The state is polled
      * every refresh, so the button shows the truth even if something else changes it. Buttons stack
-     * down the page's top right corner, in the order added; there's room for one or two
+     * down the page's top right corner, in the order added; there's room for three
      *
      * @note call it before Gui::addPage(); once the page is built it's ignored, like addRow().
      * Both functions run on the GUI's task, so read and write something that's safe from there,

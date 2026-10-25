@@ -116,6 +116,34 @@ test('golden branch matches tests/motion/trajectory_generator_test.cpp', () => {
   assert.ok(T.endsMoving(trunk) && !T.endsMoving(branch) && T.continuesFrom(branch, trunk));
 });
 
+test('each waypoint\'s distance along the path, as tests/motion/trajectory_generator_test.cpp', () => {
+  const result = T.generateTrajectory([
+    { waypoints: [{ xIn: 0, yIn: 0, headingDeg: 0 }, { xIn: 0, yIn: 20 }] },
+    { waypoints: [{ xIn: 0, yIn: 30 }, { xIn: 0, yIn: 50 }], stopAtEnd: true },
+    { waypoints: [{ xIn: 0, yIn: 35 }] },
+  ], MODELS);
+  assert.ok(result.ok, result.error);
+  assert.equal(result.waypointIn.length, 5);
+  [0, 20, 30, 50, 65].forEach((expected, j) => close(result.waypointIn[j], expected, 1e-9, `waypoint ${j}`));
+  close(result.waypointIn[4], result.trajectory.lengthIn(), 1e-9, 'the last is the end');
+  // samplePath() has them too, junctions and all
+  const path = T.samplePath([
+    { waypoints: [{ xIn: 0, yIn: 0, headingDeg: 0 }, { xIn: 0, yIn: 20 }] },
+    { waypoints: [{ xIn: 0, yIn: 30 }, { xIn: 0, yIn: 40 }] },
+    { waypoints: [{ xIn: 0, yIn: 60 }] },
+  ]);
+  assert.deepEqual(path.waypointIn.map((s) => Math.round(s * 1e6) / 1e6), [0, 20, 30, 40, 60]);
+  // carrying on from another trajectory: the junction isn't one of the sections' points
+  const trunk = T.generateTrajectory([{ waypoints: [{ xIn: 0, yIn: 0, headingDeg: 0 }, { xIn: 0, yIn: 60 }] }], MODELS,
+    { endSpeedInPerS: 30 }).trajectory;
+  const branch = T.generateTrajectory([{ waypoints: [{ xIn: 0, yIn: 80 }, { xIn: 0, yIn: 100 }] }], MODELS, { from: trunk });
+  assert.ok(branch.ok, branch.error);
+  assert.equal(branch.waypointIn.length, 2);
+  close(branch.waypointIn[0], 20, 1e-9, 'first point after the junction');
+  close(branch.waypointIn[1], 40, 1e-9, 'the branch\'s end');
+  assert.deepEqual(T.generateTrajectory([{ waypoints: [{ xIn: 0, yIn: 0, headingDeg: 0 }] }], MODELS).waypointIn, []);
+});
+
 test('a branch that can\'t take the junction speed says so', () => {
   const trunk = T.generateTrajectory([{ waypoints: [{ xIn: 0, yIn: 0, headingDeg: 0 }, { xIn: 0, yIn: 60 }] }], MODELS,
     { endSpeedInPerS: 30 }).trajectory;

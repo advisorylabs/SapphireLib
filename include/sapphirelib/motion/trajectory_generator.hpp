@@ -21,6 +21,15 @@ struct TrajectoryResult {
 
     /** the plan. Empty unless ok */
     Trajectory trajectory;
+
+    /**
+     * how far along the path each of the sections' waypoints is, in inches from the trajectory's
+     * start, in order: the first section's, then each later one's. What to compare
+     * TrajectoryProgress::distanceIn against to do something as the plan reaches a point.
+     * Carrying on from another trajectory (TrajectoryOptions::from), the point it starts from
+     * isn't one of the sections', so the first is the first point after it. Empty unless ok
+     */
+    std::vector<double> waypointIn;
 };
 
 /**

@@ -10,6 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const P = require('../js/pathview.js');
 const T = require('../js/trajectory.js');
+const F = require('../js/field.js');
 const { TOUR_CHAIN } = require('../js/routines.js');
 
 test('a chain survives the document and back', () => {
@@ -28,6 +29,28 @@ test('a chain survives the document and back', () => {
   assert.equal(P.sectionOf(doc, 2), 0);
   assert.equal(P.sectionOf(doc, 3), 1);
   assert.equal(P.sectionOf(doc, 7), 2);
+});
+
+test('Logged models: all three axes from the robot\'s logs, or which are missing', () => {
+  const fwd = { kS: 0.3, kV: 0.1698, kA: 0.0383, delayS: null, from: 'logged', file: 'SL000010.CSV' };
+  const strafe = { kS: 2.21, kV: 0.3234, kA: 0.0838, delayS: null, from: 'logged', file: 'SL000010.CSV' };
+  const turn = { kS: 0.9, kV: 0.031, kA: 0.002, delayS: 0.045, from: 'autotune', file: 'SL000011.CSV' };
+  const found = P.loggedPlanModels({ fwd, strafe, turn });
+  assert.deepEqual(found.models, {
+    forward: { kS: 0.3, kV: 0.1698, kA: 0.0383 },
+    strafe: { kS: 2.21, kV: 0.3234, kA: 0.0838 },
+    turn: { kS: 0.9, kV: 0.031, kA: 0.002 },
+  });
+  assert.deepEqual(found.files, ['SL000010.CSV', 'SL000011.CSV']);
+  assert.deepEqual(found.missing, []);
+  // and they plan
+  assert.ok(T.generateTrajectory(TOUR_CHAIN, found.models).ok);
+
+  const partial = P.loggedPlanModels({ fwd });
+  assert.equal(partial.models, null);
+  assert.deepEqual(partial.missing, ['strafe', 'turn']);
+  assert.deepEqual(partial.files, ['SL000010.CSV']);
+  assert.deepEqual(P.loggedPlanModels({}).files, []);
 });
 
 test('editing keeps the sections in step with the points', () => {
@@ -83,6 +106,45 @@ test('reversing drives the same chain backward, and twice is where it started', 
   assert.deepEqual(P.toSections(doc), P.toSections(P.fromSections(TOUR_CHAIN, 'tour')));
 });
 
+test('the other alliance\'s routine is a half turn, the other Quadrant\'s a mirror, and twice is where it started', () => {
+  const doc = P.fromSections(TOUR_CHAIN, 'tour');
+  const original = P.toSections(P.fromSections(TOUR_CHAIN, 'tour'));
+  P.rotate180(doc);
+  assert.deepEqual(doc.waypoints[0], { xIn: 48, yIn: 60, headingDeg: 180 });
+  assert.deepEqual(doc.waypoints[1], { xIn: 50, yIn: 24, headingDeg: null });
+  // a point on an axis stays a plain 0, so the C++ never says -0
+  assert.ok(Object.is(doc.waypoints[3].xIn, 0));
+  P.rotate180(doc);
+  assert.deepEqual(P.toSections(doc), original);
+
+  P.mirrorDiagonal(doc);
+  // (-48, -60) facing +y becomes (-60, -48) facing +x; facing +x becomes facing +y
+  assert.deepEqual(doc.waypoints[0], { xIn: -60, yIn: -48, headingDeg: 90 });
+  assert.equal(doc.waypoints[2].headingDeg, 0);
+  assert.equal(doc.waypoints[4].headingDeg, 270);
+  P.mirrorDiagonal(doc);
+  assert.deepEqual(P.toSections(doc), original);
+});
+
+test('the field check finds the same hits, red for blue, on the other alliance\'s routine', () => {
+  const field = F.override();
+  const doc = P.fromSections(TOUR_CHAIN, 'tour');
+  const models = { forward: { kS: 1.0, kV: 0.2, kA: 0.045 }, strafe: { kS: 1.3, kV: 0.24, kA: 0.055 }, turn: { kS: 0.6, kV: 0.045, kA: 0.0065 } };
+  const check = P.fieldCheckText(doc, T.generateTrajectory(P.toSections(doc), models), 15, 15, field);
+  // the demo chain predates Override: it starts off the wall and cuts through three Goals
+  assert.ok(check.warn);
+  assert.match(check.text, /^Starts on red's side, in the bottom Quadrant\. SG1: it starts off the perimeter\./);
+  assert.deepEqual(check.hits.map((h) => h.name), ['red goal (left)', 'center goal', 'red goal (bottom)']);
+
+  P.rotate180(doc);
+  const turned = P.fieldCheckText(doc, T.generateTrajectory(P.toSections(doc), models), 15, 15, field);
+  assert.match(turned.text, /^Starts on blue's side, in the top Quadrant\./);
+  assert.deepEqual(turned.hits.map((h) => h.name), ['blue goal (right)', 'center goal', 'blue goal (top)']);
+  turned.hits.forEach((h, i) => assert.ok(Math.abs(h.tS - check.hits[i].tS) < 1e-6));
+
+  assert.equal(P.fieldCheckText(P.emptyDoc(), null, 15, 15, field).text, '');
+});
+
 const SMALL = [
   { waypoints: [{ xIn: -48, yIn: -60, headingDeg: 0 }, { xIn: -40, yIn: -30.25 }] },
   { waypoints: [{ xIn: -24, yIn: -12, headingDeg: 45 }],
@@ -134,4 +196,74 @@ test('Paste C++ reads it back, comments and all', () => {
   assert.ok(!P.parseCpp('nothing here').ok);
   assert.match(P.parseCpp('kX{{.waypoints = {{.yIn = 1}}}};').error, /needs \.xIn and \.yIn/);
   assert.match(P.parseCpp('kX{{.waypoints = {{.xIn = 1, .yIn = 2}}').error, /missing \}/);
+  // a name is only for the actions: in the sections it's still a mistake
+  assert.match(P.parseCpp('kX{{.waypoints = {{.xIn = kA, .yIn = 2}}}};').error, /expected a number, true, false, or \{/);
+});
+
+test('a point\'s claw and extender actions go out as robot::PathAction, and come back', () => {
+  const doc = P.fromSections(SMALL, 'left rush');
+  P.setAction(doc, 1, 'extender', 'out');
+  P.setAction(doc, 2, 'claw', 'open');
+  P.setAction(doc, 2, 'extender', 'in');
+  P.setAction(doc, 3, 'claw', 'close');
+  assert.deepEqual(P.actionLabels(doc.waypoints[2]), ['claw open', 'ext in']);
+  // the sections the planner gets don't change
+  assert.deepEqual(P.toSections(doc), P.toSections(P.fromSections(SMALL, 'left rush')));
+  const text = P.toCpp(doc, '3.42 s planned with the Robot tab\'s models');
+  assert.equal(text.split('\n').slice(9).join('\n'), [
+    '// what the claw and the extender do along "left rush", by point (robot::followPath())',
+    'const std::vector<robot::PathAction> kLeftRushActions{',
+    '    {.waypoint = 1, .action = robot::PathAction::extenderOut},',
+    '    {.waypoint = 2, .action = robot::PathAction::clawOpen},',
+    '    {.waypoint = 2, .action = robot::PathAction::extenderIn},',
+    '    {.waypoint = 3, .action = robot::PathAction::clawClose},',
+    '};',
+  ].join('\n'));
+
+  // Paste C++ puts them back on their points
+  const parsed = P.parseCpp(text);
+  assert.ok(parsed.ok, parsed.error);
+  assert.deepEqual(parsed.doc.waypoints, doc.waypoints);
+  assert.equal(P.toCpp(parsed.doc, '3.42 s planned with the Robot tab\'s models'), text);
+  // ...written by hand, with the namespace left off
+  const hand = P.parseCpp(`${P.toCpp(P.fromSections(SMALL, 'left rush'))}
+    const std::vector<PathAction> kLeftRushActions{{.waypoint = 0, .action = PathAction::extenderOut}};`);
+  assert.ok(hand.ok, hand.error);
+  assert.equal(hand.doc.waypoints[0].extender, 'out');
+  // an action that isn't one, or on a point the path doesn't have
+  const sections = P.toCpp(P.fromSections(SMALL, 'left rush'));
+  assert.match(P.parseCpp(`${sections} kLeftRushActions{{.waypoint = 0, .action = PathAction::intakeOn}};`).error,
+    /no PathAction::intakeOn/);
+  assert.match(P.parseCpp(`${sections} kLeftRushActions{{.waypoint = 9, .action = PathAction::clawOpen}};`).error,
+    /no point 9/);
+
+  // clearing one takes it off; with none left, no list at all
+  for (const j of [1, 2, 3]) {
+    P.setAction(doc, j, 'claw', null);
+    P.setAction(doc, j, 'extender', null);
+  }
+  assert.deepEqual(P.actionsOf(doc), []);
+  assert.ok(!P.toCpp(doc).includes('PathAction'));
+});
+
+test('actions stay on their points through editing and reversing', () => {
+  const doc = P.fromSections(SMALL, 'left rush');
+  P.setAction(doc, 2, 'claw', 'open');
+  // a point inserted before it moves it along, and removing another doesn't take it
+  P.insertWaypoint(doc, 1, { xIn: -44, yIn: -45 });
+  assert.equal(doc.waypoints[3].claw, 'open');
+  P.removeWaypoint(doc, 1);
+  assert.equal(doc.waypoints[2].claw, 'open');
+  // driven backward, it's still where it was on the field
+  P.reverse(doc);
+  const at = doc.waypoints.findIndex((w) => w.claw === 'open');
+  assert.deepEqual([doc.waypoints[at].xIn, doc.waypoints[at].yIn], [-24, -12]);
+  assert.deepEqual(P.actionsOf(doc).map(({ waypoint, action }) => [waypoint, action.cpp]), [[at, 'clawOpen']]);
+});
+
+test('ACTIONS matches robot::PathAction, in its order', () => {
+  // include/robot/paths.hpp: followPath() and the C++ that Copy C++ writes both go by these names
+  const header = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../include/robot/paths.hpp'), 'utf8');
+  const kinds = header.match(/enum Kind[^{]*\{([^}]*)\}/)[1].replace(/\/\/[^\n]*/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+  assert.deepEqual(P.ACTIONS.map((a) => a.cpp), kinds);
 });

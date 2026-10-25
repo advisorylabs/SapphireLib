@@ -105,6 +105,8 @@ void FaceScreen::tick() {
             // fresh: eyes open, and no bump measured against an average from before it was hidden
             animator_.reset(now);
             bumps_.reset();
+            // nor a wink for something counted while it was down
+            winksSeen_ = config_.winks ? config_.winks() : 0;
             drawnValid_ = false;
             lv_obj_remove_flag(root_, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -119,6 +121,13 @@ void FaceScreen::tick() {
         bumped = bumps_.update(accel.x, accel.y, accel.z, now);
         // for tuning BumpConfig::thresholdG: how hard each bump that counted was
         if (bumped) telemetry::event("face", "bump,g=%.2f", bumps_.lastJoltG());
+    }
+    if (config_.winks) {
+        const std::uint32_t winks = config_.winks();
+        if (winks != winksSeen_) {
+            winksSeen_ = winks;
+            animator_.startWink(now);
+        }
     }
     const bool squinting = config_.squinting && config_.squinting();
     draw(animator_.update(now, squinting, bumped));

@@ -196,6 +196,40 @@ test('characterization runs split at the runner\'s waits and drop the extra row'
   assert.equal(reported.delayS, 0.02);
 });
 
+test('axis models: what each log started with, then any Auto-Tune since, the newest file winning', () => {
+  const log = (file, meta, events = '') => slt.parse(`#SLT,1\n#meta,file,${file}\n` +
+    meta.map(([k, v]) => `#meta,${k},${v}\n`).join('') + `#chan,2,x,samples,2,a\nS,2,1000,1\n${events}S,2,9000,2\n`, file);
+  // as tune.cpp logs them; the turn line is one TUNE.CFG would refuse, so it's no model
+  const coded = log('SL000010.CSV', [['model.fwd', '0.3,0.1698,0.0383'], ['model.strafe', '2.21,0.3234,0.0838'],
+    ['model.turn', '1.1,0.0318']]);
+  let m = slt.axisModels(coded);
+  assert.deepEqual({ ...m.fwd }, { kS: 0.3, kV: 0.1698, kA: 0.0383, delayS: null, from: 'logged', file: 'SL000010.CSV',
+    t: coded.start });
+  assert.equal(m.strafe.kS, 2.21);
+  assert.equal(m.turn, undefined);
+  for (const bad of ['-0.1,0.03,0.002', '0.5,0,0.002', '0.5,0.03,x', '']) {
+    assert.equal(slt.axisModels(log('SL000011.CSV', [['model.turn', bad]])).turn, undefined, bad);
+  }
+
+  // an Auto-Tune in the run replaces its axis from then on, with the delay it measured
+  const tuned = log('SL000011.CSV', [['model.turn', '1.1,0.0318,0.0019']],
+    'E,5000,tune,model,Turn,kS=0.9000,kV=0.03100,kA=0.00200,r2=0.990,delay_ms=45\n');
+  m = slt.axisModels([coded, tuned]);
+  assert.equal(m.turn.from, 'autotune');
+  assert.equal(m.turn.kV, 0.031);
+  assert.equal(m.turn.delayS, 0.045);
+  assert.equal(m.fwd.file, 'SL000010.CSV', 'an axis the newer file says nothing about keeps the older say');
+
+  // a restart logs what the program started with again, whatever order the files come in
+  const restarted = log('SL000012.CSV', [['model.turn', '1.1,0.0318,0.0019']]);
+  for (const logs of [[coded, tuned, restarted], [restarted, coded, tuned]]) {
+    m = slt.axisModels(logs);
+    assert.equal(m.turn.from, 'logged');
+    assert.equal(m.turn.file, 'SL000012.CSV');
+    assert.equal(m.turn.kA, 0.0019);
+  }
+});
+
 test('files split by an SD fault merge back into one run', () => {
   const first = slt.parse('#SLT,1\n#meta,file,SL000007.CSV\n#chan,2,x,samples,2,a\n' +
     'E,1000,file,open,SL000007.CSV\nS,2,2000,1\nS,2,3000,2\n', 'SL000007.CSV');

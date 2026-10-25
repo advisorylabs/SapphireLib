@@ -22,6 +22,7 @@
 #include "robot/autons.hpp"
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
+#include "robot/driver.hpp"
 #include "robot/macros.hpp"
 #include "robot/teach.hpp"
 #include "robot/telemetry.hpp"
@@ -98,12 +99,13 @@ private:
 
 /// The face (see FaceScreen): up on its own through autonomous and driver
 /// control under competition control, or from the Home page's Face button,
-/// and down at a tap. It squints while the lift climbs, and looks surprised
-/// when the IMU feels a bump.
+/// and down at a tap. It squints while the lift climbs, winks as each score
+/// (R2) opens the claw, and looks surprised when the IMU feels a bump.
 FaceScreen& face() {
     static LiftRiseWatch lift;
     static FaceScreen instance({
         .squinting = [] { return lift.rising(); },
+        .winks = [] { return macros::scoreCount(); },
         // TODO: tune BumpConfig::thresholdG (0.8g) if hits go unnoticed or
         // the robot's own driving looks surprised: the log's face,bump
         // events have each counted bump's size.
@@ -155,6 +157,11 @@ void buildScreen() {
         [](bool on) {
             if (on != teach::recording()) teach::requestToggle();
         });
+    // Practice mode (driver.hpp): pushing a drive stick past
+    // kPracticeMaxThrottlePct (config.hpp) cuts the drive's power until it's
+    // back under. Red while on.
+    homePage->addToggle(
+        "Practice", [] { return practiceMode(); }, [](bool on) { setPracticeMode(on); });
     // The face outside a match, bottom right of the page. A tap anywhere on
     // it brings this page back.
     homePage->addButton("Face", [] { face().show(); });

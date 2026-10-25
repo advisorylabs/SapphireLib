@@ -27,6 +27,9 @@ namespace sapphirelib::gui {
  * mechanism on its own. While it runs, the Auto-Tune button reads "Stop"; tapping it, or disabling
  * the robot, ends the run and applies nothing
  *
+ * With enableWheelCalibration(), a "Wheel" button beside Auto-Tune corrects the wheels' diameters
+ * so an inch of travel reads as an inch: see there
+ *
  * @b Example
  * @code {.cpp}
  * auto tuner = std::make_unique<sapphirelib::gui::PidTunerPage>();
@@ -99,6 +102,43 @@ public:
     void setToggle(std::function<std::string()> label, std::function<void()> onTap);
 
     /**
+     * @brief A wheel the Wheel calibration corrects: anything that measures travel by its diameter
+     */
+    struct CalibratedWheel {
+        /** what the readout calls it, e.g. "Tracking". Keep it short */
+        std::string name;
+        /** how far it has rolled, in inches by its diameter now */
+        std::function<double()> distanceIn;
+        /** its diameter now, in inches */
+        std::function<double()> diameterIn;
+        /** applies a corrected diameter, in inches, to the running program */
+        std::function<void(double)> setDiameterIn;
+    };
+
+    /**
+     * @brief Add a "Wheel" button: drive forward, tape-measure how far the robot really went, and
+     * correct each wheel's diameter so an inch of travel reads as an inch
+     *
+     * Wheel swaps the gain controls for the calibration's. Drive notes each wheel's distance, runs
+     * driveForward on a background task, and notes how far each one read once the robot stops.
+     * Actual starts at what the first wheel read; -/+ step it by 1/8in (hold to repeat) to what the
+     * tape says. Apply sets each wheel's diameter to calibrateWheelDiameterIn() of the run: its
+     * diameter at the drive times actual / read, so it can be applied again after changing Actual.
+     * Nothing is saved: the readout shows each new diameter to copy into the code. Back, or a
+     * controller's button, goes back to the gains. Call before the page is added to a Gui
+     *
+     * @param wheels the wheels to correct, e.g. the tracking wheel odometry drives by and the drive
+     * wheels driveDistance() measures with. Actual starts from the first one's reading
+     * @param driveForward drives straight forward about distanceIn, returning once the robot has
+     * stopped. Runs on a background task. Drive gently: a drive wheel that slips counts the slip as
+     * travel
+     * @param distanceIn how far to drive, in inches. 48 by default: the longer the run, the less an
+     * eighth of an inch on the tape matters
+     */
+    void enableWheelCalibration(std::vector<CalibratedWheel> wheels,
+                                std::function<void(double)> driveForward, double distanceIn = 48.0);
+
+    /**
      * @brief Whether a test or Auto-Tune is running
      *
      * Driver control must not command the drivetrain meanwhile, or it fights the run. See
@@ -167,6 +207,16 @@ private:
     void setDisplayedGains(PIDGains gains);
     const Axis* findAxis(const std::string& name) const;
 
+    // the Wheel calibration: the panel it swaps in for the gains, its drive, and its Apply
+    void buildWheelPanel();
+    void setWheelMode(bool on);
+    void runWheelDrive();
+    void adjustActual(double deltaIn);
+    void applyWheelSizes();
+    void refreshWheelLabels();
+    // the readout column's text while the Wheel panel is up
+    std::string wheelReadoutText() const;
+
     static void selectorClicked(lv_event_t* e);
     static void kpMinusClicked(lv_event_t* e);
     static void kpPlusClicked(lv_event_t* e);
@@ -177,6 +227,12 @@ private:
     static void runTestClicked(lv_event_t* e);
     static void autoTuneClicked(lv_event_t* e);
     static void toggleClicked(lv_event_t* e);
+    static void wheelClicked(lv_event_t* e);
+    static void wheelBackClicked(lv_event_t* e);
+    static void wheelDriveClicked(lv_event_t* e);
+    static void actualMinusClicked(lv_event_t* e);
+    static void actualPlusClicked(lv_event_t* e);
+    static void wheelApplyClicked(lv_event_t* e);
 
     std::vector<std::unique_ptr<Axis>> axes_;
     std::vector<std::unique_ptr<Entry>> entries_;
@@ -184,6 +240,25 @@ private:
 
     std::function<std::string()> toggleLabel_;
     std::function<void()> toggleTap_;
+
+    // the Wheel calibration, see enableWheelCalibration()
+    std::vector<CalibratedWheel> wheels_;
+    std::function<void(double)> wheelDrive_;
+    double wheelDistanceIn_ = 48.0;
+    // each wheel's diameter at the last drive and how far it read over it: written by the drive's
+    // task while testRunning_ is true, read by the GUI once wheelRunReady_ says so
+    std::vector<double> wheelDiameterAtRunIn_;
+    std::vector<double> wheelReadIn_;
+    std::atomic<bool> wheelDriving_{false};
+    std::atomic<bool> wheelRunReady_{false};
+    // the rest is the GUI task's alone
+    bool wheelMode_ = false;
+    bool wheelMeasured_ = false; // a drive has finished, so Apply has something to go on
+    bool wheelApplied_ = false;  // Apply has run since that drive
+    double actualIn_ = 0.0;
+    double appliedActualIn_ = 0.0; // the Actual the last Apply used
+    // what Apply set each wheel to, NaN for one it couldn't correct
+    std::vector<double> wheelAppliedIn_;
 
     // what refreshGainLabels() shows. The Auto-Tune task writes gains while update() reads them,
     // so neither reads PID::gains() for display
@@ -208,6 +283,11 @@ private:
     lv_obj_t* toggleButton_ = nullptr;
     lv_obj_t* toggleButtonLabel_ = nullptr;
     lv_obj_t* autoTuneLabel_ = nullptr;
+    // the gain rows, Run Test, Auto-Tune and Wheel, and the toggle; and what replaces them
+    lv_obj_t* gainPanel_ = nullptr;
+    lv_obj_t* wheelPanel_ = nullptr;
+    lv_obj_t* actualLabel_ = nullptr;
+    lv_obj_t* wheelHintLabel_ = nullptr;
 };
 
 } // namespace sapphirelib::gui

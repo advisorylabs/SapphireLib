@@ -39,7 +39,18 @@ sapphirelib::input::Controller& controller();
 ///     tracking wheels and the IMU, never the localizer, whose corrections
 ///     drift during driver control. Ends on any restart (autonomous, a
 ///     disable).
+///   - In practice mode (setPracticeMode()), any drive stick past
+///     kPracticeMaxThrottlePct (config.hpp) cuts the drive motors' power, in
+///     orbit mode too, with a short rumble as it cuts. Power comes back once
+///     every drive stick is under it again.
 void drive(sapphirelib::input::Controller& controller);
+
+/// Turns practice mode on or off, from any task (the Home page's Practice
+/// button). Off at startup.
+void setPracticeMode(bool on);
+
+/// Whether practice mode is on.
+bool practiceMode();
 
 /// Button shortcuts that aren't driving, checked every tick, including while
 /// a GUI routine is busy, since a button press is only seen on the one tick
@@ -51,6 +62,7 @@ void drive(sapphirelib::input::Controller& controller);
 ///     (macros::stop()), and blocks until the routine ends.
 ///
 /// X+A, teach mode's start and stop, is teach::update()'s (robot/teach.hpp).
+/// A alone, the auto cycle, is autocycle::update()'s (robot/autocycle.hpp).
 /// While it records, line 1 says so instead of the drive mode.
 void shortcuts(sapphirelib::input::Controller& controller);
 

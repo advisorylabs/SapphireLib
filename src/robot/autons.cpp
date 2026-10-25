@@ -17,6 +17,7 @@
 #include "pros/rtos.hpp"
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
+#include "robot/paths.hpp"
 #include "robot/teach.hpp"
 #include "sapphirelib/motion/motion_queue.hpp"
 #include "sapphirelib/motion/trajectory_generator.hpp"
@@ -137,6 +138,33 @@ bool planPiece(const char* name, TrajectoryResult& out,
     return out.ok;
 }
 
+// For checking followPath() on the robot (paths.hpp): a path with actions on
+// its points, as the Paths tab writes one. Robot-relative like the Trajectory
+// Test, so it needs about 30in clear ahead: out 24in with the extender going
+// out as it passes point 1, a stop at point 2 where the claw opens and the
+// extender comes back in, then straight back to the start, where the claw
+// closes again.
+const std::vector<TrajectorySection> kPathActionsTest{
+    {.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0},
+                   {.xIn = 0, .yIn = 12},
+                   {.xIn = 0, .yIn = 24}},
+     .stopAtEnd = true},
+    {.waypoints = {{.xIn = 0, .yIn = 0}}},
+};
+const std::vector<PathAction> kPathActionsTestActions{
+    {.waypoint = 1, .action = PathAction::extenderOut},
+    {.waypoint = 2, .action = PathAction::clawOpen},
+    {.waypoint = 2, .action = PathAction::extenderIn},
+    {.waypoint = 3, .action = PathAction::clawClose},
+};
+
+void pathActionsTestAuton() {
+    static TrajectoryResult plan; // the motion reads it to the end
+    if (!planPiece("path actions test", plan, kPathActionsTest)) return;
+    odometry().setPose({.xIn = 0, .yIn = 0, .headingDeg = 0});
+    followPath(plan, kPathActionsTestActions);
+}
+
 // Branching (docs/TRAJECTORIES.md#branching), two ways. Both are robot-
 // relative like the Trajectory Test: the routine sets where the robot sits as
 // (0, 0) facing 0, and needs about 50in clear ahead and 15in to each side. The
@@ -253,6 +281,7 @@ void registerAutons(AutonSelectorPage& selector) {
     selector.addRoutine("Drive Forward", &driveForwardAuton);
     selector.addRoutine("Turn Testing", &turnTestingAuton);
     selector.addRoutine("Trajectory Test", &trajectoryTestAuton);
+    selector.addRoutine("Path Actions Test", &pathActionsTestAuton);
     selector.addRoutine("Branch Test", &branchTestAuton);
     selector.addRoutine("Branch At Speed", &branchAtSpeedAuton);
     // replays the drive taught last (teach.cpp): X+A in driver control

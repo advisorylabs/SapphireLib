@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sapphire-sim",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "tools"],
+      "port": 8765
+    },
+    {
+      "name": "sapphire-sim-alt",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8781", "--bind", "127.0.0.1", "--directory", "tools"],
+      "port": 8781,
+      "autoPort": false
+    }
+  ]
+}

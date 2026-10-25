@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
 #include "sapphirelib/util/angle.hpp"
 
@@ -243,6 +244,7 @@ SampledPath samplePath(const std::vector<TrajectorySection>& sections, const Pat
     for (std::size_t waypoint : sectionStartWaypoint) {
         result.sectionStartIn.push_back(waypointS[waypoint]);
     }
+    result.waypointIn = std::move(waypointS);
     for (std::size_t p = 0; p < pieces.size(); ++p) {
         const Piece& piece = pieces[p];
         const ArcTable& table = tables[p];

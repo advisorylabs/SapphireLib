@@ -53,11 +53,12 @@ struct FaceShape {
 
 /**
  * @brief The face's moods and timing: open eyes that blink every few seconds (now and then
- * twice), a squint, and a surprised look after a bump
+ * twice), a squint, a surprised look after a bump, and a wink when asked for one
  *
  * Pure: no LVGL, no clock, no sensors. Each frame, pass the time and what's going on, and draw the
  * FaceShape that comes back. Moods ease in and out over a few frames instead of snapping. A
- * surprise beats a squint, and no blink starts while surprised
+ * surprise beats a squint, and no blink starts while surprised or winking. A wink shows over any
+ * mood
  *
  * @note not thread-safe
  *
@@ -66,6 +67,7 @@ struct FaceShape {
  * sapphirelib::gui::FaceAnimator face(480, 272);
  * face.reset(now);
  * // every frame
+ * if (scored) face.startWink(now);
  * const sapphirelib::gui::FaceShape shape = face.update(now, liftRising, bumpedThisFrame);
  * @endcode
  */
@@ -100,9 +102,25 @@ public:
     FaceShape update(std::uint32_t nowMs, bool squinting, bool bumped);
 
     /**
+     * @brief Wink: the eye on the screen's right shuts for about half a second and opens again,
+     * its brow dipping, while the other stays open. It starts showing at the next update()
+     *
+     * One asked for while a wink is shut or opening again keeps the eye shut a little longer,
+     * rather than opening it all the way to start over
+     *
+     * @param nowMs the current time, in milliseconds
+     */
+    void startWink(std::uint32_t nowMs);
+
+    /**
      * @brief How shut a blink has the eyes, 0 (open) to 1 (shut)
      */
     double blink() const;
+
+    /**
+     * @brief How shut a wink has the winking eye, 0 (open) to 1 (shut)
+     */
+    double wink() const;
 
     /**
      * @brief How far the squint has eased in, 0 (none) to 1 (full)
@@ -116,6 +134,7 @@ public:
 
 private:
     double blinkAt(std::uint32_t nowMs) const;
+    double winkAt(std::uint32_t nowMs) const;
     void waitForNextBlink(std::uint32_t nowMs);
     FaceShape shape() const;
 
@@ -136,7 +155,11 @@ private:
     bool surprised_ = false;
     std::uint32_t bumpMs_ = 0;
 
+    bool winking_ = false;
+    std::uint32_t winkStartMs_ = 0;
+
     double blink_ = 0.0;
+    double wink_ = 0.0;
     double squint_ = 0.0;
     double surprise_ = 0.0;
 };

@@ -58,7 +58,8 @@
     <dl>
       <dt>Drag</dt><dd>the defender</dd>
       <dt>Click</dt><dd>where to put the robot, after <em>Pick up</em></dd>
-      <dt>Paths tab</dt><dd>click to add a point, drag to move, right-click or <kbd>Del</kbd> to remove</dd>
+      <dt>Paths tab</dt><dd>click to add a point, drag to move, right-click or <kbd>Del</kbd> to remove; select one to have the claw or the extender do something there</dd>
+      <dt>Hover</dt><dd>where the cursor is, in inches, and what's there (bottom right)</dd>
       <dt>Follow</dt><dd>×4, ×12 zoom on the robot, with a scale bar</dd>
     </dl>
   </div>
@@ -68,7 +69,7 @@
       <dt>Distance</dt><dd>inches</dd>
       <dt>Angles</dt><dd>degrees, clockwise from +y</dd>
       <dt>Origin</dt><dd>field center; +x right, +y downfield (up)</dd>
-      <dt>Field</dt><dd>140.5 in wall to wall, 24 in tiles</dd>
+      <dt>Field</dt><dd>Override (2026-27) to scale, from the audience: red on the left. 140.5 in wall to wall, 23.55 in tiles</dd>
       <dt>Ellipse</dt><dd>2σ of the particle cloud</dd>
     </dl>
   </div>
@@ -162,16 +163,28 @@
         <div class="row">
           <label class="inline grow">Name <input class="text-input grow" id="path-name" type="text" spellcheck="false"></label>
         </div>
+        <div class="row">
+          <label class="inline" title="The chassis's footprint, for the check against the Goals, Loaders and walls (and the simulated robot). Starting size is at most 18 × 18">Robot
+            <input class="num-input" id="path-robot-width" type="number" min="6" max="24" step="0.5" aria-label="Robot width, inches"> ×
+            <input class="num-input" id="path-robot-length" type="number" min="6" max="24" step="0.5" aria-label="Robot length, inches"> in
+            <span class="hint">across × front to back</span></label>
+        </div>
         <div class="row wrap">
           <button class="btn primary" id="path-run-btn" type="button" title="Put the robot at the first point and followTrajectory()">Run</button>
           <button class="btn" id="path-reverse-btn" type="button" title="The same chain driven backward">Reverse</button>
+          <button class="btn" id="path-rotate-btn" type="button"
+            title="The same routine for the other alliance: every point turned half a turn about the middle. The field turns into itself, red for blue">Other alliance</button>
+          <button class="btn" id="path-mirror-btn" type="button"
+            title="The same routine from your alliance's other Quadrant: mirrored across the y = x diagonal. The Goals, tape, Toggles and wall Pins land on their twins; the Loaders don't (they're on the side walls only)">Other quadrant</button>
         </div>
         <p class="result" id="path-status" hidden></p>
+        <p class="result" id="path-field" hidden></p>
         <p class="result" id="path-run-result" hidden></p>
       </section>
       <section class="panel">
         <header><h3>Points</h3><span class="hint">drag a point's handle to set where it faces (Shift: 15°)</span></header>
         <div class="table-wrap"><table class="data-table path-table" id="path-points"></table></div>
+        <div class="point-actions" id="path-point-actions"></div>
       </section>
       <section class="panel">
         <header><h3>Sections</h3><span class="hint">0 is no cap: the voltage budget limits it</span></header>
@@ -180,10 +193,17 @@
       <section class="panel">
         <header><h3>Plan</h3><span class="hint" id="path-models-hint"></span></header>
         <div class="segments" id="path-models-seg" role="group" aria-label="Plan with"
-          title="The robot plans with the models in its TUNE.CFG (or setAxisModels())">
+          title="The robot plans with the models in its TUNE.CFG (or setAxisModels()), and logs them in every SL*.CSV">
           <button type="button" data-value="robot" aria-pressed="true">Robot tab's models</button>
           <button type="button" data-value="tune" aria-pressed="false">Open TUNE.CFG's</button>
+          <button type="button" data-value="log" aria-pressed="false">Logged models</button>
         </div>
+        <div class="drop" id="path-log-drop">
+          <button class="btn" id="path-log-btn" type="button" title="The axis models the robot ran, from its log's model.* lines">Open log…</button>
+          <span class="hint">or drop the robot's SL*.CSV here, for the models it ran</span>
+          <input type="file" id="path-log-files" multiple accept=".csv,.CSV" hidden>
+        </div>
+        <p class="result" id="path-log-status" hidden></p>
         <div class="gains num" id="path-summary"></div>
         <canvas class="path-chart" id="path-chart" aria-label="Planned speed and the worst wheel's volts over time"></canvas>
       </section>
@@ -239,7 +259,7 @@
         <div class="checks" id="defender-checks"></div>
       </section>
       <section class="panel">
-        <header><h3>Field elements</h3></header>
+        <header><h3>Field elements</h3><span class="hint">Override's Goals and Loaders</span></header>
         <div class="checks" id="element-checks"></div>
       </section>
       <section class="panel">
@@ -349,6 +369,7 @@
 <script src="../analyzer/js/tunefile.js"></script>
 <script src="../analyzer/js/mclcal.js"></script>
 <script src="js/world.js"></script>
+<script src="js/field.js"></script>
 <script src="js/trajectory.js"></script>
 <script src="js/robot.js"></script>
 <script src="js/routines.js"></script>

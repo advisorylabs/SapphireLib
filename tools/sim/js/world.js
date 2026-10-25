@@ -53,7 +53,9 @@
   function defaultSettings() {
     return {
       fieldSizeIn: L.kVrcFieldSizeIn,
-      robotSizeIn: 15,
+      // the chassis's footprint: across, and front to back
+      robotWidthIn: 15,
+      robotLengthIn: 15,
       // the chassis, as Auto-Tune would measure it
       models: {
         forward: { kS: 1.0, kV: 0.2, kA: 0.045 },
@@ -264,10 +266,10 @@
       this.sampleSensors();
     }
 
-    /** Keep the robot (a circle) out of the walls and elements, sliding along them. */
+    /** Keep the robot (a circle as wide as its longer side) out of the walls and elements, sliding along them. */
     collide() {
       const s = this.settings;
-      const r = s.robotSizeIn / 2;
+      const r = Math.max(s.robotWidthIn, s.robotLengthIn) / 2;
       const half = s.fieldSizeIn / 2;
       const t = this.truth;
       if (t.xIn < -half + r) this.pushOut(-half + r - t.xIn, 0);

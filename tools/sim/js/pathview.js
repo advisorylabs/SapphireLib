@@ -6,7 +6,10 @@
  * it in the simulator, and copy it out as C++ for src/robot/autons.cpp (and
  * paste that back in to keep editing). The robot plans the same chain with
  * the same planner (trajectory.js is its port), so what this shows is what
- * the robot drives, given the same axis models.
+ * the robot drives, given the same axis models. Planned on Override's field
+ * (field.js): it says where the routine starts against SG1 and what the
+ * robot's footprint runs into on the way, and turns a routine into the other
+ * alliance's or the other Quadrant's.
  *
  * The path document, and its C++ in both directions, are plain functions
  * that also load under Node for the tests. build() wires the tab, in a
@@ -15,7 +18,11 @@
  * A document is { name, waypoints: [{ xIn, yIn, headingDeg }] (headingDeg
  * null for none), breaks, sections }: section k ends at waypoint breaks[k]
  * (each section after the first starts from the previous one's last point),
- * and sections[k] is { constraints, stopAtEnd }.
+ * and sections[k] is { constraints, stopAtEnd }. A waypoint may also say what
+ * the robot's claw and extender do on reaching it: claw 'open' or 'close',
+ * extender 'out' or 'in' (see ACTIONS), absent for nothing. They go out as a
+ * second C++ list beside the sections, for robot::followPath()
+ * (include/robot/paths.hpp).
  *
  * Plain script: window.SIM.pathview in a browser, require('./pathview.js') in
  * Node.
@@ -24,21 +31,34 @@
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory(require('./trajectory.js'));
+    module.exports = factory(require('./trajectory.js'), require('./field.js'));
   } else {
     const root = typeof self !== 'undefined' ? self : this;
     root.SIM = root.SIM || {};
-    root.SIM.pathview = factory(root.SIM.trajectory);
+    root.SIM.pathview = factory(root.SIM.trajectory, root.SIM.field);
   }
-})(function (T) {
+})(function (T, F) {
   'use strict';
 
   const kStorageKey = 'sapphire-sim.paths.v1';
+  // the footprint, kept apart from the paths: it's the robot's, not any one path's
+  const kRobotStorageKey = 'sapphire-sim.robot.v1';
   const kSnapIn = 0.5;
   const kFieldHalfIn = 70.25;
   const AXES = [['forward', 'Fwd', 'in'], ['strafe', 'Strafe', 'in'], ['turn', 'Turn', '°']];
   // each section's color, by the page's CSS tokens (render.js reads the same names)
   const SECTION_COLORS = ['series-1', 'series-3', 'series-7', 'series-5', 'series-4', 'series-2'];
+  // What a point can have the robot's claw and extender do: robot::PathAction's kinds
+  // (include/robot/paths.hpp), in the same order, so keep the two the same. `field` is the
+  // waypoint's field for that mechanism and `value` what it holds for this one.
+  const ACTIONS = [
+    { field: 'claw', value: 'open', cpp: 'clawOpen', label: 'claw open' },
+    { field: 'claw', value: 'close', cpp: 'clawClose', label: 'claw close' },
+    { field: 'extender', value: 'out', cpp: 'extenderOut', label: 'ext out' },
+    { field: 'extender', value: 'in', cpp: 'extenderIn', label: 'ext in' },
+  ];
+  // each mechanism's field and name, in ACTIONS' order
+  const MECHANISMS = [['claw', 'Claw'], ['extender', 'Extender']];
 
   // --- The document -----------------------------------------------------------------------------
 
@@ -106,6 +126,7 @@
 
   function insertWaypoint(doc, index, point) {
     const w = { xIn: point.xIn, yIn: point.yIn, headingDeg: point.headingDeg === undefined ? null : point.headingDeg };
+    for (const [field] of MECHANISMS) if (point[field]) w[field] = point[field];
     // the first point is where the robot starts: it always has a heading
     if (doc.waypoints.length === 0 && w.headingDeg === null) w.headingDeg = 0;
     doc.waypoints.splice(index, 0, w);
@@ -160,6 +181,34 @@
     Object.assign(doc, { waypoints: points, breaks, sections });
   }
 
+  const wrapHeading = (deg) => ((deg % 360) + 360) % 360;
+
+  /**
+   * The same routine for the other alliance. Override's field turns into itself under a half turn
+   * about the middle, red for blue, so every point turns half a turn and every heading with it.
+   */
+  function rotate180(doc) {
+    for (const w of doc.waypoints) {
+      // || 0 so a point on an axis doesn't come back as -0
+      w.xIn = -w.xIn || 0;
+      w.yIn = -w.yIn || 0;
+      if (w.headingDeg !== null) w.headingDeg = wrapHeading(w.headingDeg + 180);
+    }
+  }
+
+  /**
+   * The same routine from the alliance's other Quadrant: mirrored across the y = x diagonal, which
+   * swaps left for bottom and top for right. The Goals, the tape, the Toggles and the objects along
+   * the walls land on their twins; the Loaders don't, being on the side walls only.
+   */
+  function mirrorDiagonal(doc) {
+    for (const w of doc.waypoints) {
+      [w.xIn, w.yIn] = [w.yIn, w.xIn];
+      // facing (sin h, cos h) becomes (cos h, sin h): 90 - h
+      if (w.headingDeg !== null) w.headingDeg = wrapHeading(90 - w.headingDeg);
+    }
+  }
+
   /** Index to insert a point clicked near the path at: after the nearest chord's start. */
   function insertionIndex(doc, xIn, yIn) {
     let best = doc.waypoints.length;
@@ -178,6 +227,28 @@
       }
     }
     return best;
+  }
+
+  /** Set what waypoint j has `field`'s mechanism do: one of ACTIONS' values, or null for nothing. */
+  function setAction(doc, j, field, value) {
+    const w = doc.waypoints[j];
+    if (!w) return;
+    if (value) w[field] = value;
+    else delete w[field];
+  }
+
+  /** Every action on the path, as robot::PathAction lists them: by point, then ACTIONS' order. */
+  function actionsOf(doc) {
+    const out = [];
+    doc.waypoints.forEach((w, j) => {
+      for (const action of ACTIONS) if (w[action.field] === action.value) out.push({ waypoint: j, action });
+    });
+    return out;
+  }
+
+  /** What waypoint w has the claw and the extender do, as short labels for the field. */
+  function actionLabels(w) {
+    return ACTIONS.filter((action) => w[action.field] === action.value).map((action) => action.label);
   }
 
   // --- C++ out --------------------------------------------------------------------------------
@@ -217,6 +288,8 @@
   /**
    * The chain as C++ to paste into autons.cpp. `about` is the comment's
    * description of the plan, e.g. "3.42 s planned with the Robot tab's models".
+   * A path with actions gets a second list after it, k<Name>Actions, for
+   * robot::followPath().
    */
   function toCpp(doc, about = '') {
     const name = identifier(doc.name);
@@ -234,6 +307,13 @@
       lines.push(`${body.join(',\n')}},`);
     });
     lines.push('};');
+    const actions = actionsOf(doc);
+    if (actions.length) {
+      lines.push(`// what the claw and the extender do along "${doc.name}", by point (robot::followPath())`,
+        `const std::vector<robot::PathAction> ${name}Actions{`,
+        ...actions.map(({ waypoint, action }) => `    {.waypoint = ${waypoint}, .action = robot::PathAction::${action.cpp}},`),
+        '};');
+    }
     return lines.join('\n');
   }
 
@@ -242,7 +322,8 @@
   /**
    * Reads C++ that toCpp() wrote (or hand-edited the same way): a
    * std::vector of TrajectorySection, or of TrajectoryWaypoint for a single
-   * section. Returns { ok, error, doc }.
+   * section, and the k<Name>Actions list after it if there is one. Returns
+   * { ok, error, doc }.
    */
   function parseCpp(text) {
     const source = String(text).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
@@ -250,6 +331,8 @@
     const start = nameMatch ? source.indexOf('{', nameMatch.index) : source.indexOf('{');
     if (start < 0) return { ok: false, error: 'no { ... } to read', doc: null };
     let i = start;
+    // names (robot::PathAction::clawOpen) only in the actions list: in the sections, one is a mistake
+    let allowNames = false;
     const fail = (message) => { throw new Error(`${message} (character ${i})`); };
     const skip = () => { while (i < source.length && /\s/.test(source[i])) ++i; };
     const value = () => {
@@ -285,6 +368,13 @@
         return anyNamed ? named : items;
       }
       const m = /^(true|false|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[fF]?/.exec(source.slice(i));
+      if (!m && allowNames) {
+        const name = /^[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*/.exec(source.slice(i));
+        if (!name) fail('expected a number, a name, or {');
+        i += name[0].length;
+        // the last part: robot::PathAction::clawOpen is clawOpen
+        return { name: name[0].split('::').pop().trim() };
+      }
       if (!m) fail('expected a number, true, false, or {');
       i += m[0].length;
       if (m[1] === 'true') return true;
@@ -306,19 +396,91 @@
         return { waypoints: s.waypoints, constraints: s.constraints || {}, stopAtEnd: s.stopAtEnd === true };
       });
       const name = nameMatch ? nameMatch[1].replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase() : 'pasted';
-      return { ok: true, error: '', doc: fromSections(chain, name) };
+      const doc = fromSections(chain, name);
+      // what the claw and the extender do along it, if that was pasted too
+      const actionsMatch = source.slice(i).match(/\bk[A-Za-z0-9_]*Actions\s*\{/);
+      if (actionsMatch) {
+        i += actionsMatch.index + actionsMatch[0].length - 1;
+        allowNames = true;
+        const list = value();
+        if (!Array.isArray(list)) throw new Error('expected a list of actions');
+        list.forEach((a, k) => {
+          if (!a || Array.isArray(a) || typeof a !== 'object' || !a.action || !a.action.name) {
+            throw new Error(`action ${k} needs .waypoint and .action`);
+          }
+          const action = ACTIONS.find((candidate) => candidate.cpp === a.action.name);
+          if (!action) throw new Error(`action ${k}: there's no PathAction::${a.action.name}`);
+          if (!Number.isInteger(a.waypoint) || a.waypoint < 0 || a.waypoint >= doc.waypoints.length) {
+            throw new Error(`action ${k}: the path has no point ${a.waypoint}`);
+          }
+          doc.waypoints[a.waypoint][action.field] = action.value;
+        });
+      }
+      return { ok: true, error: '', doc };
     } catch (error) {
       return { ok: false, error: error.message, doc: null };
     }
+  }
+
+  // --- The robot's logged models ---------------------------------------------------------------
+
+  const kLoggedAxes = [['fwd', 'forward'], ['strafe', 'strafe'], ['turn', 'turn']];
+
+  /**
+   * What to plan with from the robot's logs: `logged` is slt.axisModels()'s
+   * { fwd, strafe, turn } (each log's #meta model.* lines, and any Auto-Tune
+   * since). { models: { forward, strafe, turn }, files, missing: [] } with
+   * the files they came from, or { models: null, files, missing } naming the
+   * axes no log had, since a plan needs all three.
+   */
+  function loggedPlanModels(logged) {
+    const missing = kLoggedAxes.filter(([key]) => !logged[key]).map(([key]) => key);
+    const files = [...new Set(kLoggedAxes.filter(([key]) => logged[key]).map(([key]) => logged[key].file))];
+    if (missing.length) return { models: null, files, missing };
+    const models = {};
+    for (const [key, axis] of kLoggedAxes) models[axis] = { kS: logged[key].kS, kV: logged[key].kV, kA: logged[key].kA };
+    return { models, files, missing };
+  }
+
+  // --- Against the field ------------------------------------------------------------------------
+
+  /**
+   * What the tab says about a path on Override's field: where it starts against SG1, and what a
+   * widthIn × lengthIn footprint runs into along the plan (field.planHits()). { text, warn, hits },
+   * with hits for drawing; text is '' for a path with no points.
+   */
+  function fieldCheckText(doc, plan, widthIn, lengthIn, field) {
+    if (!doc.waypoints.length) return { text: '', warn: false, hits: [] };
+    const first = doc.waypoints[0];
+    const start = F.startCheck({ xIn: first.xIn, yIn: first.yIn, headingDeg: first.headingDeg || 0 }, widthIn, lengthIn, field);
+    const parts = [];
+    const problems = [];
+    if (start.side) {
+      parts.push(`Starts on ${start.side}'s side, in the ${start.quadrant} Quadrant.`);
+    } else {
+      problems.push('across the Autonomous Line');
+    }
+    if (!start.touchingWall) problems.push('off the perimeter');
+    if (start.loadZone) problems.push(`in the ${start.loadZone}`);
+    if (problems.length) parts.push(`SG1: it starts ${problems.join(', ')}.`);
+    if (start.oversize) parts.push('SG1: it\'s bigger than 18 × 18 in.');
+    let hits = [];
+    if (plan && plan.ok) {
+      hits = F.planHits(plan.trajectory.samples, widthIn, lengthIn, field);
+      parts.push(hits.length ? `Runs into ${hits.map((h) => `the ${h.name} at ${h.tS.toFixed(2)} s`).join(', ')}.`
+        : 'Clear of the Goals, Loaders and walls.');
+    }
+    return { text: parts.join(' '), warn: problems.length > 0 || start.oversize || hits.length > 0, hits };
   }
 
   // --- The tab (browser only) ------------------------------------------------------------------
 
   /**
    * Wires the Paths tab. `ctx` is the page's: { $, el, fmt, segmented,
-   * options, renderer, runPath(routine), tuneModels(), defaultChain } where
-   * tuneModels() is the axis models of the TUNE.CFG the Tune tab has open, or
-   * null, and defaultChain is the path a first visit starts with.
+   * setSegment, slt, options, renderer, runPath(routine), tuneModels(),
+   * defaultChain } where tuneModels() is the axis models of the TUNE.CFG the
+   * Tune tab has open, or null, slt is the analyzer's log reader, and
+   * defaultChain is the path a first visit starts with.
    */
   function build(ctx) {
     const { $, el, fmt } = ctx;
@@ -327,11 +489,49 @@
       current: 0,
       selected: -1,
       modelsSource: 'robot',
+      // useLogs(): loggedPlanModels() of the robot's logs opened last, or null
+      logged: null,
       plan: null,
       planDirty: true,
+      // fieldCheckText() of the plan: what it says under it, and what the field draws in red
+      fieldCheck: { text: '', warn: false, hits: [] },
       drag: null,
       active: false,
     };
+
+    let fieldModel = null;
+    function field() {
+      const sizeIn = ctx.options.world.fieldSizeIn;
+      if (!fieldModel || fieldModel.sizeIn !== sizeIn) fieldModel = F.override(sizeIn);
+      return fieldModel;
+    }
+
+    /** The robot's footprint, from the last visit; the simulated robot takes it too. */
+    function loadRobot() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(kRobotStorageKey) || 'null');
+        if (stored && stored.widthIn > 0 && stored.lengthIn > 0) {
+          ctx.options.world.robotWidthIn = stored.widthIn;
+          ctx.options.world.robotLengthIn = stored.lengthIn;
+        }
+      } catch (error) {
+        // no storage: the default footprint
+      }
+      $('path-robot-width').value = String(ctx.options.world.robotWidthIn);
+      $('path-robot-length').value = String(ctx.options.world.robotLengthIn);
+    }
+
+    function setRobot(key, value) {
+      if (!(value >= 6 && value <= 24)) return;
+      ctx.options.world[key] = value;
+      try {
+        localStorage.setItem(kRobotStorageKey, JSON.stringify({ widthIn: ctx.options.world.robotWidthIn, lengthIn: ctx.options.world.robotLengthIn }));
+      } catch (error) {
+        // it just won't be remembered
+      }
+      state.planDirty = true;
+      replan();
+    }
 
     function load() {
       try {
@@ -358,17 +558,68 @@
 
     const doc = () => state.paths[state.current];
 
+    const loggedModels = () => (state.logged && state.logged.models ? state.logged : null);
+
     function models() {
       if (state.modelsSource === 'tune') {
         const m = ctx.tuneModels();
         if (m) return m;
       }
+      if (state.modelsSource === 'log' && loggedModels()) return loggedModels().models;
       return ctx.options.world.models;
     }
 
     function modelsLabel() {
       if (state.modelsSource === 'tune' && ctx.tuneModels()) return 'the open TUNE.CFG\'s models';
+      if (state.modelsSource === 'log' && loggedModels()) return `the models ${loggedModels().files.join(' and ')} ran with`;
       return 'the Robot tab\'s models';
+    }
+
+    /**
+     * The models the robot's logs say it ran, for "Logged models": from the
+     * Tune tab's logs as well as this tab's own. `select` switches to them,
+     * when the logs were opened here for that.
+     */
+    function logStatus(text, warn = false) {
+      const box = $('path-log-status');
+      box.hidden = false;
+      box.className = warn ? 'result warn' : 'result';
+      box.textContent = text;
+    }
+
+    function useLogs(logs, { select = false } = {}) {
+      if (!logs.length) return;
+      const found = loggedPlanModels(ctx.slt.axisModels(logs));
+      if (!found.models) {
+        const names = logs.map((log) => log.meta.file || log.fileName).join(', ');
+        logStatus(found.files.length
+          ? `No ${found.missing.join(' or ')} model in ${names}: a plan needs all three.`
+          : `No axis models in ${names}: logs from before the robot logged them (model.* lines), or none measured.`, true);
+        return;
+      }
+      state.logged = found;
+      logStatus(`Logged models from ${found.files.join(' and ')}.`);
+      if (select) {
+        state.modelsSource = 'log';
+        ctx.setSegment($('path-models-seg'), 'log');
+      }
+      if (state.modelsSource !== 'log') return;
+      state.planDirty = true;
+      if (state.active) renderAll();
+    }
+
+    async function openLogs(files) {
+      const logs = [];
+      const problems = [];
+      for (const file of files) {
+        try {
+          logs.push(ctx.slt.parse(await file.text(), file.name));
+        } catch (error) {
+          problems.push(`${file.name}: ${error.message}`);
+        }
+      }
+      if (problems.length) logStatus(problems.join(' '), true);
+      useLogs(logs, { select: true });
     }
 
     function changed({ list = true } = {}) {
@@ -383,6 +634,8 @@
       const d = doc();
       state.plan = d.waypoints.length >= 2 ? T.generateTrajectory(toSections(d), models())
         : { ok: false, error: 'click the field to add points (at least 2)', trajectory: new T.Trajectory() };
+      const w = ctx.options.world;
+      state.fieldCheck = fieldCheckText(d, state.plan, w.robotWidthIn, w.robotLengthIn, field());
       renderPlan();
       return state.plan;
     }
@@ -424,6 +677,9 @@
           { disabled: !hasHeading, 'aria-label': `Waypoint ${j} heading` });
         const swatch = el('i', { class: 'sec-sw' });
         swatch.style.background = sectionColor(section);
+        // a dot for a point where the claw or the extender does something (renderPointActions())
+        const labels = actionLabels(w);
+        const dot = labels.length ? el('i', { class: 'act-dot', title: labels.join(', ') }) : null;
         const actions = el('td', { class: 'actions' }, [
           j >= 1 && j <= d.waypoints.length - 2 && !isBreak
             ? el('button', { class: 'mini', type: 'button', text: 'Split', title: 'End a section here: the rest of the path gets its own limits',
@@ -432,7 +688,7 @@
             onclick: () => { removeWaypoint(d, j); state.selected = -1; changed(); } }),
         ]);
         const row = el('tr', { class: j === state.selected ? 'selected' : '' }, [
-          el('td', { text: String(j) }),
+          el('td', {}, [String(j), dot]),
           el('td', {}, numberInput(w.xIn, kSnapIn, (v) => { w.xIn = clampField(v); changed(); }, { 'aria-label': `Waypoint ${j} x` })),
           el('td', {}, numberInput(w.yIn, kSnapIn, (v) => { w.yIn = clampField(v); changed(); }, { 'aria-label': `Waypoint ${j} y` })),
           el('td', { class: 'heading-cell' }, [check, heading]),
@@ -440,13 +696,40 @@
           actions,
         ]);
         row.addEventListener('click', (event) => {
-          if (event.target.closest('input, button')) return;
+          if (event.target.closest('input, button, select')) return;
           state.selected = j;
           renderPoints();
         });
         return row;
       });
       table.replaceChildren(head, el('tbody', {}, rows));
+      renderPointActions();
+    }
+
+    /** Under the table: what the claw and the extender do as the robot reaches the selected point. */
+    function renderPointActions() {
+      const d = doc();
+      const j = state.selected;
+      const w = d.waypoints[j];
+      const box = $('path-point-actions');
+      if (!w) {
+        box.replaceChildren(el('span', { class: 'hint', text: 'Select a point to have the claw or the extender do something as the robot reaches it.' }));
+        return;
+      }
+      box.replaceChildren(el('strong', { text: `Point ${j}` }), ...MECHANISMS.map(([field, label]) => {
+        const select = el('select', {
+          class: w[field] ? 'mech-select set' : 'mech-select',
+          title: `What the ${field} does as the robot reaches point ${j} (robot::followPath())`,
+          'aria-label': `Point ${j} ${field}`,
+        }, [el('option', { value: '', text: '—' }),
+          ...ACTIONS.filter((a) => a.field === field).map((a) => el('option', { value: a.value, text: a.value }))]);
+        select.value = w[field] || '';
+        select.addEventListener('change', () => {
+          setAction(d, j, field, select.value || null);
+          changed();
+        });
+        return el('label', { class: 'inline' }, [label, select]);
+      }));
     }
 
     function renderSections() {
@@ -494,6 +777,10 @@
       const summary = $('path-summary');
       summary.replaceChildren();
       $('path-models-hint').textContent = `planned with ${modelsLabel()}`;
+      const check = $('path-field');
+      check.hidden = !state.fieldCheck.text;
+      check.className = state.fieldCheck.warn ? 'result warn' : 'result';
+      check.textContent = state.fieldCheck.text;
       if (!plan || !plan.ok) {
         status.textContent = plan ? plan.error : '';
         status.className = 'result warn';
@@ -706,7 +993,10 @@
     /** What render.js draws over the field while the tab is open. */
     function editorView() {
       replan();
-      return { doc: doc(), plan: state.plan, selected: state.selected, handlePx: kHandlePx, sectionOf: (j) => sectionOf(doc(), j) };
+      return {
+        doc: doc(), plan: state.plan, selected: state.selected, handlePx: kHandlePx, sectionOf: (j) => sectionOf(doc(), j),
+        hits: state.fieldCheck.hits,
+      };
     }
 
     // -- the buttons --
@@ -738,6 +1028,17 @@
       state.selected = -1;
       changed();
     });
+    $('path-rotate-btn').addEventListener('click', () => {
+      rotate180(doc());
+      changed();
+    });
+    $('path-mirror-btn').addEventListener('click', () => {
+      mirrorDiagonal(doc());
+      changed();
+    });
+    for (const [id, key] of [['path-robot-width', 'robotWidthIn'], ['path-robot-length', 'robotLengthIn']]) {
+      $(id).addEventListener('change', (event) => setRobot(key, Number(event.target.value)));
+    }
     $('path-run-btn').addEventListener('click', () => {
       const plan = replan();
       if (!plan || !plan.ok) return;
@@ -763,7 +1064,27 @@
       if (value === 'tune' && !ctx.tuneModels()) {
         flash('No TUNE.CFG with axis models is open: open one in the Tune tab. Planning with the Robot tab\'s models.');
       }
+      if (value === 'log' && !loggedModels()) {
+        flash('No log with the robot\'s axis models is open: open an SL*.CSV below, or in the Tune tab. ' +
+          'Planning with the Robot tab\'s models.');
+      }
       changed();
+    });
+    $('path-log-files').addEventListener('change', (event) => {
+      openLogs([...event.target.files]);
+      event.target.value = '';
+    });
+    $('path-log-btn').addEventListener('click', () => $('path-log-files').click());
+    const logDrop = $('path-log-drop');
+    logDrop.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      logDrop.classList.add('over');
+    });
+    logDrop.addEventListener('dragleave', () => logDrop.classList.remove('over'));
+    logDrop.addEventListener('drop', (event) => {
+      event.preventDefault();
+      logDrop.classList.remove('over');
+      openLogs([...event.dataTransfer.files]);
     });
     $('path-copy-btn').addEventListener('click', async () => {
       const text = $('path-code').textContent;
@@ -815,6 +1136,7 @@
       flashTimer = setTimeout(() => { box.hidden = true; }, 6000);
     }
 
+    loadRobot();
     load();
     renderAll();
 
@@ -830,6 +1152,7 @@
       modelsChanged() {
         state.planDirty = true;
       },
+      useLogs,
       /** How the last run ended, under the Run button. */
       showRunResult(text) {
         const box = $('path-run-result');
@@ -846,6 +1169,7 @@
 
   return {
     SECTION_COLORS,
+    ACTIONS,
     emptyDoc,
     fromSections,
     toSections,
@@ -856,10 +1180,17 @@
     splitAt,
     mergeSections,
     reverse,
+    rotate180,
+    mirrorDiagonal,
+    fieldCheckText,
     insertionIndex,
+    setAction,
+    actionsOf,
+    actionLabels,
     identifier,
     toCpp,
     parseCpp,
+    loggedPlanModels,
     build,
   };
 });

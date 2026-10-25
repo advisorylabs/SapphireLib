@@ -470,6 +470,36 @@ public:
     motion::MotionResult driveDistance(double inches, ExitConditions exit = ExitConditions{1.0});
 
     /**
+     * @brief How far the corner wheels have rolled forward, by their encoders. Thread-safe
+     *
+     * What driveDistance() measures with: the four corners' average, in inches by the drive wheel
+     * diameter. Cumulative since the motors were last tared, so take the difference over a run
+     *
+     * @return double distance, in inches. Negative is backward
+     */
+    double forwardTravelIn() const;
+
+    /**
+     * @brief Get the drive wheel diameter distances are measured with. Thread-safe
+     *
+     * DrivetrainConfig::wheelDiameterIn, until setWheelDiameterIn()
+     *
+     * @return double diameter, in inches
+     */
+    double wheelDiameterIn() const;
+
+    /**
+     * @brief Change the drive wheel diameter, e.g. after calibrating it. Thread-safe
+     *
+     * driveDistance() and the Asterisk's drift correction measure with it from their next reading.
+     * Not saved: put it in DrivetrainConfig::wheelDiameterIn to keep it. See
+     * odom::calibrateWheelDiameterIn()
+     *
+     * @param wheelDiameterIn the new diameter, in inches. Ignored unless above 0
+     */
+    void setWheelDiameterIn(double wheelDiameterIn);
+
+    /**
      * @brief Turn in place to a heading
      *
      * @param headingDeg target field heading, 0-360 degrees
@@ -565,6 +595,9 @@ private:
     MotorGroup backRight_;
     sensors::Imu imu_;
     DrivetrainConfig config_;
+    // config_.wheelDiameterIn, until setWheelDiameterIn(): an atomic, since motions on other tasks
+    // read it while a calibration writes it
+    std::atomic<double> wheelDiameterIn_;
     PID drivePID_;
     PID turnPID_;
     PID headingHoldPID_;

@@ -7,6 +7,7 @@
 
 #include "pros/misc.hpp"
 #include "pros/rtos.hpp"
+#include "sapphirelib/odom/odometry_math.hpp"
 #include "sapphirelib/tuning/characterization_math.hpp"
 
 namespace sapphirelib::gui {
@@ -39,6 +40,32 @@ constexpr std::int32_t kPageHeight = 179;
 constexpr std::int32_t kActionRowY = kRowY0 + 3 * kRowHeight + 6;
 constexpr std::int32_t kToggleY = kActionRowY + 36;
 constexpr std::int32_t kToggleW = 216;
+constexpr std::int32_t kRunTestW = 100;
+constexpr std::int32_t kAutoTuneX = 110;
+constexpr std::int32_t kAutoTuneW = 110;
+// with a wheel calibration, Run Test and Auto-Tune narrow to fit the Wheel button beside them,
+// which ends 4px short of the selector buttons
+constexpr std::int32_t kNarrowRunTestW = 80;
+constexpr std::int32_t kNarrowAutoTuneX = 88;
+constexpr std::int32_t kNarrowAutoTuneW = 84;
+constexpr std::int32_t kWheelButtonX = 176;
+constexpr std::int32_t kWheelButtonW = 60;
+
+// the left column, which the gains and the Wheel panel take turns in
+constexpr std::int32_t kLeftColumnW = kSelectorColumnX - 4;
+
+// the Wheel panel: Drive and Back, Actual and its -/+ (where the kP row's are), Apply, and a hint
+// that wraps over the rest of the column
+constexpr std::int32_t kWheelDriveW = 140;
+constexpr std::int32_t kWheelBackX = 150;
+constexpr std::int32_t kWheelBackW = 82;
+constexpr std::int32_t kActualRowY = 40;
+constexpr std::int32_t kApplyRowY = 76;
+constexpr std::int32_t kWheelHintY = 114;
+// an eighth of an inch, a tape measure's usual marks. Hold -/+ to repeat
+constexpr double kActualStepIn = 0.125;
+// once the drive returns, how long the robot gets to roll to a stop before the wheels are read
+constexpr std::uint32_t kWheelSettleMs = 300;
 
 // status and results column, right of the selector buttons (which end at x=328). The page
 // only gets 480x179 (a 480x240 surface minus the header and tab bar), so results go in a
@@ -49,15 +76,36 @@ constexpr std::int32_t kStatusY = 4;
 constexpr std::int32_t kResultY = 26;
 
 lv_obj_t* makeIconButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, const char* text,
-                         lv_event_cb_t cb, void* userData) {
+                         lv_event_cb_t cb, void* userData,
+                         lv_event_code_t event = LV_EVENT_CLICKED) {
     lv_obj_t* button = lv_button_create(parent);
     lv_obj_set_pos(button, x, y);
     lv_obj_set_size(button, kBtnW, kBtnH);
     lv_obj_t* label = lv_label_create(button);
     lv_label_set_text(label, text);
     lv_obj_center(label);
-    lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, userData);
+    lv_obj_add_event_cb(button, cb, event, userData);
     return button;
+}
+
+// a -/+ that steps once on a tap and keeps stepping while held. A short click rather than a click,
+// so letting go after a hold doesn't step once more
+lv_obj_t* makeRepeatButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, const char* text,
+                           lv_event_cb_t cb, void* userData) {
+    lv_obj_t* button = makeIconButton(parent, x, y, text, cb, userData, LV_EVENT_SHORT_CLICKED);
+    lv_obj_add_event_cb(button, cb, LV_EVENT_LONG_PRESSED_REPEAT, userData);
+    return button;
+}
+
+// a bare container at the top left of its parent: no background, border, padding or scrolling, so
+// what's in it sits exactly where it would on the parent
+lv_obj_t* makePanel(lv_obj_t* parent, std::int32_t w, std::int32_t h) {
+    lv_obj_t* panel = lv_obj_create(parent);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_pos(panel, 0, 0);
+    lv_obj_set_size(panel, w, h);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    return panel;
 }
 
 lv_obj_t* makeTextButton(lv_obj_t* parent, std::int32_t x, std::int32_t y, std::int32_t w,
@@ -96,33 +144,45 @@ void PidTunerPage::build(lv_obj_t* container) {
     for (auto& entry : entries_) addSelectorButton(*entry);
     layoutSelectorButtons();
 
-    kpLabel_ = lv_label_create(container_);
+    // the left column's gain controls, in a panel of their own so the Wheel panel can take their
+    // place
+    gainPanel_ = makePanel(container_, kLeftColumnW, kPageHeight);
+
+    kpLabel_ = lv_label_create(gainPanel_);
     lv_obj_set_pos(kpLabel_, 4, kRowY0 + 5);
-    makeIconButton(container_, kBtnMinusX, kRowY0, "-", &PidTunerPage::kpMinusClicked, this);
-    makeIconButton(container_, kBtnPlusX, kRowY0, "+", &PidTunerPage::kpPlusClicked, this);
+    makeIconButton(gainPanel_, kBtnMinusX, kRowY0, "-", &PidTunerPage::kpMinusClicked, this);
+    makeIconButton(gainPanel_, kBtnPlusX, kRowY0, "+", &PidTunerPage::kpPlusClicked, this);
 
-    kiLabel_ = lv_label_create(container_);
+    kiLabel_ = lv_label_create(gainPanel_);
     lv_obj_set_pos(kiLabel_, 4, kRowY0 + kRowHeight + 5);
-    makeIconButton(container_, kBtnMinusX, kRowY0 + kRowHeight, "-", &PidTunerPage::kiMinusClicked,
+    makeIconButton(gainPanel_, kBtnMinusX, kRowY0 + kRowHeight, "-", &PidTunerPage::kiMinusClicked,
                    this);
-    makeIconButton(container_, kBtnPlusX, kRowY0 + kRowHeight, "+", &PidTunerPage::kiPlusClicked,
+    makeIconButton(gainPanel_, kBtnPlusX, kRowY0 + kRowHeight, "+", &PidTunerPage::kiPlusClicked,
                    this);
 
-    kdLabel_ = lv_label_create(container_);
+    kdLabel_ = lv_label_create(gainPanel_);
     lv_obj_set_pos(kdLabel_, 4, kRowY0 + 2 * kRowHeight + 5);
-    makeIconButton(container_, kBtnMinusX, kRowY0 + 2 * kRowHeight, "-",
+    makeIconButton(gainPanel_, kBtnMinusX, kRowY0 + 2 * kRowHeight, "-",
                    &PidTunerPage::kdMinusClicked, this);
-    makeIconButton(container_, kBtnPlusX, kRowY0 + 2 * kRowHeight, "+",
+    makeIconButton(gainPanel_, kBtnPlusX, kRowY0 + 2 * kRowHeight, "+",
                    &PidTunerPage::kdPlusClicked, this);
 
-    makeTextButton(container_, 4, kActionRowY, 100, "Run Test", &PidTunerPage::runTestClicked,
-                   this);
-    makeTextButton(container_, 110, kActionRowY, 110, "Auto-Tune", &PidTunerPage::autoTuneClicked,
-                   this, &autoTuneLabel_);
+    const bool wheelCalibration = !wheels_.empty();
+    makeTextButton(gainPanel_, 4, kActionRowY, wheelCalibration ? kNarrowRunTestW : kRunTestW,
+                   "Run Test", &PidTunerPage::runTestClicked, this);
+    makeTextButton(gainPanel_, wheelCalibration ? kNarrowAutoTuneX : kAutoTuneX, kActionRowY,
+                   wheelCalibration ? kNarrowAutoTuneW : kAutoTuneW, "Auto-Tune",
+                   &PidTunerPage::autoTuneClicked, this, &autoTuneLabel_);
+    if (wheelCalibration) {
+        makeTextButton(gainPanel_, kWheelButtonX, kActionRowY, kWheelButtonW, "Wheel",
+                       &PidTunerPage::wheelClicked, this);
+    }
 
-    toggleButton_ = makeTextButton(container_, 4, kToggleY, kToggleW, "",
+    toggleButton_ = makeTextButton(gainPanel_, 4, kToggleY, kToggleW, "",
                                    &PidTunerPage::toggleClicked, this, &toggleButtonLabel_);
     if (!toggleLabel_) lv_obj_add_flag(toggleButton_, LV_OBJ_FLAG_HIDDEN);
+
+    if (wheelCalibration) buildWheelPanel();
 
     statusLabel_ = lv_label_create(container_);
     lv_obj_set_pos(statusLabel_, kReadoutX, kStatusY);
@@ -186,6 +246,171 @@ void PidTunerPage::setToggle(std::function<std::string()> label, std::function<v
     if (toggleButton_) lv_obj_remove_flag(toggleButton_, LV_OBJ_FLAG_HIDDEN);
 }
 
+void PidTunerPage::enableWheelCalibration(std::vector<CalibratedWheel> wheels,
+                                          std::function<void(double)> driveForward,
+                                          double distanceIn) {
+    // the Wheel button is laid out with the rest in build()
+    if (container_ != nullptr || testRunning_.load()) return;
+    wheels_ = std::move(wheels);
+    wheelDrive_ = std::move(driveForward);
+    wheelDistanceIn_ = distanceIn;
+}
+
+void PidTunerPage::buildWheelPanel() {
+    wheelPanel_ = makePanel(container_, kLeftColumnW, kPageHeight);
+
+    char driveText[24];
+    std::snprintf(driveText, sizeof(driveText), "Drive %.0fin", wheelDistanceIn_);
+    makeTextButton(wheelPanel_, 4, 0, kWheelDriveW, driveText, &PidTunerPage::wheelDriveClicked,
+                   this);
+    makeTextButton(wheelPanel_, kWheelBackX, 0, kWheelBackW, "Back",
+                   &PidTunerPage::wheelBackClicked, this);
+
+    actualLabel_ = lv_label_create(wheelPanel_);
+    lv_obj_set_pos(actualLabel_, 4, kActualRowY + 5);
+    makeRepeatButton(wheelPanel_, kBtnMinusX, kActualRowY, "-", &PidTunerPage::actualMinusClicked,
+                     this);
+    makeRepeatButton(wheelPanel_, kBtnPlusX, kActualRowY, "+", &PidTunerPage::actualPlusClicked,
+                     this);
+
+    makeTextButton(wheelPanel_, 4, kApplyRowY, kWheelDriveW, "Apply",
+                   &PidTunerPage::wheelApplyClicked, this);
+
+    wheelHintLabel_ = lv_label_create(wheelPanel_);
+    lv_obj_set_pos(wheelHintLabel_, 4, kWheelHintY);
+    lv_obj_set_width(wheelHintLabel_, kLeftColumnW - 8);
+    lv_label_set_long_mode(wheelHintLabel_, LV_LABEL_LONG_WRAP);
+
+    lv_obj_add_flag(wheelPanel_, LV_OBJ_FLAG_HIDDEN);
+    refreshWheelLabels();
+}
+
+void PidTunerPage::setWheelMode(bool on) {
+    if (wheelPanel_ == nullptr || on == wheelMode_ || testRunning_.load()) return;
+    wheelMode_ = on;
+    if (on) {
+        lv_obj_add_flag(gainPanel_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(wheelPanel_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(wheelPanel_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(gainPanel_, LV_OBJ_FLAG_HIDDEN);
+    }
+    refreshWheelLabels();
+    readoutDirty_.store(true);
+}
+
+void PidTunerPage::runWheelDrive() {
+    if (wheels_.empty() || !wheelDrive_ || testRunning_.load()) return;
+
+    testRunning_.store(true);
+    autoTuneActive_.store(false);
+    wheelDriving_.store(true);
+    refreshWheelLabels();
+    // on a background task, like Run Test, so the screen keeps going. It only touches the run's
+    // numbers and atomics, never a widget; update() takes the numbers once wheelRunReady_ is set
+    pros::Task([this] {
+        std::vector<double> diameters;
+        std::vector<double> starts;
+        for (const auto& wheel : wheels_) {
+            diameters.push_back(wheel.diameterIn());
+            starts.push_back(wheel.distanceIn());
+        }
+        wheelDrive_(wheelDistanceIn_);
+        pros::delay(kWheelSettleMs);
+        std::vector<double> reads;
+        for (std::size_t i = 0; i < wheels_.size(); ++i) {
+            reads.push_back(wheels_[i].distanceIn() - starts[i]);
+        }
+        wheelDiameterAtRunIn_ = std::move(diameters);
+        wheelReadIn_ = std::move(reads);
+        wheelRunReady_.store(true);
+        wheelDriving_.store(false);
+        testRunning_.store(false);
+    });
+}
+
+void PidTunerPage::adjustActual(double deltaIn) {
+    if (!wheelMeasured_ || testRunning_.load()) return;
+    actualIn_ = std::max(kActualStepIn, actualIn_ + deltaIn);
+    refreshWheelLabels();
+}
+
+void PidTunerPage::applyWheelSizes() {
+    if (!wheelMeasured_ || testRunning_.load()) return;
+    // from each wheel's diameter at the drive, not its diameter now, so applying again after
+    // changing Actual corrects the run's reading rather than compounding the last Apply
+    wheelAppliedIn_.assign(wheels_.size(), std::nan(""));
+    for (std::size_t i = 0; i < wheels_.size(); ++i) {
+        const double diameterIn =
+            odom::calibrateWheelDiameterIn(wheelDiameterAtRunIn_[i], wheelReadIn_[i], actualIn_);
+        if (std::isnan(diameterIn)) continue;
+        wheels_[i].setDiameterIn(diameterIn);
+        wheelAppliedIn_[i] = diameterIn;
+    }
+    wheelApplied_ = true;
+    appliedActualIn_ = actualIn_;
+    refreshWheelLabels();
+    readoutDirty_.store(true);
+}
+
+void PidTunerPage::refreshWheelLabels() {
+    if (wheelPanel_ == nullptr) return;
+    char buf[32];
+    if (wheelMeasured_) {
+        std::snprintf(buf, sizeof(buf), "Actual: %.3fin", actualIn_);
+    } else {
+        std::snprintf(buf, sizeof(buf), "Actual: --");
+    }
+    setLabelText(actualLabel_, buf);
+
+    const char* hint = "Mark the robot's edge, room ahead. Drive, then tape the mark to that edge";
+    if (wheelDriving_.load()) {
+        hint = "Driving... keep clear";
+    } else if (wheelMeasured_ && !wheelApplied_) {
+        hint = "Set Actual to what the tape says, then Apply";
+    } else if (wheelApplied_ && actualIn_ != appliedActualIn_) {
+        hint = "Actual changed since Apply: Apply again to use it";
+    } else if (wheelApplied_) {
+        hint = "Applied, not saved: copy the new sizes into the code. Drive again to check";
+    }
+    setLabelText(wheelHintLabel_, hint);
+}
+
+std::string PidTunerPage::wheelReadoutText() const {
+    char line[48];
+    std::string text;
+    if (!wheelMeasured_) {
+        text = "Diameters now:";
+        for (const auto& wheel : wheels_) {
+            std::snprintf(line, sizeof(line), "\n%s %.3fin", wheel.name.c_str(),
+                          wheel.diameterIn());
+            text += line;
+        }
+        return text;
+    }
+    text = "Read over the run:";
+    for (std::size_t i = 0; i < wheels_.size(); ++i) {
+        std::snprintf(line, sizeof(line), "\n%s %.2fin", wheels_[i].name.c_str(), wheelReadIn_[i]);
+        text += line;
+    }
+    if (!wheelApplied_) return text;
+    text += "\nNow (not saved):";
+    for (std::size_t i = 0; i < wheels_.size(); ++i) {
+        const double appliedIn = wheelAppliedIn_[i];
+        if (!std::isnan(appliedIn)) {
+            std::snprintf(line, sizeof(line), "\n%s %.3fin", wheels_[i].name.c_str(), appliedIn);
+        } else {
+            // why calibrateWheelDiameterIn() said no
+            const char* why = std::fabs(wheelReadIn_[i]) < 1.0 ? "didn't turn"
+                              : actualIn_ < 1.0                ? "too short"
+                                                               : "reads backward";
+            std::snprintf(line, sizeof(line), "\n%s --, %s", wheels_[i].name.c_str(), why);
+        }
+        text += line;
+    }
+    return text;
+}
+
 void PidTunerPage::layoutSelectorButtons() {
     if (entries_.empty()) return;
     const auto count = static_cast<std::int32_t>(entries_.size());
@@ -210,6 +435,8 @@ void PidTunerPage::addSelectorButton(Entry& entry) {
 
 void PidTunerPage::select(std::size_t index) {
     if (index >= entries_.size() || testRunning_.load()) return;
+    // a controller's button goes back to its gains from the Wheel panel too
+    setWheelMode(false);
 
     for (auto& entry : entries_) {
         if (entry->selectorButton) lv_obj_remove_state(entry->selectorButton, LV_STATE_CHECKED);
@@ -264,6 +491,11 @@ const PidTunerPage::Axis* PidTunerPage::findAxis(const std::string& name) const 
 
 void PidTunerPage::refreshReadout() {
     char buf[192];
+
+    if (wheelMode_) {
+        setLabelText(resultLabel_, wheelReadoutText().c_str());
+        return;
+    }
 
     if (stopped_.load()) {
         setLabelText(resultLabel_, "Stopped\nNothing applied");
@@ -470,7 +702,9 @@ void PidTunerPage::update() {
 
     if (testRunning_.load()) {
         const int measuring = measuringAxis_.load();
-        if (!autoTuneActive_.load()) {
+        if (wheelDriving_.load()) {
+            setLabelText(statusLabel_, "Driving...");
+        } else if (!autoTuneActive_.load()) {
             setLabelText(statusLabel_, "Running...");
         } else if (stopRequested_.load()) {
             setLabelText(statusLabel_, "Stopping...");
@@ -483,9 +717,20 @@ void PidTunerPage::update() {
         }
     } else {
         setLabelText(statusLabel_, "Ready");
+        if (wheelRunReady_.exchange(false)) {
+            // a drive just finished: Actual starts at what the first wheel read, to the nearest
+            // eighth, or at the distance asked for if it read nothing usable
+            wheelMeasured_ = true;
+            wheelApplied_ = false;
+            const double readIn = wheelReadIn_.empty() ? 0.0 : wheelReadIn_.front();
+            actualIn_ = readIn >= 1.0 ? std::round(readIn / kActualStepIn) * kActualStepIn
+                                      : wheelDistanceIn_;
+            readoutDirty_.store(true);
+        }
         if (readoutDirty_.exchange(false)) refreshReadout();
     }
 
+    if (wheelMode_) refreshWheelLabels();
     if (toggleLabel_) setLabelText(toggleButtonLabel_, toggleLabel_().c_str());
 
     // the only place gain labels get redrawn, see setDisplayedGains()
@@ -537,6 +782,24 @@ void PidTunerPage::toggleClicked(lv_event_t* e) {
     auto* page = static_cast<PidTunerPage*>(lv_event_get_user_data(e));
     if (page->testRunning_.load() || !page->toggleTap_) return;
     page->toggleTap_();
+}
+void PidTunerPage::wheelClicked(lv_event_t* e) {
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->setWheelMode(true);
+}
+void PidTunerPage::wheelBackClicked(lv_event_t* e) {
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->setWheelMode(false);
+}
+void PidTunerPage::wheelDriveClicked(lv_event_t* e) {
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->runWheelDrive();
+}
+void PidTunerPage::actualMinusClicked(lv_event_t* e) {
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->adjustActual(-kActualStepIn);
+}
+void PidTunerPage::actualPlusClicked(lv_event_t* e) {
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->adjustActual(kActualStepIn);
+}
+void PidTunerPage::wheelApplyClicked(lv_event_t* e) {
+    static_cast<PidTunerPage*>(lv_event_get_user_data(e))->applyWheelSizes();
 }
 
 } // namespace sapphirelib::gui

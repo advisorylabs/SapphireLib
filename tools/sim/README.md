@@ -1,9 +1,10 @@
 # Sapphire Sim: the localization simulator
 
 A simulator of 96671H's robot for trying out odometry and Monte Carlo localization without the robot,
-tuning the localizer, showing people how MCL works, and drawing trajectories for `autons.cpp` (the
-Paths tab). Plain HTML and JavaScript: no install and no build step. It works offline; the only thing
-it fetches is a web font, and it falls back to a system font.
+tuning the localizer, showing people how MCL works, and planning autonomous routines for
+`autons.cpp` on Override's field, drawn to scale from the game manual (the Paths tab). Plain HTML and
+JavaScript: no install and no build step. It works offline; the only thing it fetches is a web font,
+and it falls back to a system font.
 
 It runs the robot program's own math, ported line for line from the library: odometry and its
 correction, the particle filter and `MonteCarloLocalizer`, the holonomic drivetrain's motions
@@ -34,6 +35,7 @@ showing someone how MCL works.
 |---|---|
 | `mcl.js` | Ports of the localization math: `Rng` (with the ziggurat), `LookupTable`, `FieldMap` and `ParallelRayCaster`, the sensor model and `ReadingScorer`, `ParticleFilter`, `sampleParticles()`, `computeOdometryDelta()`, `correctionStep()` |
 | `world.js` | The physical world: the chassis (three `PlantSim` axes from the analyzer's `model.js`), tracking wheels, IMU, distance sensors, collisions, bumps, the defender |
+| `field.js` | Override's field (2026-27) from the game manual's Appendix A: tile seams, tape and zones, Goals, Loaders, Toggles, the starting Cups and Pins; and the Paths tab's checks against it (the robot's footprint against the Goals, Loaders and walls, a start against SG1) |
 | `trajectory.js` | Ports of the trajectory planner and follower math: `samplePath()`, `generateTrajectory()` (with `from` and `endSpeedInPerS`, for branching), `Trajectory`, the holonomic feedforward, `trackingErrors()`, and a chain's junction checks |
 | `robot.js` | The robot program: `Imu`, `Odometry`, `MonteCarloLocalizer`, the drivetrain and its motions (generators that yield where the C++ calls `pros::delay(10)`), `TrajectoryFollower`, and Auto-Tune's gain design |
 | `routines.js` | The autonomous routines, written like `src/robot/autons.cpp`, including Branch at speed, which picks its branch on the front distance sensor (turn on the defender to see it swerve). Add your own here |
@@ -65,7 +67,9 @@ simulated tracking wheels follow `OdometryConfig`'s sign), and `followTrajectory
 inch near the planned time, drives a diagonal straight where `moveToPoint()` bends, reports each
 section as the plan enters it, waits for a robot the defender blocks, and logs what the robot logs.
 `trajectory.test.js` holds the planner's port to `tests/motion/trajectory_generator_test.cpp`'s
-golden values, and `pathview.test.js` pins the Paths tab's C++ both ways. `tuner.test.js` checks the tuner on worlds
+golden values, `pathview.test.js` pins the Paths tab's C++ both ways and its other-alliance and
+other-quadrant twins, and `field.test.js` pins the field to the manual's drawings and checks the
+footprint and start checks. `tuner.test.js` checks the tuner on worlds
 it can't see: calibration finds the noise, blocked and missing readings, wheel scale and a
 mis-measured mount of a world it's only given logs of, the matched sensor delay lands near the
 truth, and a search started from bad settings climbs out and holds on seeds it never saw; and that a

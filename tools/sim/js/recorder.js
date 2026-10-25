@@ -82,6 +82,14 @@
           `${metaNumber(m.facingDeg)}`]);
       });
       this.writer.meta.push(['tune', 'none']);
+      // the axis models trajectories plan with, as src/robot/tune.cpp logs the robot's
+      const models = sim.robot.drivetrain.axisModels;
+      for (const [key, axis] of [['fwd', 'forward'], ['strafe', 'strafe'], ['turn', 'turn']]) {
+        const m = models && models[axis];
+        if (m && m.kV > 0 && m.kA > 0) {
+          this.writer.meta.push([`model.${key}`, `${metaNumber(m.kS)},${metaNumber(m.kV)},${metaNumber(m.kA)}`]);
+        }
+      }
       this.odom = this.writer.chan('odom', 'samples', 4, ['x', 'y', 'heading', 'raw_x', 'raw_y']);
       this.chassis = this.writer.chan('chassis', 'samples', 3, ['fwd_v', 'strafe_v', 'turn_v']);
       this.mcl = this.writer.chan('mcl', 'samples', 2, MCL_COLUMNS);
