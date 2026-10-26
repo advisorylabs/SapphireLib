@@ -60,7 +60,9 @@ Driving stops a running routine. Hover a label or slider for what it means.
 
 **Tabs:**
 
-- **Drive**: run a routine (`js/routines.js`, written like `src/robot/autons.cpp`), drive it
+- **Drive**: run a routine (`js/routines.js`, written with the same auton functions as
+  `src/robot/autons.cpp`, `js/auton.js` being their port; [`QUICKSTART.md`](QUICKSTART.md) has the
+  translation), drive it
   yourself, switch the motions between odometry + MCL and odometry alone
   (`setCorrectionEnabled()`), Auto-Tuned or hand-set PID gains.
 - **Paths**: draw a `followTrajectory()` chain on the field. Click to add a point (on the path to
@@ -69,7 +71,8 @@ Driving stops a running routine. Hover a label or slider for what it means.
   budget, per-axis caps and **Stop at its end**. The path is colored by the planned speed, with the
   robot's footprint along it; under it the duration, each section's start, the peaks per axis, and
   a chart of speed and the worst wheel's volts. **Run** drives it in the simulator. **Copy C++**
-  writes the chain for `autons.cpp`; **Paste C++** reads one back. Plans with the Robot tab's
+  writes the chain for `autons.cpp` and a routine that drives it, timing the points' claw and
+  extender actions with `waitUntilWaypoint()`; **Paste C++** reads both back. Plans with the Robot tab's
   chassis model, with the models in the TUNE.CFG open in the Tune tab, or (**Logged models**) with
   the ones an `SL*.CSV` says the robot ran (**Open log…**, or drop it there or on the Tune tab),
   which is what the robot plans with. Drafts stay in this browser. The guide: [`TRAJECTORIES.md`](TRAJECTORIES.md).
@@ -109,7 +112,8 @@ Driving stops a running routine. Hover a label or slider for what it means.
   holds.
 - *Plan an auton:* Paths → New, set Robot to your footprint, click the start against your wall,
   then the points to each Goal. Fix whatever the line under the plan says it runs into, **Run** it,
-  **Copy C++** into `autons.cpp`. **Other alliance** and **Other quadrant** make its twins.
+  **Copy C++** into `autons.cpp` and add its routine to `registerAutons()`. **Other alliance** and
+  **Other quadrant** make its twins.
 
 ## Analyzer
 

@@ -625,9 +625,9 @@ Needs steps 4 and 5 in the code. This is the loop in [`TUNING.md`](TUNING.md).
 
 ### An autonomous routine that sets the pose
 
-None of the routines in [`autons.cpp`](../src/robot/autons.cpp) calls `setPose()` today. Without one
-the localizer never corrects (odometry isn't in the field's frame), and the log calibration has
-nothing to use. Pick a start you can put the robot on exactly, and work out where its tracking center
+The test routines in [`autons.cpp`](../src/robot/autons.cpp) all `setPose(0, 0, 0)` where they
+start, which isn't the field's frame. Without a real field pose the localizer never corrects, and the
+log calibration has nothing to use. Pick a start you can put the robot on exactly, and work out where its tracking center
 is in field coordinates (origin in the middle, +x right, +y downfield, walls at ±70.25 in):
 
 ```cpp
@@ -635,10 +635,10 @@ is in field coordinates (origin in the middle, +x right, +y downfield, walls at 
 // where the seam really is on your field), facing downfield.
 // kBackToCenterIn: the robot's back face to the tracking center, measured.
 void fieldCheck() {
-    odometry().setPose({.xIn = -24.0, .yIn = -70.25 + kBackToCenterIn, .headingDeg = 0});
-    drivetrain().moveToPoint(-24, -24);
-    drivetrain().turnToHeading(90);
-    drivetrain().moveToPoint(24, -24);
+    setPose(-24.0, -70.25 + kBackToCenterIn, 0);
+    moveToPoint(-24, -24);
+    turnTo(90);
+    moveToPoint(24, -24);
 }
 // in registerAutons(): selector.addRoutine("Field Check", &fieldCheck);
 ```

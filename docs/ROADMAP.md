@@ -457,8 +457,9 @@ defaults shipped here.
       each junction, and the follower drives straight through it, the clock running on and the
       feedback untouched. A branch that can't take the junction speed fails to plan, saying so. Logged
       as one motion (`motion,continue` events, a `traj.plan` burst per piece), read that way by the
-      analyzer. The robot has Branch Test and Branch At Speed routines on the claw's pin sensor;
-      Sapphire Sim has a Branch at speed routine on its front distance sensor. Unit-tested in
+      analyzer. `examples/trajectory.cpp` has both kinds on a distance sensor (the robot's Branch
+      Test and Branch At Speed routines moved there in the auton cleanup below); Sapphire Sim has a
+      Branch at speed routine on its front distance sensor. Unit-tested in
       `trajectory_path_test.cpp`, `trajectory_generator_test.cpp` (a branch golden case shared with
       the sim) and `holonomic_tracking_test.cpp` (closed loop through the junction).
 - [x] Teach mode: X+A in driver control records a drive (odometry's pose and the held buttons every
@@ -468,7 +469,8 @@ defaults shipped here.
       `Controller::replay()` on the plan's clock, never dropping a press. Guide in
       [`docs/TEACH.md`](TEACH.md); unit-tested in `recorded_trajectory_test.cpp` (a replay followed in
       closed loop, a turn in place, the file format) and `button_playback_test.cpp`. **Not yet run on
-      the robot.**
+      the robot.** **Removed 2026-10-26** with the auto cycle, in the auton cleanup below: both to be
+      reworked later.
 - [x] Pathing bug fixes from a review: a motion on a `MotionQueue`'s task outlived `autonomous()`
       and drove on into driver control until it timed out (every drivetrain motion now ends
       `interrupted` when the competition mode changes under it, `motion::competitionModeChanged()`);
@@ -492,8 +494,24 @@ defaults shipped here.
       card call now holds `telemetry::SdCardLock`: the logger for each writer pass, teach mode and
       TUNE.CFG a 4 KB chunk at a time (`readCardFile()`/`writeCardFile()`), and a saved drive is
       read back to verify it. `tools/telemetry/check_sd_access.py`, in CI, fails on any card call
-      made without it (proven against three deliberate breaks). The SD Stress Test auton checks it
-      on the brain, which hasn't been done yet.
+      made without it (proven against three deliberate breaks). The SD Stress Test auton that was to
+      check it on the brain went with teach mode; the auton selector's `AUTON.TXT` and TUNE.CFG are
+      the card's other users now.
+- [x] Autonomous cleanup, after RW-Template's workflow (2026-10-26): the auto cycle and teach mode
+      (with `recorded_trajectory`, `ButtonPlayback`, `Controller::replay()` and `robot::followPath()`'s
+      `PathAction`s) are gone. In their place, `sapphirelib/auton/auton.hpp`: short calls for every
+      motion on the drivetrain `auton::use()` was given (`drive()`, `turnTo()` with a forced direction,
+      `turnToPoint()`, `moveToPoint()`, `moveToPose()`, `strafe()`, `followPath()`,
+      `followTrajectory()`, which plans and keeps its plan), a speed cap and motion chaining on every
+      drivetrain motion (`ExitConditions::maxVolts`, `chain`), background motions with waits and
+      `cancelMotion()` (through `CompetitionWatch`, and `Odometry::Snapshot`'s new odometers), and
+      one-shot distance resets (`MonteCarloLocalizer::resetFromWall()`, `wallFix()`). The selector
+      remembers its pick on the SD card, takes the controller's LEFT/RIGHT while disabled, and shows
+      the localizer's state. The simulator's drivetrain, odometry and localizer are ported to match,
+      with the auton functions as `tools/sim/js/auton.js`, and the Paths tab writes a routine.
+      [`docs/QUICKSTART.md`](QUICKSTART.md) is the guide. Host-tested in `turn_math_test.cpp` and
+      `wall_reset_test.cpp`, and against the simulated robot in `tools/sim/test/auton.test.js`. **Not
+      yet run on the robot.**
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware**; tab bar height has been bumped twice in response to that
