@@ -3,19 +3,17 @@
  *
  * PROS's competition callbacks, and nothing else: each one hands off to the
  * robot program in src/robot/ (ports in include/robot/config.hpp, devices,
- * screen, autons, tuning, telemetry, driver control, teach mode, and the
+ * screen, autons, tuning, telemetry, driver control, and the
  * lift/claw/extender macros).
  *
  * Team 96671H: Hitmen
  */
 
 #include "main.h"
-#include "robot/autocycle.hpp"
 #include "robot/devices.hpp"
 #include "robot/driver.hpp"
 #include "robot/macros.hpp"
 #include "robot/screen.hpp"
-#include "robot/teach.hpp"
 #include "robot/telemetry.hpp"
 #include "sapphirelib/api.hpp"
 
@@ -36,10 +34,6 @@ void initialize() {
     // Blocks ~2-3s while the IMU calibrates. Also zeroes the lift, so start
     // the program with the lift all the way down.
     robot::initDevices();
-
-    // The drive taught last (TEACH.TXT), for the Taught Route auton. Before
-    // telemetry starts, so the logger has the SD card to itself after.
-    robot::teach::load();
 
     // Before anything can run a motion or opcontrol, since it attaches
     // observers to PIDs those would be running. Costs initialize() nothing:
@@ -62,6 +56,8 @@ void disabled() {
     // VEXos ignores motor commands while disabled anyway; this makes sure
     // nothing picks up where it left off at the next enable.
     robot::macros::stop();
+    // LEFT and RIGHT pick the auton until the robot is enabled.
+    robot::pickAutonWithController();
 }
 
 /**
@@ -73,7 +69,10 @@ void disabled() {
  * This task will exit when the robot is enabled and autonomous or opcontrol
  * starts.
  */
-void competition_initialize() {}
+void competition_initialize() {
+    // LEFT and RIGHT pick the auton until the match starts.
+    robot::pickAutonWithController();
+}
 
 /**
  * Runs the user autonomous code. This function will be started in its own task
@@ -119,18 +118,8 @@ void opcontrol() {
         // Skip driving from the sticks (and B/DOWN, the drive modes) while a
         // GUI routine (the Odom page's offset calibration, or a PID tuner
         // test or Auto-Tune run) is driving the chassis on its own, see
-        // robot::screenBusy(), which also ends an auto cycle. A starts and
-        // ends the cycle (see autocycle.hpp), which drives instead of the
-        // sticks while it runs.
-        if (robot::screenBusy()) {
-            robot::autocycle::cancel();
-        } else if (!robot::autocycle::update(controller)) {
-            robot::drive(controller);
-        }
-
-        // Teach mode: X+A starts and stops recording this drive, the pose
-        // and the buttons, for the Taught Route auton (see teach.hpp).
-        robot::teach::update(controller);
+        // robot::screenBusy().
+        if (!robot::screenBusy()) robot::drive(controller);
 
         // X+UP runs the selected auton, off the field only. Every tick, busy
         // or not, see shortcuts().

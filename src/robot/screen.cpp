@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <string>
@@ -24,10 +25,11 @@
 #include "robot/devices.hpp"
 #include "robot/driver.hpp"
 #include "robot/macros.hpp"
-#include "robot/teach.hpp"
 #include "robot/telemetry.hpp"
 #include "robot/tune.hpp"
 #include "robot/tuning.hpp"
+#include "pros/rtos.hpp"
+#include "sapphirelib/auton/auton.hpp"
 #include "sapphirelib/diag/sensor_check.hpp"
 #include "sapphirelib/gui/auton_selector_page.hpp"
 #include "sapphirelib/gui/diagnostics_page.hpp"
@@ -51,6 +53,8 @@ using sapphirelib::gui::Gui;
 using sapphirelib::gui::HomePage;
 using sapphirelib::gui::OdometryPage;
 using sapphirelib::gui::PidTunerPage;
+using sapphirelib::input::Button;
+using sapphirelib::input::Controller;
 
 namespace {
 
@@ -58,6 +62,24 @@ namespace {
 // runSelectedAuton() finds it. Set in buildScreen(), before any competition
 // task can start.
 AutonSelectorPage* autonSelector = nullptr;
+
+// The Auton tab's line: how sure the localizer is, how many sensors it can
+// read (a sensor knocked loose shows here before a match), and what an
+// update costs. It only corrects once a routine's setPose() puts it on the
+// field.
+std::string mclStatusText() {
+    const sapphirelib::localization::LocalizationStatus status = localizer().status();
+    char text[80];
+    if (status.blockedBy & sapphirelib::localization::LocalizationStatus::kNoSetPose) {
+        std::snprintf(text, sizeof(text), "MCL: waiting for setPose(), %u sensors read",
+                      static_cast<unsigned>(status.sensorsUsed));
+    } else {
+        std::snprintf(text, sizeof(text), "MCL: +-%.1fin, %u sensors read, %.1fms an update",
+                      status.spreadIn, static_cast<unsigned>(status.sensorsUsed),
+                      status.updateUs / 1000.0);
+    }
+    return text;
+}
 
 // The face squints while the lift climbs faster than this, in motor degrees
 // per second, its speed smoothed over about kLiftRiseSmoothingMs. Well under
@@ -149,14 +171,6 @@ void buildScreen() {
     // while on.
     homePage->addToggle(
         "Debug", [] { return macros::debug(); }, [](bool on) { macros::setDebug(on); });
-    // Teach mode (teach.hpp): what's taught, and a button that starts and
-    // stops recording, like X+A, red while recording.
-    homePage->addRow(&teach::statusText);
-    homePage->addToggle(
-        "Teach", [] { return teach::recording(); },
-        [](bool on) {
-            if (on != teach::recording()) teach::requestToggle();
-        });
     // Practice mode (driver.hpp): pushing a drive stick past
     // kPracticeMaxThrottlePct (config.hpp) cuts the drive's power until it's
     // back under. Red while on.
@@ -170,6 +184,10 @@ void buildScreen() {
     auto autonSelectorPage = std::make_unique<AutonSelectorPage>();
     autonSelector = autonSelectorPage.get();
     registerAutons(*autonSelectorPage);
+    // The pick survives a restart (AUTON.TXT on the SD card), and the line
+    // above the routines says how sure the localizer is.
+    autonSelectorPage->rememberSelection();
+    autonSelectorPage->setStatus(&mclStatusText);
     gui.addPage(std::move(autonSelectorPage));
 
     // Re-checks these every tick (not just at startup), a sensor that
@@ -251,8 +269,30 @@ void runSelectedAuton() {
     // switch cuts short shows a start with no end.
     sapphirelib::telemetry::event("auton", "start,%s", name.c_str());
     autonSelector->run();
+    // A routine is done once its background motions are (runAsync()), and
+    // the drive stops then, even if the last motion chained into nothing.
+    sapphirelib::auton::waitForMotion();
+    drivetrain().stop();
     sapphirelib::telemetry::event("auton", "end,%s", name.c_str());
     SAPPHIRELIB_LOG_INFO("auton", "finished \"%s\"", name.c_str());
+}
+
+void pickAutonWithController() {
+    if (autonSelector == nullptr) return;
+    // A Controller of its own, not driver control's: sampling that one here
+    // would hide the gap it sees when driver control starts (resumed()), which
+    // the macros and the drive modes count on to drop stale state.
+    static Controller master(pros::E_CONTROLLER_MASTER);
+    while (true) {
+        master.update();
+        if (master.pressed(Button::left)) autonSelector->previous();
+        if (master.pressed(Button::right)) autonSelector->next();
+        master.screen().setLine(0, "AUTON <- ->");
+        master.screen().setLine(1, "%s", autonSelector->selectedName().c_str());
+        master.screen().setLine(2, "%s", "");
+        master.flushScreen();
+        pros::delay(kDriverLoopMs);
+    }
 }
 
 bool screenBusy() { return screen().anyPageBusy(); }
