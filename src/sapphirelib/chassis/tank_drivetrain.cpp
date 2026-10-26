@@ -1,11 +1,13 @@
 #include "sapphirelib/chassis/tank_drivetrain.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "pros/rtos.hpp"
 #include "sapphirelib/chassis/competition_watch.hpp"
 #include "sapphirelib/motion/boomerang_math.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
+#include "sapphirelib/motion/turn_math.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 #include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/util/angle.hpp"
@@ -19,6 +21,36 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint32_t kLoopDelayMs = 10;
 
 constexpr const char* kNoOdometry = "no odometry - call setOdometry() first, or pass one";
+
+// full motor voltage
+constexpr double kFullScaleVolts = 12.0;
+
+// one tick's side volts, scaled down together (never up) so neither side goes past maxVolts,
+// keeping the ratio between them. At 12V or more they're left alone: each motor's own clamp has
+// always done that job
+struct SideVolts {
+    double left;
+    double right;
+};
+
+SideVolts capSides(double leftVolts, double rightVolts, double maxVolts) {
+    if (!(maxVolts < kFullScaleVolts)) return {leftVolts, rightVolts};
+    const double largest = std::max(std::fabs(leftVolts), std::fabs(rightVolts));
+    const double ceiling = std::max(maxVolts, 0.0);
+    if (largest <= ceiling) return {leftVolts, rightVolts};
+    return {leftVolts * ceiling / largest, rightVolts * ceiling / largest};
+}
+
+// how long the error must stay within threshold: no time at all for a chained motion, which ends
+// on the first tick it's there (see ExitConditions::chain)
+template <class Exit> std::uint32_t settleMs(const Exit& exit) {
+    return exit.chain ? 0 : exit.settleTimeMs;
+}
+
+// whether a motion leaves the motors running for the next one: a chained one that got there
+template <class Exit> bool chainsOn(const Exit& exit, motion::ExitReason reason) {
+    return exit.chain && reason == motion::ExitReason::settled;
+}
 
 // log a motion's end event and return its result
 motion::MotionResult finishMotion(const char* kind, const motion::MotionResult& result) {
@@ -103,7 +135,7 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
     const double startDegrees = sideAverageDegrees();
     drivePID_.reset();
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
 
@@ -119,7 +151,8 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
             correction = config_.headingCorrectionKP * headingError;
         }
 
-        setSideVoltages(output - correction, output + correction);
+        const SideVolts sides = capSides(output - correction, output + correction, exit.maxVolts);
+        setSideVoltages(sides.left, sides.right);
 
         finalErrorIn = std::fabs(error);
         // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
@@ -133,13 +166,14 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return finishMotion("driveDistance", motion::MotionResult{.reason = reason,
                                                               .finalError = finalErrorIn,
                                                               .elapsedMs = tracker.elapsedMs()});
 }
 
-motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) {
+motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitConditions exit,
+                                                   motion::TurnDirection direction) {
     telemetry::event("motion",
                      "start,turnToHeading,target_deg=%.3f,threshold=%.3f,settle_ms=%u,"
                      "timeout_ms=%u",
@@ -148,19 +182,21 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
 
     const CompetitionWatch watch;
     turnPID_.reset();
+    motion::DirectedTurn turn(headingDeg, imu_.getHeadingDeg(), direction);
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorDeg = 0.0;
 
     while (true) {
-        const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
+        const double error = turn.errorDeg(imu_.getHeadingDeg());
 
         // the PID doesn't know heading wraps at 360, so pass the wrapped error as the target and 0
         // as the measurement. derivativeOnMeasurement must stay false for this
         const double output = turnPID_.update(error, 0.0);
 
-        setSideVoltages(output, -output);
+        const SideVolts sides = capSides(output, -output, exit.maxVolts);
+        setSideVoltages(sides.left, sides.right);
 
         finalErrorDeg = std::fabs(error);
         // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
@@ -174,7 +210,7 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return finishMotion("turnToHeading", motion::MotionResult{.reason = reason,
                                                               .finalError = finalErrorDeg,
                                                               .elapsedMs = tracker.elapsedMs()});
@@ -203,7 +239,7 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
     drivePID_.reset();
     turnPID_.reset();
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
 
@@ -218,7 +254,9 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
         const double forwardOutput = steer.direction * drivePID_.update(distanceIn, 0.0);
         const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
 
-        setSideVoltages(forwardOutput + turnOutput, forwardOutput - turnOutput);
+        const SideVolts sides =
+            capSides(forwardOutput + turnOutput, forwardOutput - turnOutput, exit.maxVolts);
+        setSideVoltages(sides.left, sides.right);
 
         finalErrorIn = distanceIn;
         // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
@@ -232,7 +270,7 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return motion::MotionResult{
         .reason = reason, .finalError = finalErrorIn, .elapsedMs = tracker.elapsedMs()};
 }
@@ -257,7 +295,7 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
     const double turnRadiusIn = 0.5 * exit.positionErrorThresholdIn;
     motion::BoomerangStep step;
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
 
@@ -274,7 +312,9 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
             step.direction * step.driveScale * drivePID_.update(step.driveErrorIn, 0.0);
         const double turnOutput = turnPID_.update(step.turnErrorDeg, 0.0);
 
-        setSideVoltages(forwardOutput + turnOutput, forwardOutput - turnOutput);
+        const SideVolts sides =
+            capSides(forwardOutput + turnOutput, forwardOutput - turnOutput, exit.maxVolts);
+        setSideVoltages(sides.left, sides.right);
 
         const double headingErrorToFinalDeg =
             std::fabs(wrapDegrees180(headingDeg - pose.headingDeg));
@@ -292,7 +332,7 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return finishMotion("moveToPose", motion::MotionResult{.reason = reason,
                                                            .finalError = finalErrorIn,
                                                            .elapsedMs = tracker.elapsedMs()});

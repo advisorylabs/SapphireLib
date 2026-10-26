@@ -316,6 +316,48 @@ bool MonteCarloLocalizer::setSensorMounts(std::vector<DistanceSensorMount> mount
     return true;
 }
 
+WallFix MonteCarloLocalizer::resetFromWall(std::size_t sensor, const WallResetConfig& config) {
+    WallFix fix;
+    const odom::Odometry::Snapshot snapshot = odometry_.snapshot();
+    if (sensor >= sensors_.size()) {
+        fix.why = "no such sensor";
+    } else if (config_.waitForSetPose && snapshot.resetCount == 0) {
+        // the pose is still relative to wherever the robot sat at startup, not the field's walls
+        fix.why = "no setPose() yet";
+    } else {
+        const DistanceSensorMount mount = sensorMounts()[sensor];
+        DistanceReading reading = distanceReadingFromMm(sensors_[sensor].get_distance(),
+                                                        sensors_[sensor].get_confidence(),
+                                                        config_.minConfidence, config_.filter.beam);
+        // the reading is sensorLatencyMs old: moved along its beam to now, as update() does
+        const SensorRay ray = sensorRay(0.0, 0.0, snapshot.pose.headingDeg, mount);
+        const double closingSpeed =
+            snapshot.rawVelocity.xInPerS * ray.dirX + snapshot.rawVelocity.yInPerS * ray.dirY;
+        reading = compensateLatency(reading, closingSpeed, config_.sensorLatencyMs / 1000.0);
+        if (!reading.valid) {
+            fix.why = "no reading";
+        } else {
+            // the map is never changed after construction, so reading it here is safe
+            fix = wallFix(filter_.map(), snapshot.pose.xIn, snapshot.pose.yIn,
+                          snapshot.pose.headingDeg, mount, reading.distanceIn, config);
+        }
+    }
+
+    if (fix.ok) {
+        // setPose() starts the particles over around the new pose at the next update, too
+        odom::Pose pose = snapshot.pose;
+        (fix.axis == WallAxis::x ? pose.xIn : pose.yIn) = fix.valueIn;
+        odometry_.setPose(pose);
+        telemetry::event("mcl", "wallreset,sensor=%u,axis=%c,value=%.3f,shift=%.3f",
+                         static_cast<unsigned>(sensor), fix.axis == WallAxis::x ? 'x' : 'y',
+                         fix.valueIn, fix.shiftIn);
+    } else {
+        telemetry::event("mcl", "wallreset,sensor=%u,skipped=%s", static_cast<unsigned>(sensor),
+                         fix.why);
+    }
+    return fix;
+}
+
 MountCalibrationResult
 MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
                                            const MountCalibrationConfig& config) {

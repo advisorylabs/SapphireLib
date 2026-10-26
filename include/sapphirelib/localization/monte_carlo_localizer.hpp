@@ -14,6 +14,7 @@
 #include "sapphirelib/localization/mount_calibration.hpp"
 #include "sapphirelib/localization/particle_filter.hpp"
 #include "sapphirelib/localization/sensor_model.hpp"
+#include "sapphirelib/localization/wall_reset.hpp"
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/odom/pose.hpp"
 
@@ -296,6 +297,30 @@ public:
      * @return false, changing nothing, if there's a different number of them
      */
     bool setSensorMounts(std::vector<DistanceSensorMount> mounts);
+
+    /**
+     * @brief Reset odometry's x or y from one distance sensor's reading off the perimeter, now.
+     * Safe to call from any task
+     *
+     * A one-shot reset, for a known spot in a routine (squared up near a wall, say): traces the
+     * sensor's beam to the wall it heads for and moves the pose so that wall is the reading away,
+     * across that wall only (see wallFix()). Skipped, changing nothing, when there's no reading,
+     * the beam meets the wall too steeply or near a corner, the reset would move the robot too
+     * far, or there's been no Odometry::setPose() yet. A reset goes through setPose(), so the
+     * particles start over around it too. Works with the localizer's correction on or off, and
+     * logs an mcl,wallreset event either way
+     *
+     * @param sensor which sensor, in the order given to the constructor
+     * @param config which readings to trust
+     * @return WallFix what the reading said, and whether the pose was reset
+     *
+     * @b Example
+     * @code {.cpp}
+     * // the back sensor (third in the list) against the near wall
+     * if (!localizer().resetFromWall(2).ok) printf("no reset\n");
+     * @endcode
+     */
+    WallFix resetFromWall(std::size_t sensor, const WallResetConfig& config = {});
 
     /**
      * @brief Find where each distance sensor really sits by spinning the robot in place, and use

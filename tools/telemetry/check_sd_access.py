@@ -5,8 +5,8 @@ PROS's file functions reach VEXos with nothing between tasks: its SD driver (usd
 libpros.a) calls vexFileOpen(), vexFileWrite(), vexFileSync() and vexFileClose() bare, and those
 are jumps straight into VEXos. Whether VEXos's file system copes with a second task arriving
 mid-write is VEXos's business, so the program never lets it happen: the Logger holds SdCardLock
-for each of its writer's passes, and everything else (teach mode, TUNE.CFG) holds it a chunk at a
-time through telemetry::readCardFile() and writeCardFile(). This script fails if a card call
+for each of its writer's passes, and everything else (TUNE.CFG, the auton selector's pick) holds
+it a chunk at a time through telemetry::readCardFile() and writeCardFile(). This script fails if a card call
 turns up where the lock isn't held, so a new one can't slip in unnoticed.
 
 A call counts as held if an SdCardLock is declared, earlier in the same function, in a scope

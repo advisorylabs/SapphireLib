@@ -7,6 +7,7 @@
 #include "sapphirelib/chassis/competition_watch.hpp"
 #include "sapphirelib/chassis/thermal_math.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
+#include "sapphirelib/motion/turn_math.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 #include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/util/angle.hpp"
@@ -47,6 +48,30 @@ struct WheelMix {
 WheelMix mixHolonomic(double throttle, double strafe, double turn) {
     return {throttle + strafe + turn, throttle - strafe - turn, throttle - strafe + turn,
             throttle + strafe - turn};
+}
+
+// scale a mix down (never up) so no wheel goes past maxVolts, keeping the direction. At 12V or
+// more it's left alone: each motor's own clamp has always done that job
+WheelMix capMix(const WheelMix& mix, double maxVolts) {
+    if (!(maxVolts < kFullScaleVolts)) return mix;
+    const double largest = std::max({std::fabs(mix.frontLeft), std::fabs(mix.frontRight),
+                                     std::fabs(mix.backLeft), std::fabs(mix.backRight)});
+    const double ceiling = std::max(maxVolts, 0.0);
+    if (largest <= ceiling) return mix;
+    const double scale = ceiling / largest;
+    return {mix.frontLeft * scale, mix.frontRight * scale, mix.backLeft * scale,
+            mix.backRight * scale};
+}
+
+// how long the error must stay within threshold: no time at all for a chained motion, which ends
+// on the first tick it's there (see ExitConditions::chain)
+template <class Exit> std::uint32_t settleMs(const Exit& exit) {
+    return exit.chain ? 0 : exit.settleTimeMs;
+}
+
+// whether a motion leaves the motors running for the next one: a chained one that got there
+template <class Exit> bool chainsOn(const Exit& exit, motion::ExitReason reason) {
+    return exit.chain && reason == motion::ExitReason::settled;
 }
 
 // log a motion's end event and return its result
@@ -270,13 +295,18 @@ void HolonomicDrivetrain::setWheelVoltages(double frontLeft, double frontRight, 
 
 void HolonomicDrivetrain::holonomicVolts(double forwardVolts, double strafeVolts,
                                          double turnVolts) {
+    driveAxes(forwardVolts, strafeVolts, turnVolts, kFullScaleVolts);
+}
+
+void HolonomicDrivetrain::driveAxes(double forwardVolts, double strafeVolts, double turnVolts,
+                                    double ceilingVolts) {
     const WheelMix mix = mixHolonomic(forwardVolts, strafeVolts, turnVolts);
 
-    // scale the whole mix down (never up) so no wheel goes past 12V, keeping the direction
-    const double largest =
-        std::max({std::fabs(mix.frontLeft), std::fabs(mix.frontRight), std::fabs(mix.backLeft),
-                  std::fabs(mix.backRight), kFullScaleVolts}) /
-        kFullScaleVolts;
+    // scale the whole mix down (never up) so no wheel goes past the ceiling, keeping the direction
+    const double ceiling = std::clamp(ceilingVolts, 1e-6, kFullScaleVolts);
+    const double largest = std::max({std::fabs(mix.frontLeft), std::fabs(mix.frontRight),
+                                     std::fabs(mix.backLeft), std::fabs(mix.backRight), ceiling}) /
+                           ceiling;
 
     setWheelVoltages(mix.frontLeft / largest, mix.frontRight / largest, mix.backLeft / largest,
                      mix.backRight / largest);
@@ -396,7 +426,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
     drivePID_.reset();
     turnPID_.reset();
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
 
@@ -414,7 +444,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
         const double turnOutput =
             turnPID_.update(wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
 
-        holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
+        driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
 
         finalErrorIn = distanceIn;
         // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
@@ -428,7 +458,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return motion::MotionResult{
         .reason = reason, .finalError = finalErrorIn, .elapsedMs = tracker.elapsedMs()};
 }
@@ -447,7 +477,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
     drivePID_.reset();
     turnPID_.reset();
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
 
@@ -464,7 +494,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
         const double headingError = wrapDegrees180(headingDeg - pose.headingDeg);
         const double turnOutput = turnPID_.update(headingError, 0.0);
 
-        holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
+        driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
 
         const bool withinThreshold = distanceIn <= exit.positionErrorThresholdIn &&
                                      std::fabs(headingError) <= exit.headingErrorThresholdDeg;
@@ -480,7 +510,7 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return finishMotion("moveToPose", motion::MotionResult{.reason = reason,
                                                            .finalError = finalErrorIn,
                                                            .elapsedMs = tracker.elapsedMs()});
@@ -701,7 +731,7 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
     const double startDegrees = cornerAverageDegrees();
     drivePID_.reset();
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
 
@@ -717,7 +747,8 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
             correction = config_.headingCorrectionKP * headingError;
         }
 
-        const WheelMix mix = mixHolonomic(output, /*strafe=*/0.0, correction);
+        const WheelMix mix =
+            capMix(mixHolonomic(output, /*strafe=*/0.0, correction), exit.maxVolts);
         setWheelVoltages(mix.frontLeft, mix.frontRight, mix.backLeft, mix.backRight);
 
         finalErrorIn = std::fabs(error);
@@ -732,13 +763,14 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return finishMotion("driveDistance", motion::MotionResult{.reason = reason,
                                                               .finalError = finalErrorIn,
                                                               .elapsedMs = tracker.elapsedMs()});
 }
 
-motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit) {
+motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitConditions exit,
+                                                        motion::TurnDirection direction) {
     telemetry::event("motion",
                      "start,turnToHeading,target_deg=%.3f,threshold=%.3f,settle_ms=%u,"
                      "timeout_ms=%u",
@@ -747,19 +779,21 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
 
     const CompetitionWatch watch;
     turnPID_.reset();
+    motion::DirectedTurn turn(headingDeg, imu_.getHeadingDeg(), direction);
 
-    motion::ExitTracker tracker(exit.settleTimeMs, exit.timeoutMs, pros::millis());
+    motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorDeg = 0.0;
 
     while (true) {
-        const double error = wrapDegrees180(headingDeg - imu_.getHeadingDeg());
+        const double error = turn.errorDeg(imu_.getHeadingDeg());
 
         // the PID doesn't know heading wraps at 360, so pass the wrapped error as the target and 0
         // as the measurement
         const double output = turnPID_.update(error, 0.0);
 
-        const WheelMix mix = mixHolonomic(/*throttle=*/0.0, /*strafe=*/0.0, output);
+        const WheelMix mix =
+            capMix(mixHolonomic(/*throttle=*/0.0, /*strafe=*/0.0, output), exit.maxVolts);
         setWheelVoltages(mix.frontLeft, mix.frontRight, mix.backLeft, mix.backRight);
 
         finalErrorDeg = std::fabs(error);
@@ -774,7 +808,7 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!chainsOn(exit, reason)) stop();
     return finishMotion("turnToHeading", motion::MotionResult{.reason = reason,
                                                               .finalError = finalErrorDeg,
                                                               .elapsedMs = tracker.elapsedMs()});

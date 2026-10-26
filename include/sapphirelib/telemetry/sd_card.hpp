@@ -14,8 +14,8 @@ namespace sapphirelib::telemetry {
  * calls vexFileOpen(), vexFileWrite(), vexFileSync() and vexFileClose() bare, and those jump
  * straight into VEXos. Nothing says VEXos's file system copes with a second task arriving
  * mid-write. So every use of the card takes this first: the Logger holds it for each of its
- * writer's passes, and anything else on another task while the Logger runs (teach mode saving
- * TEACH.TXT) holds it a chunk at a time, so the Logger's writer is never kept waiting long.
+ * writer's passes, and anything else on another task while the Logger runs (the auton selector
+ * saving its pick) holds it a chunk at a time, so the Logger's writer is never kept waiting long.
  *
  * Hold it from tasks of your own, not competition tasks: PROS deletes those on a mode change, and
  * a lock held by a deleted task stays held. Logger copes with that (see Logger's writer), others
@@ -70,7 +70,7 @@ bool cardInserted(std::uint32_t waitMs);
 /**
  * @brief Read a whole file, a chunk at a time, holding the card (SdCardLock) for each
  *
- * @param path the file, e.g. "/usd/TEACH.TXT"
+ * @param path the file, e.g. "/usd/TUNE.CFG"
  * @param text set to what's in it, up to one byte past maxBytes
  * @param maxBytes stop reading past this
  * @param waitMs the longest to wait for the card for any one chunk, in milliseconds
@@ -84,7 +84,7 @@ bool readCardFile(const char* path, std::string& text, std::size_t maxBytes, std
  *
  * Each chunk is one write and one sync: the file's buffer is exactly one chunk
  *
- * @param path the file, e.g. "/usd/TEACH.TXT". The folder must exist
+ * @param path the file, e.g. "/usd/TUNE.CFG". The folder must exist
  * @param text what to write
  * @param waitMs the longest to wait for the card for any one chunk, in milliseconds
  * @return true if every chunk was written and the file closed

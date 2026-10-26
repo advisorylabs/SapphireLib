@@ -11,6 +11,7 @@
 #include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/motion/turn_math.hpp"
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/sensors/imu.hpp"
 
@@ -128,16 +129,21 @@ public:
      *
      * @param headingDeg target field heading, 0-360 degrees
      * @param exit when the motion ends. errorThreshold is in degrees, 2 by default
+     * @param direction which way to turn. The short way by default; a turn of about 180 degrees
+     * that has to go one way says so (see motion::DirectedTurn)
      * @return motion::MotionResult how the motion ended
      *
      * @b Example
      * @code {.cpp}
      * // turn to face 90 degrees
      * drivetrain().turnToHeading(90);
+     * // turn around to 180, to the right even if left is a little shorter
+     * drivetrain().turnToHeading(180, {2.0}, sapphirelib::motion::TurnDirection::clockwise);
      * @endcode
      */
-    motion::MotionResult turnToHeading(double headingDeg,
-                                       ExitConditions exit = ExitConditions{2.0});
+    motion::MotionResult
+    turnToHeading(double headingDeg, ExitConditions exit = ExitConditions{2.0},
+                  motion::TurnDirection direction = motion::TurnDirection::shortest);
 
     /**
      * @brief Set the odometry used by the motions that don't take one

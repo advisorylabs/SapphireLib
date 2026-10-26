@@ -129,6 +129,21 @@ struct ExitConditions {
 
     /** longest time the motion can take, in milliseconds. 3000 by default. 0 disables it */
     std::uint32_t timeoutMs = 3000;
+
+    /**
+     * the most any drive motor gets, in volts: lower for a gentler move. The whole output is
+     * scaled down together, so the robot still heads the same way. 12 (full power) by default
+     */
+    double maxVolts = 12.0;
+
+    /**
+     * end the first tick the error is within errorThreshold, without waiting settleTimeMs, and
+     * leave the motors running instead of stopping them, so the next motion starts at speed
+     * (motion chaining: faster, a little less exact). Widen errorThreshold to match, a few inches
+     * or degrees. Never chain the last motion of a routine: nothing would stop the robot. False by
+     * default
+     */
+    bool chain = false;
 };
 
 } // namespace sapphirelib::chassis
