@@ -76,20 +76,6 @@ public:
     void update();
 
     /**
-     * @brief update(), but with this tick's buttons and sticks from a recording instead of the
-     * controller
-     *
-     * For playing a recorded drive back into code written for a controller (the driver macros),
-     * on a Controller of its own: the time, resumed() and the button edges work as they do for
-     * update(), and it counts as connected. Reads nothing from the controller, and the screen
-     * goes nowhere unless you flush it
-     *
-     * @param heldMask the buttons held this tick
-     * @param axes the sticks this tick, -1 to 1, in Axis order. Centered by default
-     */
-    void replay(ButtonMask heldMask, const std::array<double, 4>& axes = {});
-
-    /**
      * @brief Get the time of the latest update(). Use it as the tick's one "now"
      *
      * @return std::uint32_t time, in milliseconds

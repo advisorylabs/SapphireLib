@@ -17,9 +17,10 @@ enum class ExitReason : std::uint8_t {
     /** the motion couldn't start (an empty path, or no odometry) and commanded nothing */
     aborted,
     /**
-     * the competition mode changed under it (autonomous ended, a disable) and it stopped where it
-     * was. Only a motion on a task of its own (a MotionQueue's) gets to say so: one run from
-     * autonomous() itself is deleted with that task. See competitionModeChanged()
+     * the competition mode changed under it (autonomous ended, a disable), or something cancelled
+     * it (auton::cancelMotion()), and it stopped where it was. Only a motion on a task of its own
+     * (a MotionQueue's) gets to say so for a mode change: one run from autonomous() itself is
+     * deleted with that task. See competitionModeChanged()
      */
     interrupted,
 };

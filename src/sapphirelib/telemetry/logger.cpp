@@ -453,8 +453,8 @@ void Logger::writerLoop() {
 
 void Logger::writerPass() {
     // the card for the whole pass: every SD call the logger makes is in here, so no other task's
-    // file (teach mode's TEACH.TXT) is ever written in the middle of one of ours. Taken before the
-    // pass's clock starts, so waiting for it isn't counted as formatting
+    // file (the auton selector's AUTON.TXT, say) is ever written in the middle of one of ours.
+    // Taken before the pass's clock starts, so waiting for it isn't counted as formatting
     const SdCardLock card(kCardLockWaitMs);
     if (!card.held() && !warnedCardLock_) {
         warnedCardLock_ = true;

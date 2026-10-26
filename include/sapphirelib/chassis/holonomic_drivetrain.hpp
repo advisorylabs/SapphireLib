@@ -18,6 +18,7 @@
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/motion/trajectory.hpp"
 #include "sapphirelib/motion/trajectory_config.hpp"
+#include "sapphirelib/motion/turn_math.hpp"
 #include "sapphirelib/odom/odometry.hpp"
 #include "sapphirelib/odom/tracking_wheel.hpp"
 #include "sapphirelib/sensors/imu.hpp"
@@ -504,16 +505,21 @@ public:
      *
      * @param headingDeg target field heading, 0-360 degrees
      * @param exit when the motion ends. errorThreshold is in degrees, 2 by default
+     * @param direction which way to turn. The short way by default; a turn of about 180 degrees
+     * that has to go one way says so (see motion::DirectedTurn)
      * @return motion::MotionResult how the motion ended
      *
      * @b Example
      * @code {.cpp}
      * // turn to face 90 degrees
      * drivetrain().turnToHeading(90);
+     * // turn around to 180, to the right even if left is a little shorter
+     * drivetrain().turnToHeading(180, {2.0}, sapphirelib::motion::TurnDirection::clockwise);
      * @endcode
      */
-    motion::MotionResult turnToHeading(double headingDeg,
-                                       ExitConditions exit = ExitConditions{2.0});
+    motion::MotionResult
+    turnToHeading(double headingDeg, ExitConditions exit = ExitConditions{2.0},
+                  motion::TurnDirection direction = motion::TurnDirection::shortest);
 
     /**
      * @brief Stop the drivetrain
@@ -660,6 +666,9 @@ private:
 
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);
+
+    // holonomicVolts(), with no wheel past ceilingVolts instead of 12
+    void driveAxes(double forwardVolts, double strafeVolts, double turnVolts, double ceilingVolts);
 
     // mean of the four corner encoders, in motor degrees
     double cornerAverageDegrees() const;

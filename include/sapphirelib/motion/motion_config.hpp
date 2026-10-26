@@ -45,6 +45,15 @@ struct PoseExitConditions {
      * 3 by default; 0 never settles, and nothing turns it to the final heading
      */
     double settleRadiusIn = 3.0;
+
+    /** the most any drive motor gets, in volts. See ExitConditions::maxVolts. 12 by default */
+    double maxVolts = 12.0;
+
+    /**
+     * end as soon as both errors are within threshold and leave the motors running, for the next
+     * motion to carry on from. See ExitConditions::chain. False by default
+     */
+    bool chain = false;
 };
 
 /**

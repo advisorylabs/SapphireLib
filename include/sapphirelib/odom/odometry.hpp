@@ -128,6 +128,19 @@ public:
          * after setPose()
          */
         Velocity rawVelocity;
+
+        /**
+         * how far the robot has driven since the program started, in inches: an odometer, from
+         * the raw pose. Never goes down, and setPose() doesn't reset it, so the difference between
+         * two snapshots is the distance driven between them, around corners and all
+         */
+        double travelledIn = 0.0;
+
+        /**
+         * how far the robot has turned since the program started, either way, in degrees. Never
+         * goes down, like travelledIn
+         */
+        double turnedDeg = 0.0;
     };
 
     /**
@@ -226,6 +239,11 @@ private:
     std::atomic<double> resetHorizontalIn_{0.0};
     double lastVerticalIn_ = 0.0;
     double lastHorizontalIn_ = 0.0;
+
+    // the odometers, see Snapshot. Written by update() only
+    std::atomic<double> travelledIn_{0.0};
+    std::atomic<double> turnedDeg_{0.0};
+
     std::unique_ptr<pros::Task> task_;
 };
 

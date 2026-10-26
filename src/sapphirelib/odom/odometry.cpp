@@ -1,6 +1,7 @@
 #include "sapphirelib/odom/odometry.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "pros/rtos.hpp"
@@ -67,6 +68,10 @@ void Odometry::update() {
         config.verticalOffsetIn, config.horizontalOffsetIn);
     const Velocity velocity = velocityFromDelta(delta, rotationDeg - lastRotationDeg_, elapsedS);
 
+    // the odometers: real travel whichever frame it lands in, so before the generation check
+    travelledIn_.store(travelledIn_.load() + std::hypot(delta.dxIn, delta.dyIn));
+    turnedDeg_.store(turnedDeg_.load() + std::fabs(rotationDeg - lastRotationDeg_));
+
     lastRotationDeg_ = rotationDeg;
     lastVerticalIn_ = verticalIn;
     lastHorizontalIn_ = horizontalIn;
@@ -101,6 +106,8 @@ Odometry::Snapshot Odometry::snapshot() const {
         .rawPose = state->raw,
         .resetCount = poseGeneration_.load(),
         .rawVelocity = state->rawVelocity,
+        .travelledIn = travelledIn_.load(),
+        .turnedDeg = turnedDeg_.load(),
     };
 }
 

@@ -35,6 +35,7 @@
 #include "sapphirelib/localization/monte_carlo_localizer.hpp"
 #include "sapphirelib/localization/particle_filter.hpp"
 #include "sapphirelib/localization/sensor_model.hpp"
+#include "sapphirelib/localization/wall_reset.hpp"
 
 #include "sapphirelib/motion/boomerang_math.hpp"
 #include "sapphirelib/motion/exit_tracker.hpp"
@@ -44,17 +45,18 @@
 #include "sapphirelib/motion/motion_queue.hpp"
 #include "sapphirelib/motion/path.hpp"
 #include "sapphirelib/motion/pure_pursuit_math.hpp"
-#include "sapphirelib/motion/recorded_trajectory.hpp"
 #include "sapphirelib/motion/trajectory.hpp"
 #include "sapphirelib/motion/trajectory_config.hpp"
 #include "sapphirelib/motion/trajectory_generator.hpp"
 #include "sapphirelib/motion/trajectory_path.hpp"
+#include "sapphirelib/motion/turn_math.hpp"
+
+#include "sapphirelib/auton/auton.hpp"
 
 #include "sapphirelib/sensors/bump_detector.hpp"
 #include "sapphirelib/sensors/imu.hpp"
 #include "sapphirelib/sensors/imu_scale_math.hpp"
 
-#include "sapphirelib/input/button_playback.hpp"
 #include "sapphirelib/input/button_tracker.hpp"
 #include "sapphirelib/input/controller.hpp"
 #include "sapphirelib/input/controller_screen.hpp"
