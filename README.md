@@ -32,6 +32,13 @@ PID tuning is still per-robot work you'll do after pulling it in. See
   drifts, so every pose motion drives by the corrected pose with no other changes. A spin in place
   finds where its distance sensors really sit (the Odom page's Calibrate Sensors), the way
   Calibrate Offsets finds the tracking wheels. See [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
+- **Autonomous routines** ([`docs/QUICKSTART.md`](docs/QUICKSTART.md)): short calls for every motion
+  on one drivetrain, `drive()`, `turnTo()`, `moveToPoint()`, `moveToPose()`, `strafe()`,
+  `followPath()`, `followTrajectory()`, each with a speed cap, a timeout and motion chaining;
+  background motions (`runAsync()`) with mechanisms timed to them (`waitUntilTraveled()`,
+  `waitUntilNear()`, `waitUntilWaypoint()`, `cancelMotion()`); and one-shot distance resets off the
+  walls (`resetBack()` and friends). Picked on the brain screen or the controller, remembered on the
+  SD card.
 - **Motion**: `moveToPoint()`, `moveToPose()` (boomerang on tank), and pure-pursuit `followPath()` on
   both drivetrains, plus `MotionQueue`. Every blocking motion returns a `MotionResult`, so a routine
   can tell a motion that settled from one that timed out against something.
@@ -41,10 +48,6 @@ PID tuning is still per-robot work you'll do after pulling it in. See
   the robot when it's blocked. Draw them in Sapphire Sim's Paths tab and paste the C++. Trajectories
   planned separately chain together to branch mid-routine on a sensor, with a stop or at speed. See
   [`docs/TRAJECTORIES.md`](docs/TRAJECTORIES.md).
-- **Teach mode** (holonomic): drive a route by hand once (X+A), and `trajectoryFromRecording()`
-  replays it as an autonomous routine: where the robot went, as a trajectory the feedback and the
-  localizer correct, with the driver's buttons played back into the macros on its clock. See
-  [`docs/TEACH.md`](docs/TEACH.md).
 - **GUI**: a tab-based brain-screen UI with home/status, autonomous selector, live odometry, sensor
   diagnostics, and a PID tuner. Opt-in, and your own pages plug into the same `addPage()`.
 - **Tuning**: manual PID tuning from the brain screen, and Auto-Tune, which measures each drive axis's
@@ -154,7 +157,10 @@ void opcontrol() {
 ```
 
 [`examples/`](examples/) builds on this: a holonomic chassis, the GUI with odometry and pose motions,
-a driver macro system, and SD telemetry.
+a driver macro system, and SD telemetry. With odometry, routines get shorter still: the auton
+functions turn the routine above into `drive(24); turnTo(90); drive(-24);`, with background motions,
+wall resets and the rest ([`docs/QUICKSTART.md`](docs/QUICKSTART.md),
+[`examples/autonomous.cpp`](examples/autonomous.cpp)).
 
 ### Building this repo / building the template yourself
 
@@ -178,13 +184,13 @@ SapphireLib/
 ├── tools/telemetry/       # slt_read.py, the reference reader for SD telemetry logs
 ├── tools/analyzer/        # Browser telemetry analyzer: diagnostics, match replay, offline tuning
 ├── tools/sim/             # Browser simulator: odometry + MCL + motions, with visualizer toggles
-├── docs/                  # Roadmap, setup guide, macros and localization guides, telemetry format
+├── docs/                  # Quick start, roadmap, setup, macros and localization guides, telemetry format
 └── .github/               # CI workflow, issue templates
 ```
 
 Library headers and sources mirror each other by module: `chassis/`, `control/`, `odom/`, `motion/`,
-`localization/`, `sensors/`, `input/`, `mechanism/`, `telemetry/`, `tuning/`, `gui/`, `diag/`,
-`util/`.
+`localization/`, `auton/`, `sensors/`, `input/`, `mechanism/`, `telemetry/`, `tuning/`, `gui/`,
+`diag/`, `util/`.
 
 ## License
 

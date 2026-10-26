@@ -203,13 +203,14 @@ know without rebuilding.
 
 ## Autonomous
 
-Start every routine with a `setPose()` at the robot's real place on the field, in field coordinates:
+Start every routine with a `setPose()` at the robot's real place on the field, in field coordinates
+(the auton functions, [`QUICKSTART.md`](QUICKSTART.md)):
 
 ```cpp
 void twoGoalAuton() {
-    odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 270});
-    if (!drivetrain().moveToPoint(-60, -60).settled()) return;
-    drivetrain().moveToPose(-60, -24, 0);
+    setPose(-48, -60, 270);
+    if (!moveToPoint(-60, -60).settled()) return;
+    moveToPose(-60, -24, 0);
 }
 ```
 
@@ -219,8 +220,28 @@ wherever the robot sat at `initialize()`, so the localizer corrects nothing. In 
 localizer allowed to correct anyway *did* find the robot eventually, but on the way briefly latched
 onto a wrong spot over 30 in away.
 
-To compare, `localizer().setCorrectionEnabled(false)` leaves odometry alone while the filter keeps
-running; drive the same route both ways.
+To compare, `setMcl(false)` (`localizer().setCorrectionEnabled(false)`) leaves odometry alone while
+the filter keeps running; drive the same route both ways.
+
+### Distance resets
+
+Alongside the filter, one sensor can reset x or y in one go, at a known moment in a routine:
+`resetFront()`, `resetBack()`, `resetLeft()` and `resetRight()` in the auton functions, or
+`localizer().resetFromWall(index, config)` underneath. Each traces its sensor's beam from the pose to
+the wall it heads for, and moves the pose so that wall is the reading away, across that wall only:
+a beam into the left or right wall sets x, one into the near or far wall sets y (`wallFix()`,
+`localization/wall_reset.hpp`). It goes through `Odometry::setPose()`, so the particles start over
+around the new pose too.
+
+`WallResetConfig` says which readings to trust. A reading is skipped, changing nothing, when its
+beam meets the wall more than `maxAngleDeg` (30) off square, when it lands within `cornerMarginIn`
+of a corner, or when it would move the robot more than `maxJumpIn`; also with no reading, or before
+the first `setPose()`. 96671H's are in `devices.cpp`'s `auton::use()`: 18 in from the corners, where
+Override's loaders sit, and at most 8 in, past which a short reading is likelier a game element than
+the wall. Every reset logs an `mcl,wallreset` event saying what it did or why it didn't.
+
+Only the four perimeter walls count, whatever else the map has. Reset with the robot still and
+square to a clear stretch of wall; the **Wall Reset Test** routine checks it against one wall.
 
 ## What it won't do
 
@@ -321,6 +342,7 @@ but real sensors, real walls and real wheel slip are what count. Before trusting
 | `ParticleFilter`: predict, weigh, resample, recovery, `sampleParticles()` | `localization/particle_filter.hpp` | `tests/localization/particle_filter_test.cpp`: unit checks, the exact model the tables replaced, plus closed-loop runs on a simulated field against biased odometry, a blocked sensor and a bump |
 | `Rng`: seeded xoshiro128**, and `fastGaussian()` (a ziggurat) | `util/random.hpp` | `tests/util/random_test.cpp` |
 | `LookupTable`: a function sampled and interpolated | `util/lookup_table.hpp` | `tests/util/lookup_table_test.cpp` |
+| `wallFix()`: x or y from one reading against the perimeter, for the distance resets | `localization/wall_reset.hpp` | `tests/localization/wall_reset_test.cpp`; `tools/sim/test/auton.test.js` resets the simulated robot |
 | `fitSensorMounts()`: each sensor's mount, from readings taken while spinning | `localization/mount_calibration.hpp` | `tests/localization/mount_calibration_test.cpp`: simulated spins with known mounts, from exact readings to noisy ones with outliers, a hidden wall, the halfway line; one wall and corners, in empty and furnished rooms, a cabinet askew, something lined up across the room, and two adjacent sensors it must refuse |
 | `MonteCarloLocalizer`: sensors, gating, the correction, the mount calibration's spin | `localization/monte_carlo_localizer.hpp` | on the robot; its logic runs in the simulator |
 | Odometry's correction: `snapshot()`, `setPositionCorrection()`, the ease-in | `odom/odometry.hpp`, `odom/odometry_math.hpp` | `tests/odom/odometry_math_test.cpp` (`correctionStep()`) |

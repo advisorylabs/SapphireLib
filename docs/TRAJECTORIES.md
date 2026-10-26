@@ -29,8 +29,8 @@ Contents: [Drawing a path](#drawing-a-path) · [In autons.cpp](#in-autonscpp) ·
 [How it's followed](#how-its-followed) · [Tuning](#tuning) · [Reading a run](#reading-a-run) ·
 [The code](#the-code)
 
-To drive a route by hand and replay it as a routine, see [teach mode](TEACH.md): it replays
-through the same follower.
+For writing routines in general (every motion, background motions, the selector), see
+[`QUICKSTART.md`](QUICKSTART.md).
 
 ## Drawing a path
 
@@ -82,7 +82,7 @@ since.
 
 ## In autons.cpp
 
-**Copy C++** writes the chain:
+**Copy C++** writes the chain, and a routine that drives it from its first point:
 
 ```cpp
 // Sapphire Sim path "rush": 3.42 s planned with the open TUNE.CFG's models
@@ -93,80 +93,62 @@ const std::vector<sapphirelib::motion::TrajectorySection> kRush{
      .constraints = {.voltageBudget = 7},
      .stopAtEnd = true},
 };
+
+// in registerAutons(): selector.addRoutine("rush", &rush);
+void rush() {
+    setPose(-48, -60, 0);
+    followTrajectory(kRush);
+}
 ```
 
+Paste both into [`autons.cpp`](../src/robot/autons.cpp) and add the routine to `registerAutons()`.
 **Paste C++** reads that format back into the tab, so a path in `autons.cpp` can be edited again.
 
-The robot plans it itself, at the start of the routine, from the axis models it has (Auto-Tune, or
-TUNE.CFG's `model.*` lines):
+`followTrajectory()` (`sapphirelib/auton/auton.hpp`) plans it the first time it's driven, from the
+axis models the robot has (Auto-Tune, or TUNE.CFG's `model.*` lines), and keeps the plan, planning
+again only if the models change. Planning takes a few milliseconds and allocates:
+`planTrajectory(kRush)` at the start of the routine does it before the robot moves. Pass the same
+list each time, a `const` at file scope as Copy C++ writes it. `followTrajectory()` returns a
+`MotionResult` like every motion: `settled` on the last point, `timedOut` if it ran `overtimeMs` past
+the plan (held in place, say), `aborted` if there's no plan (no axis models, or a path the planner
+can't use; the terminal says why).
+
+**Actions.** A path with any (see [Drawing a path](#drawing-a-path)) gets a routine that runs the
+trajectory in the background (`runAsync()`) and does each one as the plan reaches its point:
 
 ```cpp
-void rushAuton() {
-    static sapphirelib::motion::TrajectoryResult rush; // the motion reads it to the end
-    rush = sapphirelib::motion::generateTrajectory(kRush, drivetrain().axisModels());
-    if (!rush.ok) return; // rush.error says why, e.g. a model that isn't measured
-    odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 0}); // its first point
-    drivetrain().followTrajectory(rush.trajectory);
+void rush() {
+    setPose(-48, -60, 0);
+    runAsync([] { followTrajectory(kRush); });
+    if (!waitUntilWaypoint(1)) return;
+    macros::setExtended(true);
+    if (!waitUntilWaypoint(2)) return;
+    macros::setClawClosed(false);
+    waitForMotion();
 }
 ```
 
-Planning takes a few milliseconds and allocates, so do it before the motion, never in a loop.
-`followTrajectory()` returns a `MotionResult` like every motion: `settled` on the last point,
-`timedOut` if it ran `overtimeMs` past the plan (held in place, say), `aborted` for an empty
-trajectory, no odometry, or no axis models.
+`waitUntilWaypoint(n)` compares the plan's progress (`trajectoryProgress().distanceIn`) against how
+far along the path point `n` is (`TrajectoryResult::waypointIn`), so it's the plan reaching the point,
+not the robot stopping there: the robot doesn't slow down for an action. For it to be at rest first,
+end a section at that point with **Stop at its end**. A point the plan never reaches (the robot held
+up until the motion times out) makes the wait return `false`, and the routine ends there, so the claw
+doesn't open short of the goal. The **Trajectory Example** routine in `autons.cpp` checks it on the
+robot (about 30 in clear ahead).
 
-**Actions.** A path with any (see [Drawing a path](#drawing-a-path)) gets a second list after its
-sections, named after it, for `robot::followPath()` ([`include/robot/paths.hpp`](../include/robot/paths.hpp)):
-
-```cpp
-// what the claw and the extender do along "rush", by point (robot::followPath())
-const std::vector<robot::PathAction> kRushActions{
-    {.waypoint = 1, .action = robot::PathAction::extenderOut},
-    {.waypoint = 2, .action = robot::PathAction::clawOpen},
-};
-
-void rushAuton() {
-    static TrajectoryResult rush; // the motion reads it to the end
-    if (!planPiece("rush", rush, kRush)) return;
-    odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 0});
-    followPath(rush, kRushActions);
-}
-```
-
-`followPath()` follows the plan and does each action as the plan reaches its point, from the
-routine's task: it compares `trajectoryProgress().distanceIn` against the plan's `waypointIn`, how
-far along the path each of its points is. The robot doesn't slow down for an action; for it to be at
-rest first, end a section at that point with **Stop at its end**. An action whose point the plan
-never reaches (the robot held up until the motion times out) isn't done, so the claw doesn't open
-short of the goal. **Paste C++** reads both lists back. The **Path Actions Test** routine in
-`autons.cpp` checks it on the robot (about 30 in clear ahead).
-
-**Timing a mechanism.** `trajectoryProgress()` says which section the plan is in, how far along it
-is, and whether it's waiting, from any task. Run the trajectory on a `MotionQueue` and wait on it:
-
-```cpp
-const std::uint32_t motion = drivetrain().trajectoryProgress().motion + 1; // the next to start
-queue.enqueue([] { drivetrain().followTrajectory(rush.trajectory); });
-queue.run();
-sapphirelib::waitUntil([motion] {
-    const auto progress = drivetrain().trajectoryProgress();
-    return progress.motion == motion && progress.section >= 1;
-}, 3000);
-intake().spin(); // as the robot enters section 1, without slowing down
-queue.waitUntilDone();
-```
-
-A section starts at its first point, so `section >= 1` comes true as the robot reaches the junction.
-Until the queue's task starts the motion, the progress is still the last trajectory's, which may
-well be past section 1; `motion` numbers the `followTrajectory()` calls, so the wait only counts
-this one.
-`examples/trajectory.cpp` is a complete routine; `src/robot/autons.cpp` has a **Trajectory Test**
-routine for checking it on the robot (it needs about 40 in ahead and 30 in to the right).
+**Timing anything else.** The same way: start the trajectory with `runAsync()`, then wait on
+`waitUntilWaypoint()`, `waitUntilTraveled()`, `waitUntilNear()` or a sensor of your own
+(`sapphirelib::waitUntil()`), and `waitForMotion()` at the end. `examples/trajectory.cpp` starts an
+intake as the robot enters a slower section. Underneath, `trajectoryProgress()` says which section the
+plan is in, how far along it is, and whether it's waiting, from any task.
 
 ## Branching
 
 A routine can pick its next trajectory from a sensor partway through: drive to where a pin should
-be, and if the claw's sensor sees it go and score, if not skip to the next one. Each branch is a
+be, and if the claw's sensor sees it go and score, if not skip to the next one. Branching uses the
+drivetrain's own `followTrajectory()` and `generateTrajectory()`, with plans that must last as long as
+the motion (make them `static`); [`examples/trajectory.cpp`](../examples/trajectory.cpp) has both
+kinds as complete routines. Each branch is a
 trajectory of its own, planned up front with `TrajectoryOptions::from`, which starts it exactly
 where another ends (its point, heading, speed and direction of travel). Its sections list only the
 points after that one, as every section after the first of a chain does.
@@ -215,9 +197,9 @@ drivetrain().followTrajectory(trunk.trajectory, {.next = [](const Trajectory&) {
 - In the analyzer the chain is one `followTrajectory` motion, its plan the trunk and the branch
   driven together.
 
-`src/robot/autons.cpp` has both: **Branch Test** (with a stop) and **Branch At Speed**, each
-picking a branch on the claw's pin sensor and driving home after. Sapphire Sim's **Branch at
-speed** routine branches on its front distance sensor: turn the defender on and it swerves.
+[`examples/trajectory.cpp`](../examples/trajectory.cpp) has both, `branchWithStop()` and
+`branchAtSpeed()`, each picking a branch on a front distance sensor and driving home after. Sapphire
+Sim's **Branch at speed** routine does the same: turn the defender on and it swerves.
 
 ## How the plan is made
 
@@ -319,6 +301,7 @@ Trajectory Test, to see all of this without a robot.
 | `motion/holonomic_feedforward.hpp` | `frictionVolts()`, `holonomicFeedforward()`, `trajectoryFeedforward()` |
 | `motion/holonomic_tracking.hpp` | `trackingErrors()`, the clock, `TrajectoryFollower` (and its chain), `TrajectoryObserver`, `TrajectoryProgress` |
 | `chassis/holonomic_drivetrain.hpp` | `followTrajectory()`, `trajectoryProgress()`, the tracking PIDs, `setTrajectoryObserver()` |
+| `auton/auton.hpp` | `followTrajectory(sections)` and `planTrajectory()`, which plan and keep the plan, and `waitUntilWaypoint()` |
 
 All but the drivetrain are pure and tested on the host (`tests/motion/trajectory_path_test.cpp`,
 `trajectory_generator_test.cpp`, `holonomic_tracking_test.cpp`); `tools/sim/js/trajectory.js` is their

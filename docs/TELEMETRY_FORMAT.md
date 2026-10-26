@@ -261,17 +261,11 @@ E,<t_us>,tune,wheel,<Tracking|Drive>,diameter_in=<in>
   `mount,<index>,<calibrated|kept>,forward=<in>,right=<in>,facing=<deg>,stderr=<in>` per sensor
   with the mount the localizer uses from then on, or `mount_calibration,failed,<why>` if the spin
   didn't finish. A file's `#meta mcl.sensorN` lines record the mounts the program started with, so
-  after one of these the events are what's current.
-- `teach`: teach mode (`src/robot/teach.cpp`, `docs/TEACH.md`). `start` and
-  `stop,ms=<recorded ms>,samples=<n>` around a recording in driver control; once it's on the card,
-  `saved,bytes=<n>,ms=<write and read-back ms>,verified=<1|0>` (0: it didn't read back as written)
-  or `save_failed`; and `replay,ms=<planned ms>,scale=<fraction of the driver's speed>` as the
-  Taught Route auton starts (its `followTrajectory` follows).
-- `sdtest`: the SD Stress Test auton's result,
-  `rounds=<n>,verified=<n>,bytes=<n>,avg_ms=<ms>,max_ms=<ms>,dropped=<rows>,logger=<ok|faulted>`:
-  how many rounds of writing a full-size taught drive read back as written while this file was
-  being logged, how long each took, the rows the logger dropped meanwhile, and whether it kept
-  logging to this file.
+  after one of these the events are what's current. And a one-shot distance reset
+  (`MonteCarloLocalizer::resetFromWall()`, the auton functions' `resetBack()` and friends):
+  `wallreset,sensor=<index>,axis=<x|y>,value=<in>,shift=<in>` when it reset odometry's x or y to
+  `value`, moving it `shift` inches, or `wallreset,sensor=<index>,skipped=<why>` when it didn't
+  (`no reading`, `too steep`, `near a corner`, `too far from odometry`, `no setPose() yet`, ...).
 - `face`: `gui::FaceScreen`. `bump,g=<g>` when the IMU feels a bump while the face is up (it looks
   surprised), with how far that reading jumped from the recent average: for tuning
   `BumpConfig::thresholdG`.
@@ -284,11 +278,6 @@ E,<t_us>,tune,wheel,<Tracking|Drive>,diameter_in=<in>
   was still waiting for the robot to back off the goal; `claw,closed=<0|1>` and
   `extender,out=<0|1>` when an autonomous routine moves one (driver control's are in the `mech`
   channel instead).
-- `path`: `robot::followPath()` (`src/robot/paths.cpp`), the claw and extender actions on a path's
-  points. `action,<kind>,point=<n>,in=<in>` as the plan reaches a point and the action happens
-  (`kind` one of `claw_open`, `claw_close`, `extender_out`, `extender_in`; `in` the point's distance
-  along the path); `skipped,<kind>,point=<n>,in=<in>` for one whose point the plan never reached
-  before the motion ended.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button).
 
 ## Channels on 96671H's robot
