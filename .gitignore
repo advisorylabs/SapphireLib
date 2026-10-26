@@ -31,3 +31,6 @@ tools/analyzer/dist/
 
 # Simulator single-file bundle (node tools/sim/build.js)
 tools/sim/dist/
+
+# PROS CLI state written to a literal "~" folder when HOME was not expanded
+/~/
