@@ -105,8 +105,8 @@ const TuneStatus& tuneStatus() {
 
 LocalizerConfig localizerSettings() {
     LocalizerConfig config;
-    // The library's 4in/s let odometry run 10in behind the localizer on the
-    // auto cycle's drive to the goal (SL000021), so the robot hit it at full
+    // The library's 4in/s let odometry run 10in behind the localizer on a
+    // drive to the goal (SL000021), so the robot hit it at full
     // power still thinking it was short. TUNE.CFG's mcl.maxCorrectionRateInPerS
     // still overrides this.
     config.maxCorrectionRateInPerS = 18.0;

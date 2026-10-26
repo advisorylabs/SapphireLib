@@ -12,6 +12,7 @@
 #include "robot/config.hpp"
 #include "robot/macros.hpp"
 #include "robot/tune.hpp"
+#include "sapphirelib/auton/auton.hpp"
 #include "sapphirelib/util/log.hpp"
 
 namespace robot {
@@ -204,9 +205,18 @@ void initDevices() {
     chassis.setDriftSource(&verticalWheel(), &odometry());
 
     // The pose source for moveToPoint(x, y) and the other motions that don't
-    // take one (see autons.cpp). Set here, before anything can run a motion,
-    // because it isn't synchronized.
+    // take one. Set here, before anything can run a motion, because it isn't
+    // synchronized.
     chassis.setOdometry(&odometry());
+
+    // The auton functions autons.cpp writes routines with (drive(),
+    // moveToPoint(), resetBack(), ..., sapphirelib/auton/auton.hpp) drive
+    // this drivetrain by this odometry, and reset off the walls with the
+    // localizer's sensors. Override's loaders sit in the field's corners, so
+    // a wall reset stays 18in clear of them; and a reading that would move
+    // the robot more than 8in is likelier a game element than the wall.
+    sapphirelib::auton::use(chassis, odometry(), &localizer(),
+                            {.wallReset = {.cornerMarginIn = 18.0, .maxJumpIn = 8.0}});
 
     // Lift/claw/extender driver macros, see macros.hpp. Zeroes the lift's
     // encoders here, and driver control's homing zeroes them again on the

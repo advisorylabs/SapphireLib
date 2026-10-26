@@ -3,10 +3,11 @@
  *
  * Planned trajectories on a holonomic chassis with two tracking wheels: a
  * chain of sections drawn in Sapphire Sim's Paths tab and pasted in with
- * Copy C++, planned at the start of autonomous from the axis models Auto-Tune
- * measured, and driven with followTrajectory(). A MotionQueue runs it in the
- * background so the routine can start a mechanism as the robot enters the
- * second section, without slowing down. See docs/TRAJECTORIES.md.
+ * Copy C++, driven with the auton functions' followTrajectory() while the
+ * routine starts a mechanism at one of its points, without the robot slowing
+ * down. Then branching, which needs the drivetrain's own followTrajectory():
+ * picking between plans made up front, with a stop at the decision point or
+ * at speed. See docs/TRAJECTORIES.md.
  *
  * Not built into the program (the Makefile only compiles src/), but
  * `make check-examples` compiles it against the current headers so it can't
@@ -18,10 +19,14 @@
 #include "main.h"
 #include "sapphirelib/api.hpp"
 
+using namespace sapphirelib::auton;
 using sapphirelib::PID;
 using sapphirelib::chassis::DrivetrainConfig;
 using sapphirelib::chassis::Gearset;
 using sapphirelib::chassis::HolonomicDrivetrain;
+using sapphirelib::motion::generateTrajectory;
+using sapphirelib::motion::Trajectory;
+using sapphirelib::motion::TrajectoryOptions;
 using sapphirelib::motion::TrajectoryResult;
 using sapphirelib::motion::TrajectorySection;
 using sapphirelib::odom::Odometry;
@@ -55,9 +60,13 @@ Odometry& odometry() {
 }
 
 pros::Motor intake(5);
+pros::Distance front(6);
+
+// --- A trajectory, with a mechanism timed to one of its points ---
 
 // Sapphire Sim path "rush": full speed up the left side turning to face the goal, then slower
-// through the intake, coming to rest facing it
+// through the intake, coming to rest facing it. Its points are numbered in order across the
+// sections: 0 to 2 in the first, 3 and 4 in the second
 const std::vector<TrajectorySection> kRush{
     {.waypoints = {{.xIn = -48, .yIn = -60, .headingDeg = 0},
                    {.xIn = -50, .yIn = -24},
@@ -66,13 +75,109 @@ const std::vector<TrajectorySection> kRush{
      .constraints = {.voltageBudget = 7, .strafe = {.maxVelocity = 30}}},
 };
 
+void rush() {
+    // the trajectory's first point, where the robot really starts
+    setPose(-48, -60, 0);
+    // a few milliseconds, once: plan before driving rather than as it starts
+    if (!planTrajectory(kRush)) return; // the terminal says why
+    runAsync([] { followTrajectory(kRush, {.overtimeMs = 1000}); });
+    // as the robot enters the slower second section (point 2, where the first ends), start the
+    // intake, without the robot slowing down
+    if (waitUntilWaypoint(2)) intake.move_voltage(12000);
+    waitForMotion();
+    intake.move_voltage(0);
+}
+
+// --- Branching (docs/TRAJECTORIES.md#branching) ---
+//
+// Two ways to pick between paths on a sensor, both robot-relative: the routine sets where the
+// robot sits as (0, 0) facing 0. The front sensor picks the branch: something within 24in, swerve
+// right; clear, go left. Each branch, and the way home from it, is planned at the start with
+// TrajectoryOptions::from, so every piece starts exactly where the one before it ends. These use
+// the drivetrain's followTrajectory() directly: plans it must be able to read to the end, so
+// static
+
+// Plans one piece, from whatever axis models are installed, and says why if it can't
+bool plan(const char* name, TrajectoryResult& out, const std::vector<TrajectorySection>& sections,
+          const TrajectoryOptions& options = {}) {
+    out = generateTrajectory(sections, drivetrain().axisModels(), options);
+    if (!out.ok) printf("%s: %s\n", name, out.error.c_str());
+    return out.ok;
+}
+
+bool blocked() { return front.get_distance() < 610; } // 24in
+
+const std::vector<TrajectorySection> kHome{
+    {.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0}}}};
+
+// With a stop: drive to the decision point and stop there, read the sensor, then take the
+// branch. Works with any trajectory; costs the stop
+const std::vector<TrajectorySection> kTrunk{
+    {.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0}, {.xIn = 0, .yIn = 24}}}};
+const std::vector<TrajectorySection> kRight{
+    {.waypoints = {{.xIn = 12, .yIn = 38, .headingDeg = 45}}}};
+const std::vector<TrajectorySection> kLeft{
+    {.waypoints = {{.xIn = -12, .yIn = 38, .headingDeg = -45}}}};
+
+void branchWithStop() {
+    static TrajectoryResult trunk, right, left, homeFromRight, homeFromLeft;
+    if (!plan("trunk", trunk, kTrunk) || !plan("right", right, kRight, {.from = &trunk.trajectory}) ||
+        !plan("left", left, kLeft, {.from = &trunk.trajectory}) ||
+        !plan("home", homeFromRight, kHome, {.from = &right.trajectory}) ||
+        !plan("home", homeFromLeft, kHome, {.from = &left.trajectory})) {
+        return;
+    }
+    setPose(0, 0, 0);
+    if (!drivetrain().followTrajectory(trunk.trajectory).settled()) return;
+    const bool swerve = blocked();
+    if (!drivetrain().followTrajectory(swerve ? right.trajectory : left.trajectory).settled()) {
+        return;
+    }
+    drivetrain().followTrajectory(swerve ? homeFromRight.trajectory : homeFromLeft.trajectory);
+}
+
+// At speed: the trunk ends at 24in/s instead of at rest, each branch carries on from it at that
+// speed, and next reads the sensor as the robot reaches the junction, on the motion's task: one
+// quick read and a pick between plans already made
+const std::vector<TrajectorySection> kSpeedTrunk{
+    {.waypoints = {{.xIn = 0, .yIn = 0, .headingDeg = 0}, {.xIn = 0, .yIn = 30}}}};
+const std::vector<TrajectorySection> kSpeedRight{
+    {.waypoints = {{.xIn = 14, .yIn = 50, .headingDeg = 45}}}};
+const std::vector<TrajectorySection> kSpeedLeft{
+    {.waypoints = {{.xIn = -14, .yIn = 50, .headingDeg = -45}}}};
+
+void branchAtSpeed() {
+    static TrajectoryResult trunk, right, left, homeFromRight, homeFromLeft;
+    if (!plan("trunk", trunk, kSpeedTrunk, {.endSpeedInPerS = 24}) ||
+        !plan("right", right, kSpeedRight, {.from = &trunk.trajectory}) ||
+        !plan("left", left, kSpeedLeft, {.from = &trunk.trajectory}) ||
+        !plan("home", homeFromRight, kHome, {.from = &right.trajectory}) ||
+        !plan("home", homeFromLeft, kHome, {.from = &left.trajectory})) {
+        return;
+    }
+    setPose(0, 0, 0);
+    // which branch next picked, for the way home; null if the trunk never got to the junction
+    static std::atomic<const Trajectory*> took{nullptr};
+    took.store(nullptr);
+    const auto result = drivetrain().followTrajectory(
+        trunk.trajectory, {.next = [](const Trajectory&) -> const Trajectory* {
+            const Trajectory* branch = blocked() ? &right.trajectory : &left.trajectory;
+            took.store(branch);
+            return branch;
+        }});
+    const Trajectory* branch = took.load();
+    if (!result.settled() || branch == nullptr) return;
+    drivetrain().followTrajectory(branch == &right.trajectory ? homeFromRight.trajectory
+                                                              : homeFromLeft.trajectory);
+}
+
 } // namespace
 
 void initialize() {
     sapphirelib::initialize();
     drivetrain(); // blocks while the IMU calibrates
     odometry().startTask();
-    drivetrain().setOdometry(&odometry());
+    use(drivetrain(), odometry());
     // The models the planner and the feedforward use: what Auto-Tune measured (its readout and the
     // SD log print them), or load them from TUNE.CFG. Without them followTrajectory() aborts
     drivetrain().setAxisModels({
@@ -83,37 +188,6 @@ void initialize() {
 }
 
 void autonomous() {
-    // static: the queue's task, and the trajectory it reads, outlive this call
-    static sapphirelib::motion::MotionQueue queue;
-    static TrajectoryResult rush;
-
-    // a few milliseconds, once per routine: plan before driving, never inside a loop
-    rush = sapphirelib::motion::generateTrajectory(kRush, drivetrain().axisModels());
-    if (!rush.ok) {
-        printf("rush: %s\n", rush.error.c_str());
-        return;
-    }
-
-    // the trajectory's first point, where the robot really starts
-    odometry().setPose({.xIn = -48, .yIn = -60, .headingDeg = 0});
-    // the number rush's motion will have: until it starts, trajectoryProgress() is still whatever
-    // trajectory ran last, which may well be past section 1
-    const std::uint32_t rushMotion = drivetrain().trajectoryProgress().motion + 1;
-    queue.enqueue([] {
-        // waits up to 4in behind the plan before the plan waits for it; times out 1s past the plan
-        drivetrain().followTrajectory(rush.trajectory, {.overtimeMs = 1000, .maxLagIn = 4.0});
-    });
-    queue.run();
-
-    // as the robot enters the slower second section, start the intake, without the robot slowing
-    if (sapphirelib::waitUntil(
-            [rushMotion] {
-                const auto progress = drivetrain().trajectoryProgress();
-                return progress.motion == rushMotion && progress.section >= 1;
-            },
-            4000)) {
-        intake.move_voltage(12000);
-    }
-    queue.waitUntilDone();
-    intake.move_voltage(0);
+    rush();
+    // or: branchWithStop(); branchAtSpeed();
 }

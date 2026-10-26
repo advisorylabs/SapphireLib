@@ -272,7 +272,6 @@ struct State {
     double releaseWheelIn = 0.0;
     bool debug = false; // the debug mode update() is running, see debugMode
     int readout = 0;    // see kReadoutCount
-    bool autoClawPaused = false; // by the auto cycle, see setAutoClawPaused()
 };
 
 State state;
@@ -397,8 +396,7 @@ bool homing(std::uint32_t now, bool atBottom) {
 /// bottom level (by its encoders, switch or no switch) and meant to be there,
 /// and the sensor has seen a pin within the reach for kAutoClawDetectMs.
 bool autoClawWants(std::uint32_t now) {
-    return !state.clawClosed && state.autoClawArmed && !state.autoClawPaused &&
-           ladder.level() == kBottomLevel &&
+    return !state.clawClosed && state.autoClawArmed && ladder.level() == kBottomLevel &&
            lift.isNear(ladder.levelPosition(kBottomLevel)) &&
            pinSeen.trueFor(kAutoClawDetectMs, now);
 }
@@ -654,14 +652,6 @@ std::uint32_t scoreCount() { return scoresReleased.load(); }
 bool pinInClaw() { return pieceInClaw(clawSensor.get_distance()); }
 
 bool liftAtBottom() { return switchPressed(); }
-
-bool pinWithinMm(std::int32_t mm) { return pieceInClaw(clawSensor.get_distance(), mm); }
-
-bool liftDown() {
-    return ladder.level() == kBottomLevel && lift.isNear(ladder.levelPosition(kBottomLevel));
-}
-
-void setAutoClawPaused(bool paused) { state.autoClawPaused = paused; }
 
 sapphirelib::mechanism::PositionMechanism& liftMechanism() { return lift; }
 

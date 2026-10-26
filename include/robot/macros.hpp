@@ -38,8 +38,7 @@
  * the claw is shut by the time the pin is in it rather than closing behind
  * it. Once the claw opens on a pin (R1, or a score at the bottom), autoClaw
  * waits for the sensor to see the pin gone before it closes again, so opening
- * the claw to drop a pin doesn't snap it shut on the same one. It's off while
- * the auto cycle (A, autocycle.hpp) runs, which closes the claw itself.
+ * the claw to drop a pin doesn't snap it shut on the same one.
  *
  * The lift: its motors (config.hpp's kLiftMotors, three of them) hold each
  * level on a PID loop around their own encoders, in motor degrees. At driver
@@ -56,10 +55,9 @@
  * never scores, and autoClaw is off. R1 and Y still work the pistons. Leaving
  * debug mode puts the lift back on its level, so expect it to move.
  *
- * Autonomous: update() only runs in driver control (and teach mode's
- * replays), so routines move the claw and the extender with setClawClosed()
- * and setExtended(), or from a path's actions (paths.hpp). Driver control
- * carries on with both wherever autonomous left them.
+ * Autonomous: update() only runs in driver control, so routines move the
+ * claw and the extender with setClawClosed() and setExtended(). Driver
+ * control carries on with both wherever autonomous left them.
  *
  * Controller screen: line 0 is the goal and level ("DBG" and the pistons in
  * debug mode), line 2 the readout LEFT picks, its label "BTM" instead of
@@ -148,21 +146,6 @@ bool pinInClaw();
 /// Whether the lift is pressing its bottom switch. Reads the switch, so it's
 /// current; safe from any task.
 bool liftAtBottom();
-
-// --- For the auto cycle (autocycle.hpp), on opcontrol's task ---
-
-/// Whether the claw's distance sensor reads a pin within `mm`. Reads the
-/// sensor, so it's current; unplugged, it never does.
-bool pinWithinMm(std::int32_t mm);
-
-/// Whether the lift is at its bottom level and there, by its encoders (the
-/// switch needn't be pressed): what the cycle waits on before driving into
-/// the loader. Reads the macros' state, so call it from opcontrol's task.
-bool liftDown();
-
-/// Stops autoClaw closing the claw (true) until it's let go again (false),
-/// for the cycle, which closes it itself. R1 and a score still work.
-void setAutoClawPaused(bool paused);
 
 /// Logs the lift to `logger`: its PID's every step (channel "lift") and
 /// what each update actually commanded (channel "lift.act": target and

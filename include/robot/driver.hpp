@@ -60,10 +60,6 @@ bool practiceMode();
 ///     field connected, so it can't fire during a real match, and not while a
 ///     GUI routine is driving the chassis. It brakes the lift first
 ///     (macros::stop()), and blocks until the routine ends.
-///
-/// X+A, teach mode's start and stop, is teach::update()'s (robot/teach.hpp).
-/// A alone, the auto cycle, is autocycle::update()'s (robot/autocycle.hpp).
-/// While it records, line 1 says so instead of the drive mode.
 void shortcuts(sapphirelib::input::Controller& controller);
 
 } // namespace robot

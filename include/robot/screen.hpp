@@ -30,8 +30,15 @@ void buildScreen();
 
 /// Runs the routine picked on the Auton tab, logging its start and end (to
 /// the terminal, and as `auton` telemetry events the log reader cuts runs
-/// on). Does nothing before buildScreen().
+/// on), then waits for its background motions and stops the drive. Does
+/// nothing before buildScreen().
 void runSelectedAuton();
+
+/// While the robot is disabled: the controller's LEFT and RIGHT step through
+/// the routines, and its screen shows the one picked. Never returns: call it
+/// last in disabled() and competition_initialize(), whose tasks end when the
+/// robot is enabled.
+void pickAutonWithController();
 
 /// True while a page is driving the chassis on its own: the Odom page's
 /// offset calibration spin, or a PID tuner test or Auto-Tune run. Driver

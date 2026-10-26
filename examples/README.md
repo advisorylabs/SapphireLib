@@ -29,16 +29,21 @@ change that breaks one shows up at once. Run it after changing any public header
   odometry, the `setPose()` every autonomous starts with, the localizer's status on the controller
   screen, and turning correction off and on to compare. See
   [`docs/LOCALIZATION.md`](../docs/LOCALIZATION.md), and try it first in [`tools/sim/`](../tools/sim/).
+- [`autonomous.cpp`](autonomous.cpp): writing routines with the auton functions
+  (`sapphirelib/auton/auton.hpp`) on a holonomic chassis with two tracking wheels and four distance
+  sensors: `use()` once, routines as plain lists of calls, an intake timed to a background motion
+  and cancelled from its sensor, a wall reset, chained motions, and the brain screen's selector
+  remembering the pick. See [`docs/QUICKSTART.md`](../docs/QUICKSTART.md).
 - [`trajectory.cpp`](trajectory.cpp) (Phase 4): a `followTrajectory()` chain on a holonomic chassis
   with two tracking wheels: the C++ Sapphire Sim's Paths tab writes, the axis models it plans with,
   planning it at the start of autonomous, and starting a mechanism as the robot enters its second
-  section through `trajectoryProgress()` while a `MotionQueue` drives. See
-  [`docs/TRAJECTORIES.md`](../docs/TRAJECTORIES.md).
+  section with `runAsync()` and `waitUntilWaypoint()`. Then branching between trajectories planned
+  up front on a sensor, with a stop and at speed. See [`docs/TRAJECTORIES.md`](../docs/TRAJECTORIES.md).
 - [`macros.cpp`](macros.cpp) (Phase 5): a small driver macro system for a hypothetical robot, an arm
   with cosine gravity feedforward on its own task, a clamp piston, an intake roller with anti-jam,
   preset levels, and a score `Sequence` that also runs from autonomous. It's the complete example
   [`docs/MACROS.md`](../docs/MACROS.md) walks through.
 
 The real robot program in `src/robot/` is a larger worked example of the same pieces: ports in one
-config file, devices behind accessors, autonomous routines in their own file, and the intake/claw/lift
-macros in `src/robot/macros.cpp`.
+config file, devices behind accessors, autonomous routines in their own file (`autons.cpp`, written
+with the auton functions), and the claw/lift/extender macros in `src/robot/macros.cpp`.
