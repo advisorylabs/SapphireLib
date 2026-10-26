@@ -426,6 +426,41 @@
     return out;
   }
 
+  // --- Distance resets (wall_reset.cpp) ---------------------------------------
+
+  /** WallResetConfig's defaults. */
+  function wallResetConfig(overrides = {}) {
+    return Object.assign({ maxAngleDeg: 30.0, cornerMarginIn: 0.0, maxJumpIn: 0.0 }, overrides);
+  }
+
+  /**
+   * wallFix(): the robot's x or y from one reading against the perimeter walls.
+   * { ok, axis: 'x' | 'y' | null, valueIn, shiftIn, why }.
+   */
+  function wallFix(map, xIn, yIn, headingDeg, m, readingIn, config = wallResetConfig()) {
+    const skipped = (why) => ({ ok: false, axis: null, valueIn: 0, shiftIn: 0, why });
+    if (!Number.isFinite(readingIn) || readingIn < 0.0) return skipped('no reading');
+    const ray = sensorRay(xIn, yIn, headingDeg, m);
+    if (!map.contains(ray.xIn, ray.yIn)) return skipped('sensor outside the field');
+    const toWall = (p, dir, lo, hi) => (dir > 1e-9 ? (hi - p) / dir : dir < -1e-9 ? (lo - p) / dir : Infinity);
+    const toXWallIn = toWall(ray.xIn, ray.dirX, map.minXIn, map.maxXIn);
+    const toYWallIn = toWall(ray.yIn, ray.dirY, map.minYIn, map.maxYIn);
+    const xWall = toXWallIn < toYWallIn;
+    const t = xWall ? toXWallIn : toYWallIn;
+    if (!Number.isFinite(t)) return skipped('no wall ahead');
+    const across = Math.abs(xWall ? ray.dirX : ray.dirY);
+    if (across < Math.cos(config.maxAngleDeg * kDegToRad)) return skipped('too steep');
+    const along = xWall ? ray.yIn + t * ray.dirY : ray.xIn + t * ray.dirX;
+    const lo = xWall ? map.minYIn : map.minXIn;
+    const hi = xWall ? map.maxYIn : map.maxXIn;
+    if (along < lo + config.cornerMarginIn || along > hi - config.cornerMarginIn) return skipped('near a corner');
+    const dir = xWall ? ray.dirX : ray.dirY;
+    const wall = xWall ? (dir > 0.0 ? map.maxXIn : map.minXIn) : (dir > 0.0 ? map.maxYIn : map.minYIn);
+    const shiftIn = wall - readingIn * dir - (xWall ? ray.xIn : ray.yIn);
+    if (config.maxJumpIn > 0.0 && Math.abs(shiftIn) > config.maxJumpIn) return skipped('too far from odometry');
+    return { ok: true, axis: xWall ? 'x' : 'y', valueIn: (xWall ? xIn : yIn) + shiftIn, shiftIn, why: '' };
+  }
+
   // --- The particle filter (particle_filter.cpp) ------------------------------
 
   const kOutsideLogPenalty = -30.0;
@@ -805,6 +840,8 @@
     ReadingScorer,
     distanceReadingFromMm,
     compensateLatency,
+    wallResetConfig,
+    wallFix,
     filterConfig,
     ParticleFilter,
     sampleParticles,

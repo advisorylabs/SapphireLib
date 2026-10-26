@@ -46,6 +46,8 @@
   const kLoopMs = 10;
   const kFullScaleVolts = 12.0;
   const kMaxCorrectionDtS = 0.1;
+  // devices.cpp's DrivetrainConfig::headingCorrectionKP, for driveDistance()
+  const kHeadingCorrectionKP = 0.4;
 
   // --- sensors::Imu --------------------------------------------------------------
 
@@ -100,6 +102,9 @@
       this.lastVerticalIn = this.wheels.vertical();
       this.lastHorizontalIn = this.wheels.horizontal();
       this.reset = { rotationDeg: 0, verticalIn: 0, horizontalIn: 0 };
+      // the odometers (Snapshot::travelledIn, turnedDeg): never reset, not even by setPose()
+      this.travelledIn = 0;
+      this.turnedDeg = 0;
     }
 
     update() {
@@ -127,6 +132,8 @@
       const delta = L.computeOdometryDelta(lastHeadingDeg, headingDeg, verticalIn - this.lastVerticalIn,
         horizontalIn - this.lastHorizontalIn, config.verticalOffsetIn, config.horizontalOffsetIn);
       const velocity = L.velocityFromDelta(delta, rotationDeg - this.lastRotationDeg, elapsedS);
+      this.travelledIn += Math.hypot(delta.dxIn, delta.dyIn);
+      this.turnedDeg += Math.abs(rotationDeg - this.lastRotationDeg);
 
       this.lastRotationDeg = rotationDeg;
       this.lastVerticalIn = verticalIn;
@@ -151,6 +158,8 @@
         rawPose: Object.assign({}, s.raw),
         resetCount: this.poseGeneration,
         rawVelocity: Object.assign({}, s.rawVelocity),
+        travelledIn: this.travelledIn,
+        turnedDeg: this.turnedDeg,
       };
     }
 
@@ -371,6 +380,34 @@
         return { used: r.valid, measuredIn: r.valid ? r.distanceIn : NaN, expectedIn,
           closingSpeedInPerS: w.closing[s] };
       });
+    }
+
+    /** resetFromWall(sensor, config): one sensor's reading resets x or y through setPose(). */
+    resetFromWall(sensor, config = L.wallResetConfig()) {
+      const snapshot = this.odometry.snapshot();
+      let fix;
+      if (sensor >= this.sensors.length) {
+        fix = { ok: false, why: 'no such sensor' };
+      } else if (this.config.waitForSetPose && snapshot.resetCount === 0) {
+        fix = { ok: false, why: 'no setPose() yet' };
+      } else {
+        const m = this.filter.sensors[sensor];
+        const raw = this.sensors[sensor]();
+        let r = L.distanceReadingFromMm(raw.mm, raw.confidence, this.config.minConfidence, this.config.filter.beam);
+        const ray = L.sensorRay(0.0, 0.0, snapshot.pose.headingDeg, m);
+        const closingSpeed = snapshot.rawVelocity.xInPerS * ray.dirX + snapshot.rawVelocity.yInPerS * ray.dirY;
+        r = L.compensateLatency(r, closingSpeed, this.config.sensorLatencyMs / 1000.0);
+        fix = r.valid
+          ? L.wallFix(this.filter.map, snapshot.pose.xIn, snapshot.pose.yIn, snapshot.pose.headingDeg, m,
+            r.distanceIn, config)
+          : { ok: false, why: 'no reading' };
+      }
+      if (fix.ok) {
+        const pose = Object.assign({}, snapshot.pose);
+        pose[fix.axis === 'x' ? 'xIn' : 'yIn'] = fix.valueIn;
+        this.odometry.setPose(pose);
+      }
+      return fix;
     }
 
     setCorrectionEnabled(enabled) {
@@ -673,12 +710,17 @@
     }
 
     holonomicVolts(forwardVolts, strafeVolts, turnVolts) {
+      this.driveAxes(forwardVolts, strafeVolts, turnVolts, kFullScaleVolts);
+    }
+
+    /** holonomicVolts() with no wheel past ceilingVolts instead of 12: ExitConditions::maxVolts. */
+    driveAxes(forwardVolts, strafeVolts, turnVolts, ceilingVolts) {
       const fl = forwardVolts + strafeVolts + turnVolts;
       const fr = forwardVolts - strafeVolts - turnVolts;
       const bl = forwardVolts - strafeVolts + turnVolts;
       const br = forwardVolts + strafeVolts - turnVolts;
-      const largest = Math.max(Math.abs(fl), Math.abs(fr), Math.abs(bl), Math.abs(br), kFullScaleVolts) /
-        kFullScaleVolts;
+      const ceiling = Math.min(Math.max(ceilingVolts, 1e-6), kFullScaleVolts);
+      const largest = Math.max(Math.abs(fl), Math.abs(fr), Math.abs(bl), Math.abs(br), ceiling) / ceiling;
       this.setWheelVoltages(fl / largest, fr / largest, bl / largest, br / largest);
     }
 
@@ -711,7 +753,7 @@
       this.drivePID.reset();
       this.turnPID.reset();
       this.target = { kind: 'point', xIn, yIn };
-      const tracker = new ExitTracker(exit.settleTimeMs, exit.timeoutMs, this.clock());
+      const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
       for (;;) {
@@ -723,24 +765,24 @@
         const local = toLocalFrame(dxIn, dyIn, pose.headingDeg);
         const scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
         const turnOutput = this.turnPID.update(L.wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
-        this.holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
+        this.driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
         finalErrorIn = distanceIn;
         reason = tracker.update(distanceIn <= exit.errorThreshold, this.clock());
         if (reason !== 'running') break;
         yield;
       }
-      this.stop();
+      if (!chainsOn(exit, reason)) this.stop();
       this.target = null;
       return { reason, finalError: finalErrorIn, elapsedMs: tracker.elapsedMs };
     }
 
     *moveToPose(xIn, yIn, headingDeg, exit = {}) {
       exit = Object.assign({ positionErrorThresholdIn: 1.0, headingErrorThresholdDeg: 2.0, settleTimeMs: 200,
-        timeoutMs: 4000 }, exit);
+        timeoutMs: 4000, maxVolts: 12.0, chain: false }, exit);
       this.drivePID.reset();
       this.turnPID.reset();
       this.target = { kind: 'pose', xIn, yIn, headingDeg };
-      const tracker = new ExitTracker(exit.settleTimeMs, exit.timeoutMs, this.clock());
+      const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
       for (;;) {
@@ -753,7 +795,7 @@
         const scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
         const headingError = L.wrapDegrees180(headingDeg - pose.headingDeg);
         const turnOutput = this.turnPID.update(headingError, 0.0);
-        this.holonomicVolts(local.forwardIn * scale, local.lateralIn * scale, turnOutput);
+        this.driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
         const within = distanceIn <= exit.positionErrorThresholdIn &&
           Math.abs(headingError) <= exit.headingErrorThresholdDeg;
         finalErrorIn = distanceIn;
@@ -761,30 +803,61 @@
         if (reason !== 'running') break;
         yield;
       }
-      this.stop();
+      if (!chainsOn(exit, reason)) this.stop();
       this.target = null;
       return { reason, finalError: finalErrorIn, elapsedMs: tracker.elapsedMs };
     }
 
-    *turnToHeading(headingDeg, exit = {}) {
+    /** turnToHeading(heading, exit, direction): 'shortest' (the default), 'clockwise' or 'counterclockwise'. */
+    *turnToHeading(headingDeg, exit = {}, direction = 'shortest') {
       exit = exitConditions(exit, 2.0);
       this.turnPID.reset();
+      const turn = new T.DirectedTurn(headingDeg, this.imu.getHeadingDeg(), direction);
       this.target = { kind: 'heading', headingDeg };
-      const tracker = new ExitTracker(exit.settleTimeMs, exit.timeoutMs, this.clock());
+      const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorDeg = 0;
       for (;;) {
-        const error = L.wrapDegrees180(headingDeg - this.imu.getHeadingDeg());
+        const error = turn.errorDeg(this.imu.getHeadingDeg());
         const output = this.turnPID.update(error, 0.0);
-        this.holonomicVolts(0.0, 0.0, output);
+        this.driveAxes(0.0, 0.0, output, exit.maxVolts);
         finalErrorDeg = Math.abs(error);
         reason = tracker.update(Math.abs(error) <= exit.errorThreshold, this.clock());
         if (reason !== 'running') break;
         yield;
       }
-      this.stop();
+      if (!chainsOn(exit, reason)) this.stop();
       this.target = null;
       return { reason, finalError: finalErrorDeg, elapsedMs: tracker.elapsedMs };
+    }
+
+    /**
+     * driveDistance(inches, exit): straight by the drive encoders (the world's forward travel),
+     * holding the heading it started on with DrivetrainConfig::headingCorrectionKP's 0.4.
+     */
+    *driveDistance(inches, exit = {}) {
+      exit = exitConditions(exit, 1.0);
+      const startHeadingDeg = this.imu.getCumulativeHeadingDeg();
+      const startIn = this.world.forwardEncoderIn;
+      this.drivePID.reset();
+      this.target = null;
+      const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
+      let reason = 'running';
+      let finalErrorIn = 0;
+      for (;;) {
+        const traveledIn = this.world.forwardEncoderIn - startIn;
+        const error = inches - traveledIn;
+        const output = this.drivePID.update(inches, traveledIn);
+        const correction = kHeadingCorrectionKP *
+          L.wrapDegrees180(startHeadingDeg - this.imu.getCumulativeHeadingDeg());
+        this.driveAxes(output, 0.0, correction, exit.maxVolts);
+        finalErrorIn = Math.abs(error);
+        reason = tracker.update(Math.abs(error) <= exit.errorThreshold, this.clock());
+        if (reason !== 'running') break;
+        yield;
+      }
+      if (!chainsOn(exit, reason)) this.stop();
+      return { reason, finalError: finalErrorIn, elapsedMs: tracker.elapsedMs };
     }
 
     *followPath(points, config) {
@@ -870,7 +943,17 @@
   }
 
   function exitConditions(exit, defaultThreshold) {
-    return Object.assign({ errorThreshold: defaultThreshold, settleTimeMs: 200, timeoutMs: 3000 }, exit);
+    return Object.assign({ errorThreshold: defaultThreshold, settleTimeMs: 200, timeoutMs: 3000, maxVolts: 12.0,
+      chain: false }, exit);
+  }
+
+  // a chained motion ends the first tick it's there, and leaves the motors running (ExitConditions::chain)
+  function settleMs(exit) {
+    return exit.chain ? 0 : exit.settleTimeMs;
+  }
+
+  function chainsOn(exit, reason) {
+    return exit.chain && reason === 'settled';
   }
 
   // --- the whole robot ---------------------------------------------------------------

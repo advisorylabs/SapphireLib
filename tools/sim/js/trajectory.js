@@ -807,7 +807,39 @@
       Math.abs(b.speedInPerS - a.speedInPerS) <= kJoinSpeedInPerS;
   }
 
+  // --- motion::DirectedTurn (src/sapphirelib/motion/turn_math.cpp) ---
+
+  /**
+   * A turn's heading error, kept going one way ('clockwise' or 'counterclockwise') until the short
+   * way agrees; 'shortest' is the ordinary wrapped error. Positive turns right.
+   */
+  class DirectedTurn {
+    constructor(targetDeg, startHeadingDeg, direction = 'shortest', overshootDeg = 5.0) {
+      this.targetDeg = targetDeg;
+      this.direction = direction;
+      this.forcing = false;
+      if (direction === 'shortest') return;
+      const remaining = this.remainingDeg(startHeadingDeg);
+      this.forcing = remaining > 180.0 && remaining < 360.0 - overshootDeg;
+    }
+
+    remainingDeg(headingDeg) {
+      return this.direction === 'clockwise' ? L.wrapDegrees360(this.targetDeg - headingDeg)
+        : L.wrapDegrees360(headingDeg - this.targetDeg);
+    }
+
+    errorDeg(headingDeg) {
+      if (this.forcing) {
+        const remaining = this.remainingDeg(headingDeg);
+        if (remaining > 180.0) return this.direction === 'clockwise' ? remaining : -remaining;
+        this.forcing = false;
+      }
+      return L.wrapDegrees180(this.targetDeg - headingDeg);
+    }
+  }
+
   return {
+    DirectedTurn,
     endsMoving,
     continuesFrom,
     kTrajectorySampleSpacingIn,

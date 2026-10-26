@@ -20,9 +20,9 @@
  * (each section after the first starts from the previous one's last point),
  * and sections[k] is { constraints, stopAtEnd }. A waypoint may also say what
  * the robot's claw and extender do on reaching it: claw 'open' or 'close',
- * extender 'out' or 'in' (see ACTIONS), absent for nothing. They go out as a
- * second C++ list beside the sections, for robot::followPath()
- * (include/robot/paths.hpp).
+ * extender 'out' or 'in' (see ACTIONS), absent for nothing. They go out in the
+ * routine Copy C++ writes after the sections: the trajectory in the background
+ * (runAsync()), and each action after a waitUntilWaypoint() for its point.
  *
  * Plain script: window.SIM.pathview in a browser, require('./pathview.js') in
  * Node.
@@ -48,14 +48,14 @@
   const AXES = [['forward', 'Fwd', 'in'], ['strafe', 'Strafe', 'in'], ['turn', 'Turn', '°']];
   // each section's color, by the page's CSS tokens (render.js reads the same names)
   const SECTION_COLORS = ['series-1', 'series-3', 'series-7', 'series-5', 'series-4', 'series-2'];
-  // What a point can have the robot's claw and extender do: robot::PathAction's kinds
-  // (include/robot/paths.hpp), in the same order, so keep the two the same. `field` is the
-  // waypoint's field for that mechanism and `value` what it holds for this one.
+  // What a point can have the robot's claw and extender do, and the call that does it in
+  // autons.cpp (include/robot/macros.hpp). `field` is the waypoint's field for that mechanism and
+  // `value` what it holds for this one; within a point they go out in this order.
   const ACTIONS = [
-    { field: 'claw', value: 'open', cpp: 'clawOpen', label: 'claw open' },
-    { field: 'claw', value: 'close', cpp: 'clawClose', label: 'claw close' },
-    { field: 'extender', value: 'out', cpp: 'extenderOut', label: 'ext out' },
-    { field: 'extender', value: 'in', cpp: 'extenderIn', label: 'ext in' },
+    { field: 'claw', value: 'open', call: 'setClawClosed', arg: 'false', label: 'claw open' },
+    { field: 'claw', value: 'close', call: 'setClawClosed', arg: 'true', label: 'claw close' },
+    { field: 'extender', value: 'out', call: 'setExtended', arg: 'true', label: 'ext out' },
+    { field: 'extender', value: 'in', call: 'setExtended', arg: 'false', label: 'ext in' },
   ];
   // each mechanism's field and name, in ACTIONS' order
   const MECHANISMS = [['claw', 'Claw'], ['extender', 'Extender']];
@@ -237,7 +237,7 @@
     else delete w[field];
   }
 
-  /** Every action on the path, as robot::PathAction lists them: by point, then ACTIONS' order. */
+  /** Every action on the path, as Copy C++ writes them: by point, then ACTIONS' order. */
   function actionsOf(doc) {
     const out = [];
     doc.waypoints.forEach((w, j) => {
@@ -265,6 +265,12 @@
     return `k${/^[0-9]/.test(camel) ? `Path${camel}` : camel}`;
   }
 
+  /** The routine's name from the path's: "left rush" is leftRush. */
+  function routineName(name) {
+    const constant = identifier(name).slice(1);
+    return constant.charAt(0).toLowerCase() + constant.slice(1);
+  }
+
   function waypointLiteral(w) {
     const heading = w.headingDeg !== undefined && w.headingDeg !== null ? `, .headingDeg = ${num(w.headingDeg)}` : '';
     return `{.xIn = ${num(w.xIn)}, .yIn = ${num(w.yIn)}${heading}}`;
@@ -286,10 +292,12 @@
   }
 
   /**
-   * The chain as C++ to paste into autons.cpp. `about` is the comment's
-   * description of the plan, e.g. "3.42 s planned with the Robot tab's models".
-   * A path with actions gets a second list after it, k<Name>Actions, for
-   * robot::followPath().
+   * The chain as C++ to paste into autons.cpp, and a routine that drives it
+   * from its first point. `about` is the comment's description of the plan,
+   * e.g. "3.42 s planned with the Robot tab's models". With actions on its
+   * points, the routine runs the trajectory in the background and does each
+   * one as the plan reaches its point (waitUntilWaypoint()), stopping there if
+   * the plan never does, so the claw doesn't open short of the goal.
    */
   function toCpp(doc, about = '') {
     const name = identifier(doc.name);
@@ -307,13 +315,27 @@
       lines.push(`${body.join(',\n')}},`);
     });
     lines.push('};');
+
+    const routine = routineName(doc.name);
+    const first = doc.waypoints[0] || { xIn: 0, yIn: 0 };
+    const heading = first.headingDeg !== undefined && first.headingDeg !== null ? first.headingDeg : 0;
+    lines.push('', `// in registerAutons(): selector.addRoutine("${doc.name}", &${routine});`, `void ${routine}() {`,
+      `    setPose(${num(first.xIn)}, ${num(first.yIn)}, ${num(heading)});`);
     const actions = actionsOf(doc);
     if (actions.length) {
-      lines.push(`// what the claw and the extender do along "${doc.name}", by point (robot::followPath())`,
-        `const std::vector<robot::PathAction> ${name}Actions{`,
-        ...actions.map(({ waypoint, action }) => `    {.waypoint = ${waypoint}, .action = robot::PathAction::${action.cpp}},`),
-        '};');
+      lines.push(`    runAsync([] { followTrajectory(${name}); });`);
+      let at = -1;
+      for (const { waypoint, action } of actions) {
+        // never reached (held up until the motion timed out): the rest isn't done either
+        if (waypoint !== at) lines.push(`    if (!waitUntilWaypoint(${waypoint})) return;`);
+        at = waypoint;
+        lines.push(`    macros::${action.call}(${action.arg});`);
+      }
+      lines.push('    waitForMotion();');
+    } else {
+      lines.push(`    followTrajectory(${name});`);
     }
+    lines.push('}');
     return lines.join('\n');
   }
 
@@ -322,7 +344,8 @@
   /**
    * Reads C++ that toCpp() wrote (or hand-edited the same way): a
    * std::vector of TrajectorySection, or of TrajectoryWaypoint for a single
-   * section, and the k<Name>Actions list after it if there is one. Returns
+   * section, and the actions in the routine after it if there is one: each
+   * macros:: call after a waitUntilWaypoint() goes on that point. Returns
    * { ok, error, doc }.
    */
   function parseCpp(text) {
@@ -331,8 +354,6 @@
     const start = nameMatch ? source.indexOf('{', nameMatch.index) : source.indexOf('{');
     if (start < 0) return { ok: false, error: 'no { ... } to read', doc: null };
     let i = start;
-    // names (robot::PathAction::clawOpen) only in the actions list: in the sections, one is a mistake
-    let allowNames = false;
     const fail = (message) => { throw new Error(`${message} (character ${i})`); };
     const skip = () => { while (i < source.length && /\s/.test(source[i])) ++i; };
     const value = () => {
@@ -368,13 +389,6 @@
         return anyNamed ? named : items;
       }
       const m = /^(true|false|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[fF]?/.exec(source.slice(i));
-      if (!m && allowNames) {
-        const name = /^[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*/.exec(source.slice(i));
-        if (!name) fail('expected a number, a name, or {');
-        i += name[0].length;
-        // the last part: robot::PathAction::clawOpen is clawOpen
-        return { name: name[0].split('::').pop().trim() };
-      }
       if (!m) fail('expected a number, true, false, or {');
       i += m[0].length;
       if (m[1] === 'true') return true;
@@ -397,24 +411,20 @@
       });
       const name = nameMatch ? nameMatch[1].replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase() : 'pasted';
       const doc = fromSections(chain, name);
-      // what the claw and the extender do along it, if that was pasted too
-      const actionsMatch = source.slice(i).match(/\bk[A-Za-z0-9_]*Actions\s*\{/);
-      if (actionsMatch) {
-        i += actionsMatch.index + actionsMatch[0].length - 1;
-        allowNames = true;
-        const list = value();
-        if (!Array.isArray(list)) throw new Error('expected a list of actions');
-        list.forEach((a, k) => {
-          if (!a || Array.isArray(a) || typeof a !== 'object' || !a.action || !a.action.name) {
-            throw new Error(`action ${k} needs .waypoint and .action`);
-          }
-          const action = ACTIONS.find((candidate) => candidate.cpp === a.action.name);
-          if (!action) throw new Error(`action ${k}: there's no PathAction::${a.action.name}`);
-          if (!Number.isInteger(a.waypoint) || a.waypoint < 0 || a.waypoint >= doc.waypoints.length) {
-            throw new Error(`action ${k}: the path has no point ${a.waypoint}`);
-          }
-          doc.waypoints[a.waypoint][action.field] = action.value;
-        });
+      // what the claw and the extender do along it, if the routine was pasted too: each call
+      // after a waitUntilWaypoint() happens at that point
+      const calls = /\bwaitUntilWaypoint\s*\(\s*(\d+)\s*\)|\bmacros\s*::\s*(\w+)\s*\(\s*(\w+)\s*\)/g;
+      let at = null;
+      for (const call of source.slice(i).matchAll(calls)) {
+        if (call[1] !== undefined) {
+          at = Number(call[1]);
+          if (at >= doc.waypoints.length) throw new Error(`waitUntilWaypoint(${at}): the path has no point ${at}`);
+          continue;
+        }
+        const action = ACTIONS.find((candidate) => candidate.call === call[2] && candidate.arg === call[3]);
+        if (!action) throw new Error(`macros::${call[2]}(${call[3]}) isn't something a point can do`);
+        if (at === null) throw new Error(`macros::${call[2]}(${call[3]}) comes before any waitUntilWaypoint()`);
+        doc.waypoints[at][action.field] = action.value;
       }
       return { ok: true, error: '', doc };
     } catch (error) {
@@ -719,7 +729,7 @@
       box.replaceChildren(el('strong', { text: `Point ${j}` }), ...MECHANISMS.map(([field, label]) => {
         const select = el('select', {
           class: w[field] ? 'mech-select set' : 'mech-select',
-          title: `What the ${field} does as the robot reaches point ${j} (robot::followPath())`,
+          title: `What the ${field} does as the robot reaches point ${j} (waitUntilWaypoint(${j}) in the routine Copy C++ writes)`,
           'aria-label': `Point ${j} ${field}`,
         }, [el('option', { value: '', text: '—' }),
           ...ACTIONS.filter((a) => a.field === field).map((a) => el('option', { value: a.value, text: a.value }))]);
@@ -1090,7 +1100,7 @@
       const text = $('path-code').textContent;
       try {
         await navigator.clipboard.writeText(text);
-        flash('Copied. Paste it into src/robot/autons.cpp.');
+        flash('Copied. Paste it into src/robot/autons.cpp, and add the routine to registerAutons().');
       } catch (error) {
         // no clipboard (a file:// page in some browsers): select it for Ctrl+C instead
         const range = document.createRange();
@@ -1188,6 +1198,7 @@
     actionsOf,
     actionLabels,
     identifier,
+    routineName,
     toCpp,
     parseCpp,
     loggedPlanModels,

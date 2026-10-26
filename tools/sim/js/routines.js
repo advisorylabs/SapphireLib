@@ -2,14 +2,16 @@
  * SapphireLib simulator: routines.js
  *
  * Autonomous routines for the simulator, written the way src/robot/autons.cpp
- * would write them: setPose() to the real start, then motions. Each one is a
- * generator, and `yield*` a motion is the C++'s blocking call. Every routine
- * ends where it started, so "how far off is it now" is a fair question to
- * ask of odometry alone and of odometry with MCL.
+ * writes them, with the auton functions (auton.js, the port of
+ * sapphirelib/auton/auton.hpp): setPose() to the real start, then motions.
+ * Each routine is a generator, and `yield*` an auton call is the C++'s plain
+ * call. Every routine ends where it started, so "how far off is it now" is a
+ * fair question to ask of odometry alone and of odometry with MCL.
  *
  * To try your own: copy one, change the points, and add it to ROUTINES. Field
  * coordinates have the origin in the middle of the field (walls at +-70.25in),
- * +y downfield, headings clockwise from +y.
+ * +y downfield, headings clockwise from +y. Then copy it into autons.cpp,
+ * dropping the `yield*`s and the `a.`s.
  *
  * Plain script: window.SIM.routines in a browser, require('./routines.js') in
  * Node.
@@ -18,13 +20,13 @@
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory(require('./trajectory.js'));
+    module.exports = factory(require('./trajectory.js'), require('./auton.js'));
   } else {
     const root = typeof self !== 'undefined' ? self : this;
     root.SIM = root.SIM || {};
-    root.SIM.routines = factory(root.SIM.trajectory);
+    root.SIM.routines = factory(root.SIM.trajectory, root.SIM.auton);
   }
-})(function (T) {
+})(function (T, A) {
   'use strict';
 
   // A trajectory chain, the way autons.cpp would hold one (the Paths tab writes these): full speed
@@ -37,11 +39,11 @@
     { waypoints: [{ xIn: 24, yIn: -20 }, { xIn: -20, yIn: -44 }, { xIn: -48, yIn: -60, headingDeg: 0 }] },
   ];
 
-  // A branch at speed, the way autons.cpp's Branch At Speed routine is written: a trunk up the left
-  // side that ends at 30in/s, and two branches carrying on from its end. The front distance sensor
-  // picks one at the junction: clear ahead, straight on; something within 36in (the defender), a
-  // swerve to the right. Then home from wherever that branch stopped, a plain trajectory planned
-  // from its end (branching with a stop).
+  // A branch at speed, the way examples/trajectory.cpp's branchAtSpeed() is written: a trunk up the
+  // left side that ends at 30in/s, and two branches carrying on from its end. The front distance
+  // sensor picks one at the junction: clear ahead, straight on; something within 36in (the
+  // defender), a swerve to the right. Then home from wherever that branch stopped, a plain
+  // trajectory planned from its end (branching with a stop).
   const BRANCH = {
     trunk: [{ waypoints: [{ xIn: -48, yIn: -60, headingDeg: 0 }, { xIn: -48, yIn: -12 }] }],
     junctionSpeedInPerS: 30,
@@ -78,18 +80,17 @@
       description: 'moveToPose() around the middle, then a followPath() lap near the walls, then home.',
       start: { xIn: -48, yIn: -60, headingDeg: 0 },
       *run(robot) {
-        const dt = robot.drivetrain;
-        robot.odometry.setPose(this.start);
-        yield* dt.moveToPoint(-48, -24);
-        yield* dt.moveToPose(-30, 26, 90);
-        yield* dt.moveToPose(28, 26, 180);
-        yield* dt.moveToPose(28, -26, 270);
-        yield* dt.moveToPose(-28, -28, 0);
-        yield* dt.followPath([
-          { xIn: -28, yIn: -28 }, { xIn: -58, yIn: -10 }, { xIn: -58, yIn: 30 }, { xIn: -20, yIn: 60 },
-          { xIn: 20, yIn: 60 }, { xIn: 58, yIn: 30 }, { xIn: 58, yIn: -20 }, { xIn: 20, yIn: -58 },
-        ], { lookaheadIn: 12, cruiseVoltage: 8 });
-        yield* dt.moveToPose(-48, -60, 0);
+        const a = A.create(robot);
+        a.setPose(-48, -60, 0);
+        yield* a.moveToPoint(-48, -24);
+        yield* a.moveToPose(-30, 26, 90);
+        yield* a.moveToPose(28, 26, 180);
+        yield* a.moveToPose(28, -26, 270);
+        yield* a.moveToPose(-28, -28, 0);
+        yield* a.followPath([
+          [-28, -28], [-58, -10], [-58, 30], [-20, 60], [20, 60], [58, 30], [58, -20], [20, -58],
+        ], { lookaheadIn: 12, maxVolts: 8 });
+        yield* a.moveToPose(-48, -60, 0);
       },
     },
     {
@@ -98,14 +99,11 @@
       description: 'Three followPath() laps of a 60in square, each lap one closed path. Try it with Worn tracking wheels.',
       start: { xIn: -30, yIn: -30, headingDeg: 45 },
       *run(robot) {
-        const dt = robot.drivetrain;
-        robot.odometry.setPose(this.start);
-        const lap = [
-          { xIn: -30, yIn: -30 }, { xIn: -30, yIn: 30 }, { xIn: 30, yIn: 30 }, { xIn: 30, yIn: -30 },
-          { xIn: -30, yIn: -30 },
-        ];
+        const a = A.create(robot);
+        a.setPose(-30, -30, 45);
+        const lap = [[-30, -30], [-30, 30], [30, 30], [30, -30], [-30, -30]];
         for (let i = 0; i < 3; ++i) {
-          yield* dt.followPath(lap, { lookaheadIn: 10, cruiseVoltage: 9, timeoutMs: 20000 });
+          yield* a.followPath(lap, { lookaheadIn: 10, maxVolts: 9, timeoutMs: 20000 });
         }
       },
     },
@@ -115,28 +113,31 @@
       description: 'Full-speed moveToPoint() back and forth along the near wall, turning each time.',
       start: { xIn: -44, yIn: -56, headingDeg: 90 },
       *run(robot) {
-        const dt = robot.drivetrain;
-        robot.odometry.setPose(this.start);
+        const a = A.create(robot);
+        a.setPose(-44, -56, 90);
         for (let i = 0; i < 3; ++i) {
-          yield* dt.moveToPoint(44, -56);
-          yield* dt.turnToHeading(270);
-          yield* dt.moveToPoint(-44, -56);
-          yield* dt.turnToHeading(90);
+          yield* a.moveToPoint(44, -56);
+          yield* a.turnTo(270);
+          yield* a.moveToPoint(-44, -56);
+          yield* a.turnTo(90);
         }
       },
     },
     {
       id: 'trajectory',
       name: 'Trajectory tour',
-      description: 'followTrajectory() through a three-section chain: fast, slower to a stop, then back home at a sharp angle.',
+      description: 'followTrajectory() through a three-section chain in the background: fast, slower to a stop, ' +
+        'then back home at a sharp angle. The routine waits for the stop (waitUntilWaypoint()) as a mechanism would.',
       start: { xIn: -48, yIn: -60, headingDeg: 0 },
       *run(robot) {
-        const dt = robot.drivetrain;
-        robot.odometry.setPose(this.start);
+        const a = A.create(robot);
+        a.setPose(-48, -60, 0);
         // planned at the start of the routine, from the drivetrain's axis models, as the robot does
-        const tour = T.generateTrajectory(TOUR_CHAIN, dt.axisModels);
-        if (!tour.ok) return;
-        yield* dt.followTrajectory(tour.trajectory);
+        if (!a.planTrajectory(TOUR_CHAIN)) return;
+        a.runAsync(function* () { yield* a.followTrajectory(TOUR_CHAIN); });
+        // the stop at the end of the second section is point 4: where a claw would open
+        yield* a.waitUntilWaypoint(4);
+        yield* a.waitForMotion();
       },
     },
     {
@@ -146,9 +147,11 @@
         'straight on; turn on the Defender and it swerves right. Then home from wherever it stopped.',
       start: { xIn: -48, yIn: -60, headingDeg: 0 },
       *run(robot) {
+        const a = A.create(robot);
         const dt = robot.drivetrain;
-        robot.odometry.setPose(this.start);
-        // every piece planned up front, so the junction only has to pick one
+        a.setPose(-48, -60, 0);
+        // every piece planned up front, so the junction only has to pick one. Branching drives the
+        // drivetrain's own followTrajectory(), as examples/trajectory.cpp does
         const plan = planBranch(dt.axisModels);
         if (!plan.ok) return;
         let took = null;

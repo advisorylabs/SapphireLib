@@ -165,8 +165,15 @@ test('Copy C++ writes what autons.cpp compiles', () => {
     '     .stopAtEnd = true},',
     '    {.waypoints = {{.xIn = 0, .yIn = 0}}},',
     '};',
+    '',
+    '// in registerAutons(): selector.addRoutine("left rush", &leftRush);',
+    'void leftRush() {',
+    '    setPose(-48, -60, 0);',
+    '    followTrajectory(kLeftRush);',
+    '}',
   ].join('\n'));
   assert.equal(P.identifier('2nd try!'), 'kPath2ndTry');
+  assert.equal(P.routineName('2nd try!'), 'path2ndTry');
 });
 
 test('Paste C++ reads it back, comments and all', () => {
@@ -200,7 +207,7 @@ test('Paste C++ reads it back, comments and all', () => {
   assert.match(P.parseCpp('kX{{.waypoints = {{.xIn = kA, .yIn = 2}}}};').error, /expected a number, true, false, or \{/);
 });
 
-test('a point\'s claw and extender actions go out as robot::PathAction, and come back', () => {
+test('a point\'s claw and extender actions go out in the routine, and come back', () => {
   const doc = P.fromSections(SMALL, 'left rush');
   P.setAction(doc, 1, 'extender', 'out');
   P.setAction(doc, 2, 'claw', 'open');
@@ -210,14 +217,22 @@ test('a point\'s claw and extender actions go out as robot::PathAction, and come
   // the sections the planner gets don't change
   assert.deepEqual(P.toSections(doc), P.toSections(P.fromSections(SMALL, 'left rush')));
   const text = P.toCpp(doc, '3.42 s planned with the Robot tab\'s models');
+  // the trajectory in the background, and each point's calls once the plan reaches it
   assert.equal(text.split('\n').slice(9).join('\n'), [
-    '// what the claw and the extender do along "left rush", by point (robot::followPath())',
-    'const std::vector<robot::PathAction> kLeftRushActions{',
-    '    {.waypoint = 1, .action = robot::PathAction::extenderOut},',
-    '    {.waypoint = 2, .action = robot::PathAction::clawOpen},',
-    '    {.waypoint = 2, .action = robot::PathAction::extenderIn},',
-    '    {.waypoint = 3, .action = robot::PathAction::clawClose},',
-    '};',
+    '',
+    '// in registerAutons(): selector.addRoutine("left rush", &leftRush);',
+    'void leftRush() {',
+    '    setPose(-48, -60, 0);',
+    '    runAsync([] { followTrajectory(kLeftRush); });',
+    '    if (!waitUntilWaypoint(1)) return;',
+    '    macros::setExtended(true);',
+    '    if (!waitUntilWaypoint(2)) return;',
+    '    macros::setClawClosed(false);',
+    '    macros::setExtended(false);',
+    '    if (!waitUntilWaypoint(3)) return;',
+    '    macros::setClawClosed(true);',
+    '    waitForMotion();',
+    '}',
   ].join('\n'));
 
   // Paste C++ puts them back on their points
@@ -225,25 +240,31 @@ test('a point\'s claw and extender actions go out as robot::PathAction, and come
   assert.ok(parsed.ok, parsed.error);
   assert.deepEqual(parsed.doc.waypoints, doc.waypoints);
   assert.equal(P.toCpp(parsed.doc, '3.42 s planned with the Robot tab\'s models'), text);
-  // ...written by hand, with the namespace left off
-  const hand = P.parseCpp(`${P.toCpp(P.fromSections(SMALL, 'left rush'))}
-    const std::vector<PathAction> kLeftRushActions{{.waypoint = 0, .action = PathAction::extenderOut}};`);
+  // ...written by hand, spaced out, with other code between
+  const sections = P.toCpp(P.fromSections(SMALL, 'left rush')).split('\n').slice(0, 9).join('\n');
+  const hand = P.parseCpp(`${sections}
+    void mine() {
+        runAsync([] { followTrajectory(kLeftRush); });
+        waitUntilWaypoint( 0 );
+        printf("go\\n");
+        macros :: setExtended( true );
+    }`);
   assert.ok(hand.ok, hand.error);
   assert.equal(hand.doc.waypoints[0].extender, 'out');
-  // an action that isn't one, or on a point the path doesn't have
-  const sections = P.toCpp(P.fromSections(SMALL, 'left rush'));
-  assert.match(P.parseCpp(`${sections} kLeftRushActions{{.waypoint = 0, .action = PathAction::intakeOn}};`).error,
-    /no PathAction::intakeOn/);
-  assert.match(P.parseCpp(`${sections} kLeftRushActions{{.waypoint = 9, .action = PathAction::clawOpen}};`).error,
-    /no point 9/);
+  // a call that isn't an action, on a point the path doesn't have, or before any point
+  assert.match(P.parseCpp(`${sections} waitUntilWaypoint(0); macros::setIntake(true);`).error,
+    /isn't something a point can do/);
+  assert.match(P.parseCpp(`${sections} waitUntilWaypoint(9); macros::setClawClosed(false);`).error, /no point 9/);
+  assert.match(P.parseCpp(`${sections} macros::setClawClosed(false);`).error, /before any waitUntilWaypoint/);
 
-  // clearing one takes it off; with none left, no list at all
+  // clearing one takes it off; with none left, the routine just drives it
   for (const j of [1, 2, 3]) {
     P.setAction(doc, j, 'claw', null);
     P.setAction(doc, j, 'extender', null);
   }
   assert.deepEqual(P.actionsOf(doc), []);
-  assert.ok(!P.toCpp(doc).includes('PathAction'));
+  assert.ok(!P.toCpp(doc).includes('waitUntilWaypoint'));
+  assert.ok(P.toCpp(doc).includes('    followTrajectory(kLeftRush);'));
 });
 
 test('actions stay on their points through editing and reversing', () => {
@@ -258,12 +279,13 @@ test('actions stay on their points through editing and reversing', () => {
   P.reverse(doc);
   const at = doc.waypoints.findIndex((w) => w.claw === 'open');
   assert.deepEqual([doc.waypoints[at].xIn, doc.waypoints[at].yIn], [-24, -12]);
-  assert.deepEqual(P.actionsOf(doc).map(({ waypoint, action }) => [waypoint, action.cpp]), [[at, 'clawOpen']]);
+  assert.deepEqual(P.actionsOf(doc).map(({ waypoint, action }) => [waypoint, action.label]), [[at, 'claw open']]);
 });
 
-test('ACTIONS matches robot::PathAction, in its order', () => {
-  // include/robot/paths.hpp: followPath() and the C++ that Copy C++ writes both go by these names
-  const header = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../include/robot/paths.hpp'), 'utf8');
-  const kinds = header.match(/enum Kind[^{]*\{([^}]*)\}/)[1].replace(/\/\/[^\n]*/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  assert.deepEqual(P.ACTIONS.map((a) => a.cpp), kinds);
+test('every action calls something robot/macros.hpp declares', () => {
+  // the routine Copy C++ writes calls these from autons.cpp, as macros::<call>(<arg>)
+  const header = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../include/robot/macros.hpp'), 'utf8');
+  for (const call of new Set(P.ACTIONS.map((a) => a.call))) {
+    assert.match(header, new RegExp(`\\bvoid ${call}\\(bool \\w+\\);`), `macros.hpp declares ${call}(bool)`);
+  }
 });
