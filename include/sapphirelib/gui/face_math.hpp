@@ -42,18 +42,36 @@ struct BrowShape {
 };
 
 /**
+ * @brief The mouth: a filled circle that only shows while surprised, growing as the surprise eases
+ * in
+ */
+struct MouthShape {
+    /** center x, in pixels from the screen's left */
+    std::int32_t centerX = 0;
+
+    /** center y, in pixels from the screen's top */
+    std::int32_t centerY = 0;
+
+    /** width and height, in pixels. 0 while not surprised: nothing to draw */
+    std::int32_t sizePx = 0;
+
+    bool operator==(const MouthShape&) const = default;
+};
+
+/**
  * @brief Everything FaceScreen draws. Index 0 is on the screen's left, 1 on its right
  */
 struct FaceShape {
     EyeShape eyes[2];
     BrowShape brows[2];
+    MouthShape mouth;
 
     bool operator==(const FaceShape&) const = default;
 };
 
 /**
  * @brief The face's moods and timing: open eyes that blink every few seconds (now and then
- * twice), a squint, a surprised look after a bump, and a wink when asked for one
+ * twice), a squint, a surprised look (and an open mouth) after a bump, and a wink when asked for one
  *
  * Pure: no LVGL, no clock, no sensors. Each frame, pass the time and what's going on, and draw the
  * FaceShape that comes back. Moods ease in and out over a few frames instead of snapping. A
@@ -103,7 +121,7 @@ public:
 
     /**
      * @brief Wink: the eye on the screen's right shuts for about half a second and opens again,
-     * its brow dipping, while the other stays open. It starts showing at the next update()
+     * its brow dipping and tipping in, while the other stays open. It starts showing at the next update()
      *
      * One asked for while a wink is shut or opening again keeps the eye shut a little longer,
      * rather than opening it all the way to start over

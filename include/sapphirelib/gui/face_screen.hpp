@@ -126,6 +126,7 @@ private:
     lv_obj_t* root_ = nullptr;
     lv_obj_t* eyes_[2] = {};
     lv_obj_t* brows_[2] = {};
+    lv_obj_t* mouth_ = nullptr;
     // members because lv_line_set_points() keeps the pointer, not a copy
     lv_point_precise_t browPoints_[2][2] = {};
     // what's on the screen now, so a frame that changes nothing redraws nothing

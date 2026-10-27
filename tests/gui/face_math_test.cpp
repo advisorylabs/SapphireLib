@@ -79,6 +79,8 @@ void testOpenAtRest() {
     CHECK(shape.eyes[0].centerX - kEyePx / 2 > 0 && shape.eyes[1].centerX + kEyePx / 2 < 480);
     CHECK(shape.brows[0].outerY - shape.brows[0].thicknessPx > 0);
     CHECK(shape.eyes[0].centerY + kEyePx / 2 < 272);
+    // no mouth unless surprised
+    CHECK(shape.mouth.sizePx == 0);
 }
 
 void testBlinksNowAndThen() {
@@ -169,6 +171,12 @@ void testSurprise() {
         CHECK(surprised.brows[side].innerY < surprised.brows[side].outerY);
         CHECK(surprised.brows[side].innerY - surprised.brows[side].thicknessPx > 0);
     }
+    // a round mouth in the middle, below the wide eyes and on the screen
+    CHECK(surprised.mouth.sizePx > 30);
+    CHECK(surprised.mouth.centerX == 240);
+    CHECK(surprised.mouth.centerY - surprised.mouth.sizePx / 2 >
+          surprised.eyes[0].centerY + surprised.eyes[0].heightPx / 2);
+    CHECK(surprised.mouth.centerY + surprised.mouth.sizePx / 2 < 272);
     // held a moment after the bump, then back to open
     run(face, now, 1200, false);
     CHECK(face.surprise() == 1.0);
@@ -213,11 +221,14 @@ void testWink() {
     face.startWink(now);
     const FaceShape winking = run(face, now, 400, false);
     CHECK(face.wink() == 1.0);
-    // the screen's right eye shut, its brow dipped toward it but still flat
+    // the screen's right eye shut, its brow dipped toward it, inner end tipped down
     CHECK(shut(winking.eyes[1]));
     CHECK(winking.eyes[1].widthPx == kEyePx);
     CHECK(browMiddleY(winking.brows[1]) > browMiddleY(open.brows[1]));
-    CHECK(flat(winking.brows[1]));
+    CHECK(winking.brows[1].innerY > winking.brows[1].outerY);
+    // still clear of the shut eye
+    CHECK(winking.brows[1].innerY + winking.brows[1].thicknessPx <
+          winking.eyes[1].centerY - winking.eyes[1].heightPx / 2);
     // the other eye and brow just as they were
     CHECK(winking.eyes[0] == open.eyes[0]);
     CHECK(winking.brows[0] == open.brows[0]);
