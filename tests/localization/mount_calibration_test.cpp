@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "sapphirelib/localization/mount_calibration.hpp"
@@ -181,7 +182,43 @@ struct Spin {
     double headingLagDeg = 0.0;
     // which sensors are plugged in
     std::vector<bool> plugged = {true, true, true, true};
+    // the beam's cone, its half angle in degrees: 0 reads along the center ray alone. Otherwise a
+    // reading is the cone's (coneReading())
+    double coneHalfDeg = 0.0;
+    bool coneNearest = false;
 };
+
+// what a beam with a cone reads: with nearest, the nearest thing anywhere in it, as a sensor that
+// only reports its first return would. Otherwise the cone's returns averaged, brightest in the
+// middle (a Gaussian, the cone's edge 2 sigma out) and fading with distance squared, scaled so a
+// wall square on reads true, as the sensor is calibrated at the factory
+double coneReading(const FieldMap& world, double x, double y, double headingDeg,
+                   const DistanceSensorMount& mount, double halfDeg, bool nearest) {
+    double nearestIn = std::numeric_limits<double>::infinity();
+    double weightSum = 0.0;
+    double distanceSum = 0.0;
+    double squareWeightSum = 0.0;
+    double squareDistanceSum = 0.0;
+    for (double offset = -halfDeg; offset <= halfDeg + 1e-9; offset += 0.5) {
+        DistanceSensorMount turned = mount;
+        turned.facingDeg += offset;
+        const SensorRay ray = sensorRay(x, y, headingDeg, turned);
+        const double distance = world.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+        nearestIn = std::min(nearestIn, distance);
+        const double z = offset / (halfDeg / 2.0);
+        const double brightness = std::exp(-0.5 * z * z);
+        const double c = std::cos(offset * kDegToRad);
+        // off a square wall 1 in away, this ray would come back from 1 / c, as bright as c^2
+        squareWeightSum += brightness * c * c;
+        squareDistanceSum += brightness * c;
+        if (!std::isfinite(distance)) continue;
+        weightSum += brightness / (distance * distance);
+        distanceSum += brightness / distance;
+    }
+    if (nearest) return nearestIn;
+    if (!(weightSum > 0.0)) return std::numeric_limits<double>::infinity();
+    return distanceSum / weightSum / (squareDistanceSum / squareWeightSum);
+}
 
 // one turn each way at 45 deg/s, a reading from every sensor every 30 ms, as the routine does
 std::vector<MountSample> spin(const Spin& setup, std::uint32_t seed) {
@@ -210,9 +247,13 @@ std::vector<MountSample> spin(const Spin& setup, std::uint32_t seed) {
 
             for (std::size_t s = 0; s < setup.mounts.size(); ++s) {
                 if (!setup.plugged[s]) continue;
-                const SensorRay ray =
-                    sensorRay(x, y, headingDeg - direction * setup.headingLagDeg, setup.mounts[s]);
-                double distance = setup.world.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+                const double measuredDeg = headingDeg - direction * setup.headingLagDeg;
+                const SensorRay ray = sensorRay(x, y, measuredDeg, setup.mounts[s]);
+                double distance =
+                    setup.coneHalfDeg > 0.0
+                        ? coneReading(setup.world, x, y, measuredDeg, setup.mounts[s],
+                                      setup.coneHalfDeg, setup.coneNearest)
+                        : setup.world.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
                 const double sigma = std::max(setup.noiseFloorIn, setup.noiseFraction * distance);
                 distance += sigma * rng.gaussian();
                 if (rng.uniform() < setup.outlierChance) distance *= rng.uniform();
@@ -230,9 +271,28 @@ std::vector<MountSample> spin(const Spin& setup, std::uint32_t seed) {
 }
 
 MountCalibrationResult fit(const std::vector<MountSample>& samples,
-                           const MountCalibrationConfig& config = {}) {
-    const std::vector<DistanceSensorMount> mounts = configuredMounts();
-    return fitSensorMounts(samples, mounts, FieldMap::centered(), BeamModel{}, config);
+                           const MountCalibrationConfig& config = {},
+                           const std::vector<DistanceSensorMount>& mounts = configuredMounts()) {
+    // the field, or the box the config describes, as calibrateSensorMounts() does
+    return fitSensorMounts(samples, mounts, calibrationWalls(config, FieldMap::centered()),
+                           BeamModel{}, config);
+}
+
+// a box's walls, inside measured widthIn by depthIn, centered on the origin, with nothing else
+// around: what the robot spins in
+FieldMap box(double widthIn, double depthIn) {
+    return FieldMap(-widthIn / 2, -depthIn / 2, widthIn / 2, depthIn / 2);
+}
+
+// two 6 ft walls widthIn apart, either side of the origin, in a room with a cabinet down the
+// corridor and a cart off one end
+FieldMap corridor(double widthIn) {
+    FieldMap world = openRoom();
+    world.addSegment({.x1In = -widthIn / 2, .y1In = -36.0, .x2In = -widthIn / 2, .y2In = 36.0});
+    world.addSegment({.x1In = widthIn / 2, .y1In = -36.0, .x2In = widthIn / 2, .y2In = 36.0});
+    world.addBox(-30.0, 50.0, 10.0, 66.0);
+    world.addBox(-8.0, -70.0, 14.0, -52.0);
+    return world;
 }
 
 // every sensor calibrated, within tolerance of where it really is, or of that plus alongOffIn
@@ -720,6 +780,238 @@ void testAdjacentSensorsCannotKeepASpacing() {
     }
 }
 
+// In a box whose inside is measured, a robot spinning a few inches off center sees both walls of
+// each pair, so the box's width pins the spacing the configured mounts get 0.2in wrong: every
+// sensor lands where it really is, with nothing on the robot measured. With the sensor's real
+// noise, a cone (calibrated square on, wider at a slant), readings off nothing, and delay. The
+// standard error it reports is about the error it makes
+void testBoxFindsTheSpacing() {
+    const MountCalibrationConfig inBox{.boxWidthIn = 40.0, .boxDepthIn = 36.0};
+    double squaredError = 0.0;
+    double stderrSum = 0.0;
+    int fits = 0;
+    for (std::uint32_t seed = 1; seed <= 8; ++seed) {
+        Spin setup;
+        setup.world = box(40.0, 36.0);
+        setup.startXIn = seed % 2 == 0 ? 4.0 : -3.0;
+        setup.startYIn = seed % 3 == 0 ? -4.0 : 3.0;
+        setup.startHeadingDeg = 55.0 * seed;
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.outlierChance = 0.03;
+        setup.millimeters = true;
+        setup.headingLagDeg = 1.5;
+        setup.coneHalfDeg = 12.0;
+        const MountCalibrationResult result = fit(spin(setup, seed), inBox);
+        assert(!result.spacingFromMounts);
+        expectFound(result, 0.15, 0.6, "box");
+        const std::vector<DistanceSensorMount> truth = trueMounts();
+        for (std::size_t s = 0; s < truth.size(); ++s) {
+            const double error = result.sensors[s].alongIn - alongOf(truth[s]);
+            squaredError += error * error;
+            stderrSum += result.sensors[s].alongStderrIn;
+            ++fits;
+            // all four walls, from every sensor
+            assert(wallsSeen(result.sensors[s]) == 4);
+        }
+    }
+    const double rmsError = std::sqrt(squaredError / fits);
+    const double meanStderr = stderrSum / fits;
+    std::printf("box: along-beam error %.3f in RMS over %d fits, standard error %.3f in\n",
+                rmsError, fits, meanStderr);
+    expectNear(rmsError / meanStderr, 1.0, 0.5, "box: standard error matches the error");
+}
+
+// Two walls a measured 48in apart, the corridor's ends open onto the room: the same, from
+// anywhere between them the robot can spin. The cabinet and the cart down the corridor match no
+// wall and drop out
+void testCorridorFindsTheSpacing() {
+    const MountCalibrationConfig between{.boxWidthIn = 48.0};
+    for (std::uint32_t seed = 1; seed <= 4; ++seed) {
+        Spin setup;
+        setup.world = corridor(48.0);
+        setup.startXIn = seed % 2 == 0 ? 6.0 : -5.0;
+        setup.startYIn = 5.0 * seed - 12.0;
+        setup.startHeadingDeg = 80.0 * seed;
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.outlierChance = 0.03;
+        setup.millimeters = true;
+        setup.headingLagDeg = 1.5;
+        setup.coneHalfDeg = 12.0;
+        const MountCalibrationResult result = fit(spin(setup, 30 + seed), between);
+        assert(!result.spacingFromMounts);
+        expectFound(result, 0.2, 0.6, "corridor");
+        // the two walls, never the cabinet or the cart down the corridor taken for an end wall
+        for (const SensorMountFit& sensor : result.sensors) {
+            assert(sensor.walls == ((1u << 0) | (1u << 1)));
+        }
+    }
+}
+
+// Twenty-four boxes and corridors, 34 to 56in across, the robot up to 6in off center facing any
+// way, its mounts measured from a tracking center up to 3in off and each face to within half an
+// inch, the corridors' ends open onto furniture turned every which way. Every sensor calibrated,
+// within 0.2in of where it really is
+void testRandomBoxes() {
+    Rng rng(4242);
+    double worst = 0.0;
+    for (std::uint32_t room = 0; room < 24; ++room) {
+        const bool isCorridor = room % 2 == 1;
+        const double widthIn = 34.0 + 22.0 * rng.uniform();
+        const double depthIn = isCorridor ? 0.0 : 34.0 + 22.0 * rng.uniform();
+        Spin setup;
+        if (isCorridor) {
+            setup.world = openRoom();
+            setup.world.addSegment(
+                {.x1In = -widthIn / 2, .y1In = -40.0, .x2In = -widthIn / 2, .y2In = 40.0});
+            setup.world.addSegment(
+                {.x1In = widthIn / 2, .y1In = -40.0, .x2In = widthIn / 2, .y2In = 40.0});
+            for (const double end : {-1.0, 1.0}) {
+                addTurnedBox(setup.world, 30.0 * (2.0 * rng.uniform() - 1.0),
+                             end * (50.0 + 20.0 * rng.uniform()), 10.0 + 30.0 * rng.uniform(),
+                             6.0 + 20.0 * rng.uniform(), 90.0 * rng.uniform());
+            }
+        } else {
+            setup.world = box(widthIn, depthIn);
+        }
+        std::vector<DistanceSensorMount> truth = configuredMounts();
+        const double centerForwardIn = 3.0 * (2.0 * rng.uniform() - 1.0);
+        const double centerRightIn = 3.0 * (2.0 * rng.uniform() - 1.0);
+        for (DistanceSensorMount& mount : truth) {
+            mount.forwardIn += centerForwardIn + 0.5 * (2.0 * rng.uniform() - 1.0);
+            mount.rightIn += centerRightIn + 0.5 * (2.0 * rng.uniform() - 1.0);
+        }
+        setup.mounts = truth;
+        setup.startXIn = 6.0 * (2.0 * rng.uniform() - 1.0);
+        setup.startYIn = (isCorridor ? 12.0 : 6.0) * (2.0 * rng.uniform() - 1.0);
+        setup.startHeadingDeg = 360.0 * rng.uniform();
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.outlierChance = 0.05;
+        setup.millimeters = true;
+        setup.headingLagDeg = 1.5;
+        setup.coneHalfDeg = 12.0;
+        const MountCalibrationResult result =
+            fit(spin(setup, 200 + room), {.boxWidthIn = widthIn, .boxDepthIn = depthIn});
+        if (result.spacingFromMounts) {
+            std::printf("FAIL random boxes: room %u kept the spacing\n", room);
+            assert(false);
+        }
+        for (std::size_t s = 0; s < truth.size(); ++s) {
+            expectStatus(result.sensors[s].status, MountFitStatus::calibrated, "random boxes");
+            const double error = result.sensors[s].alongIn - alongOf(truth[s]);
+            worst = std::max(worst, std::fabs(error));
+            expectNear(error, 0.0, 0.2, "random boxes");
+        }
+    }
+    std::printf("random boxes: worst along-beam error %.3f in over 24\n", worst);
+}
+
+// Mounts measured 3.5in short of the truth on every side, 7in short across the robot: further
+// than a field's width may move them (maxSpacingChangeIn), but a box's walls are there by design,
+// so the box sets them
+void testBoxCorrectsMountsFarOff() {
+    std::vector<DistanceSensorMount> truth = configuredMounts();
+    for (DistanceSensorMount& mount : truth) {
+        const double facing = mount.facingDeg * kDegToRad;
+        mount.forwardIn += 3.5 * std::cos(facing);
+        mount.rightIn += 3.5 * std::sin(facing);
+    }
+    Spin setup;
+    setup.world = box(46.0, 46.0);
+    setup.mounts = truth;
+    setup.startXIn = 3.0;
+    setup.startYIn = -4.0;
+    setup.startHeadingDeg = 130.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.millimeters = true;
+    setup.coneHalfDeg = 12.0;
+    const MountCalibrationResult result =
+        fit(spin(setup, 40), {.boxWidthIn = 46.0, .boxDepthIn = 46.0});
+    assert(!result.spacingFromMounts);
+    expectFound(result, 0.15, 0.6, "far off", truth);
+}
+
+// How a sensor reads a wall at a slant decides where the fit puts its offsets once a width pins
+// them: readings from a sensor that reports the nearest thing in its cone, taken for its center
+// ray, put every sensor about 0.2in too far out. The fit finds the shape, so each comes out right:
+// near 1 for a beam that reads its center ray, and for the factory calibrated cone; near 0 for
+// the nearest thing in it
+void testBeamShape() {
+    struct Beam {
+        const char* label;
+        double coneHalfDeg;
+        bool nearest;
+        double minShape;
+        double maxShape;
+    };
+    const Beam beams[] = {
+        {"center ray", 0.0, false, 0.8, 1.0},
+        {"calibrated cone", 12.0, false, 0.8, 1.0},
+        {"nearest in cone", 12.0, true, 0.0, 0.3},
+    };
+    for (const Beam& beam : beams) {
+        Spin setup;
+        setup.world = box(40.0, 40.0);
+        setup.startXIn = -4.0;
+        setup.startYIn = 3.0;
+        setup.startHeadingDeg = 20.0;
+        setup.noiseFraction = 0.025;
+        setup.noiseFloorIn = 0.3;
+        setup.millimeters = true;
+        setup.coneHalfDeg = beam.coneHalfDeg;
+        setup.coneNearest = beam.nearest;
+        const MountCalibrationResult result =
+            fit(spin(setup, 50), {.boxWidthIn = 40.0, .boxDepthIn = 40.0});
+        std::printf("beam shape: %s fits %.2f\n", beam.label, result.beamShape);
+        if (!(result.beamShape >= beam.minShape && result.beamShape <= beam.maxShape)) {
+            std::printf("FAIL beam shape: %s is %.2f, not %.1f to %.1f\n", beam.label,
+                        result.beamShape, beam.minShape, beam.maxShape);
+            assert(false);
+        }
+        expectFound(result, 0.15, 0.6, beam.label);
+    }
+}
+
+// From a corner the spacing comes from the mounts whatever the beam's shape, so a cone that reads
+// short at a slant changes nothing there
+void testCornerWithACone() {
+    Spin setup;
+    setup.world = corner();
+    setup.startHeadingDeg = 300.0;
+    setup.noiseFraction = 0.025;
+    setup.noiseFloorIn = 0.3;
+    setup.millimeters = true;
+    setup.headingLagDeg = 1.5;
+    setup.coneHalfDeg = 12.0;
+    setup.coneNearest = true;
+    const MountCalibrationResult result = fit(spin(setup, 60));
+    assert(result.spacingFromMounts);
+    expectFound(result, 0.25, 0.6, "corner, cone", trueMounts(),
+                spacingError(trueMounts(), {0.25, 0.25, 0.25, 0.25}));
+}
+
+void testCalibrationWalls() {
+    const FieldMap field = FieldMap::centered();
+    const FieldMap none = calibrationWalls({}, field);
+    expectNear(none.minXIn(), field.minXIn(), 0.0, "walls: no box is the field");
+    expectNear(none.maxYIn(), field.maxYIn(), 0.0, "walls: no box is the field");
+    const FieldMap walls = calibrationWalls({.boxWidthIn = 40.0, .boxDepthIn = 30.0}, field);
+    expectNear(walls.minXIn(), -20.0, 0.0, "walls: box left");
+    expectNear(walls.maxXIn(), 20.0, 0.0, "walls: box right");
+    expectNear(walls.minYIn(), -15.0, 0.0, "walls: box near");
+    expectNear(walls.maxYIn(), 15.0, 0.0, "walls: box far");
+    // one side 0: two walls, the other two far out of reach
+    const FieldMap pair = calibrationWalls({.boxWidthIn = 48.0}, field);
+    expectNear(pair.maxXIn(), 24.0, 0.0, "walls: corridor");
+    assert(pair.maxYIn() > 1000.0 && pair.minYIn() < -1000.0);
+    const FieldMap across = calibrationWalls({.boxDepthIn = 48.0}, field);
+    expectNear(across.minYIn(), -24.0, 0.0, "walls: corridor the other way");
+    assert(across.maxXIn() > 1000.0);
+}
+
 // Nothing in reach: every reading is the room's clutter, which matches no wall
 void testNoWallInReach() {
     Spin setup;
@@ -787,6 +1079,13 @@ int main() {
     testRandomClassrooms();
     testThreeSensorsKeepTheirSpan();
     testAdjacentSensorsCannotKeepASpacing();
+    testBoxFindsTheSpacing();
+    testCorridorFindsTheSpacing();
+    testRandomBoxes();
+    testBoxCorrectsMountsFarOff();
+    testBeamShape();
+    testCornerWithACone();
+    testCalibrationWalls();
     testNoWallInReach();
     testUnpluggedSensor();
     testNoReadings();

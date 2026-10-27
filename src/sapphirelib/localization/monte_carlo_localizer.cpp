@@ -373,9 +373,19 @@ MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
         result.error = "already calibrating";
         return result;
     }
-    SAPPHIRELIB_LOG_INFO("mcl", "calibrating sensor mounts: spinning %.1f turns each way",
-                         std::fabs(config.turns));
-    telemetry::event("mcl", "mount_calibration,start");
+    const bool inBox = config.boxWidthIn > 0.0 || config.boxDepthIn > 0.0;
+    if (inBox) {
+        SAPPHIRELIB_LOG_INFO(
+            "mcl",
+            "calibrating sensor mounts: spinning %.1f turns each way in a %.2f x %.2f in box",
+            std::fabs(config.turns), config.boxWidthIn, config.boxDepthIn);
+        telemetry::event("mcl", "mount_calibration,start,box=%.3fx%.3f", config.boxWidthIn,
+                         config.boxDepthIn);
+    } else {
+        SAPPHIRELIB_LOG_INFO("mcl", "calibrating sensor mounts: spinning %.1f turns each way",
+                             std::fabs(config.turns));
+        telemetry::event("mcl", "mount_calibration,start");
+    }
 
     // one turn (or config.turns) each way: the sensors' leftover delay reads one way turning
     // clockwise and the other way back, and cancels
@@ -455,7 +465,8 @@ MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
     }
 
     // the map never changes after construction, so reading it from this task is safe
-    result = fitSensorMounts(samples, mounts, filter_.map(), config_.filter.beam, config);
+    result = fitSensorMounts(samples, mounts, calibrationWalls(config, filter_.map()),
+                             config_.filter.beam, config);
     if (result.ok) {
         std::vector<DistanceSensorMount> fitted;
         fitted.reserve(result.sensors.size());
@@ -464,12 +475,14 @@ MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
     }
 
     // what it found, ready to copy into the code that builds the localizer
-    SAPPHIRELIB_LOG_INFO(
-        "mcl", "sensor mounts: %u readings, %u used%s%s%s", static_cast<unsigned>(result.readings),
-        static_cast<unsigned>(result.readingsUsed),
-        result.spacingFromMounts ? ", from walls on one or two sides: spacing kept from the mounts"
-                                 : "",
-        result.ok ? "" : ": ", result.error);
+    const char* spacing = !result.spacingFromMounts ? ""
+                          : inBox
+                              ? ", the box's walls didn't pin it: spacing kept from the mounts"
+                              : ", from walls on one or two sides: spacing kept from the mounts";
+    SAPPHIRELIB_LOG_INFO("mcl", "sensor mounts: %u readings, %u used, beam shape %.2f%s%s%s",
+                         static_cast<unsigned>(result.readings),
+                         static_cast<unsigned>(result.readingsUsed), result.beamShape, spacing,
+                         result.ok ? "" : ": ", result.error);
     for (std::size_t s = 0; s < result.sensors.size(); ++s) {
         const SensorMountFit& sensor = result.sensors[s];
         const bool calibrated = sensor.status == MountFitStatus::calibrated;

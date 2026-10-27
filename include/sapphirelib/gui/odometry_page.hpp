@@ -68,8 +68,8 @@ public:
      * really sit
      *
      * Spins the chassis in place, one turn each way, and fits each sensor's mount against the
-     * walls in view (one, two at a corner, or a whole field), then applies the ones it could pin
-     * down to the running localizer (see
+     * walls in view (one, two at a corner, a whole field, or the box config.boxWidthIn describes),
+     * then applies the ones it could pin down to the running localizer (see
      * localization::MonteCarloLocalizer::calibrateSensorMounts(), which says where to set the
      * robot). The status line shows each sensor's forward and right offsets, and the terminal logs
      * them in full. Runs on a background task, so the screen doesn't freeze. Must be called before
@@ -78,14 +78,15 @@ public:
      * @param localizer the localizer whose sensors to calibrate. Must outlive the page
      * @param setSpin spins the chassis in place, given a turn command from -1 to 1. Called with 0
      * to stop
-     * @param config the spin, and what counts as calibrated
+     * @param config the spin, the box it's in if any, and what counts as calibrated
      *
      * @b Example
      * @code {.cpp}
      * auto page = std::make_unique<sapphirelib::gui::OdometryPage>(odometry());
-     * page->enableSensorCalibration(localizer(), [](double turn) {
-     *     drivetrain().holonomicVolts(0, 0, turn * 12.0);
-     * });
+     * // in a 40 x 40 in box (leave the box out for a wall or a corner)
+     * page->enableSensorCalibration(
+     *     localizer(), [](double turn) { drivetrain().holonomicVolts(0, 0, turn * 12.0); },
+     *     {.boxWidthIn = 40.0, .boxDepthIn = 40.0});
      * gui.addPage(std::move(page));
      * @endcode
      */

@@ -41,6 +41,14 @@ constexpr double kMaxStartScale = 3.0;
 constexpr double kCenterPriorIn = 200.0;
 constexpr double kHeadingPriorRad = 2.0;
 constexpr double kAlongPriorIn = 12.0;
+// the beam's shape (MountCalibrationResult::beamShape): somewhere from the face's square distance
+// (0) to the center ray's length (1), unless the readings say otherwise
+constexpr double kBeamShapePrior = 0.5;
+constexpr double kBeamShapePriorSigma = 0.5;
+// and never outside that: past either end it costs as a prior this tight. From one wall, with
+// furniture about, a shape well outside it explains some of what isn't a wall, and takes the fit
+// with it. A penalty rather than a clamp, so a shape that belongs right at an end converges there
+constexpr double kBeamShapeBoundSigma = 1e-3;
 
 // from walls on one or two sides, how tightly the fit holds the configured mounts' spacing, in
 // inches: close enough to exact, loose enough to keep the system well conditioned
@@ -66,6 +74,10 @@ constexpr double kStartClusterIn = 6.0;
 constexpr double kConvergedStepIn = 1e-5;
 constexpr double kHeadingArmIn = 70.0;
 
+// how far out a box's missing side puts its walls, in inches: past any sensor's reach, and past
+// anything flat around the room a beam down the corridor could line up with
+constexpr double kOpenSideIn = 5000.0;
+
 enum Wall : int { kLeft = 0, kRight = 1, kNear = 2, kFar = 3 };
 
 struct Box {
@@ -89,12 +101,14 @@ struct Reading {
     double sigmaIn;
 };
 
-// the parameters: the tracking center's field position and heading at the first reading, then each
-// sensor's offset along its beam and sideways from it (right of the beam positive)
+// the parameters: the tracking center's field position and heading at the first reading, the
+// beam's shape, then each sensor's offset along its beam and sideways from it (right of the beam
+// positive)
 constexpr std::size_t kX = 0;
 constexpr std::size_t kY = 1;
 constexpr std::size_t kHeading = 2;
-constexpr std::size_t kShared = 3;
+constexpr std::size_t kBeamShape = 3;
+constexpr std::size_t kShared = 4;
 constexpr std::size_t alongIndex(std::size_t sensor) { return kShared + 2 * sensor; }
 constexpr std::size_t lateralIndex(std::size_t sensor) { return kShared + 2 * sensor + 1; }
 
@@ -120,6 +134,9 @@ struct Problem {
 struct Prediction {
     bool usable = false;
     double expectedIn = 0.0;
+    // the center ray's length to the wall, which expectedIn is short of at a slant by the beam's
+    // shape
+    double rayIn = 0.0;
     int wall = kLeft;
     // |cos| of the angle between the beam and the wall's normal: 1 square on
     double cosIncidence = 0.0;
@@ -128,6 +145,7 @@ struct Prediction {
     double dX = 0.0;
     double dY = 0.0;
     double dHeading = 0.0;
+    double dBeamShape = 0.0;
     double dAlong = 0.0;
     double dLateral = 0.0;
 };
@@ -180,11 +198,27 @@ Prediction predict(const Reading& reading, const std::vector<double>& p, double 
     }
     out.usable = std::isfinite(out.expectedIn);
     out.cosIncidence = std::fabs(u);
-    // expected = (wall - face) / u, with the face moving along u by `along` and along n by
+    if (!out.usable) return out;
+    // the center ray = (wall - face) / u, with the face moving along u by `along` and along n by
     // `lateral`; turning moves u by n and n by -u
-    out.dAlong = -1.0;
-    out.dLateral = -n / u;
-    out.dHeading = -travelTurn / u + lateral - (along + out.expectedIn) * n / u;
+    out.rayIn = out.expectedIn;
+    const double rayHeading = -travelTurn / u + lateral - (along + out.rayIn) * n / u;
+    // At a slant the beam's cone reaches the wall nearer than its center does, so a reading comes
+    // out somewhere between the center ray (shape 1) and the face's square distance to the wall,
+    // the ray times |u| (shape 0): the ray times k. Square on they're the same. Left out, a sensor
+    // that reads short at a slant pulls every offset outward by about the distance times the
+    // spread of 1 / |u| - 1 over the readings, a few tenths of an inch, which the field's or a
+    // box's width then can't take up
+    const double shape = p[kBeamShape];
+    const double k = (1.0 - shape) * out.cosIncidence + shape;
+    out.expectedIn = out.rayIn * k;
+    out.dX *= k;
+    out.dY *= k;
+    out.dAlong = -k;
+    out.dLateral = -n / u * k;
+    // |u| turns by n, signed like u
+    out.dHeading = k * rayHeading + out.rayIn * (1.0 - shape) * (u > 0.0 ? n : -n);
+    out.dBeamShape = out.rayIn * (1.0 - out.cosIncidence);
     return out;
 }
 
@@ -222,12 +256,19 @@ double spacingSum(const Problem& problem, const std::vector<double>& p) {
     return sum;
 }
 
+// how far the beam's shape is outside 0 to 1, signed: 0 inside
+double beamShapeOutside(const std::vector<double>& p) {
+    return p[kBeamShape] - std::clamp(p[kBeamShape], 0.0, 1.0);
+}
+
 double priorCost(const Problem& problem, const std::vector<double>& p) {
     double total = 0.0;
     for (std::size_t k = 0; k < p.size(); ++k) {
         const double z = (p[k] - problem.priorMean[k]) / problem.priorSigma[k];
         total += 0.5 * z * z;
     }
+    const double outside = beamShapeOutside(p) / kBeamShapeBoundSigma;
+    total += 0.5 * outside * outside;
     if (!problem.spacing.empty()) {
         const double z = (spacingSum(problem, p) - problem.spacingTarget) / kSpacingSigmaIn;
         total += 0.5 * z * z;
@@ -305,15 +346,16 @@ void normalEquations(const Problem& problem, const std::vector<double>& p,
         const double w = weight(z / scale, cutoff) / (scale * scale);
         if (w == 0.0) continue;
         // d(error)/d(parameter): the prediction's slopes, negated, over the reading's noise
-        const std::size_t index[5] = {kX, kY, kHeading, alongIndex(reading.sensor),
-                                      lateralIndex(reading.sensor)};
-        const double slope[5] = {-prediction.dX / reading.sigmaIn, -prediction.dY / reading.sigmaIn,
-                                 -prediction.dHeading / reading.sigmaIn,
-                                 -prediction.dAlong / reading.sigmaIn,
-                                 -prediction.dLateral / reading.sigmaIn};
-        for (int a = 0; a < 5; ++a) {
+        constexpr int kTouched = 6;
+        const std::size_t index[kTouched] = {
+            kX, kY, kHeading, kBeamShape, alongIndex(reading.sensor), lateralIndex(reading.sensor)};
+        const double slope[kTouched] = {
+            -prediction.dX / reading.sigmaIn,       -prediction.dY / reading.sigmaIn,
+            -prediction.dHeading / reading.sigmaIn, -prediction.dBeamShape / reading.sigmaIn,
+            -prediction.dAlong / reading.sigmaIn,   -prediction.dLateral / reading.sigmaIn};
+        for (int a = 0; a < kTouched; ++a) {
             gradient[index[a]] += w * slope[a] * z;
-            for (int b = 0; b < 5; ++b) {
+            for (int b = 0; b < kTouched; ++b) {
                 hessian[index[a] * n + index[b]] += w * slope[a] * slope[b];
             }
         }
@@ -322,6 +364,12 @@ void normalEquations(const Problem& problem, const std::vector<double>& p,
         const double inverseVariance = 1.0 / (problem.priorSigma[k] * problem.priorSigma[k]);
         hessian[k * n + k] += inverseVariance;
         gradient[k] += (p[k] - problem.priorMean[k]) * inverseVariance;
+    }
+    const double outside = beamShapeOutside(p);
+    if (outside != 0.0) {
+        const double inverseVariance = 1.0 / (kBeamShapeBoundSigma * kBeamShapeBoundSigma);
+        hessian[kBeamShape * n + kBeamShape] += inverseVariance;
+        gradient[kBeamShape] += outside * inverseVariance;
     }
     if (!problem.spacing.empty()) {
         const double inverseVariance = 1.0 / (kSpacingSigmaIn * kSpacingSigmaIn);
@@ -411,6 +459,9 @@ std::vector<double> startAt(const Problem& problem, double headingRad) {
     std::vector<double> fromLeft;
     std::vector<double> fromFar;
     std::vector<double> fromNear;
+    const auto ignored = [&problem](int wall) {
+        return (problem.ignoredWalls & (1u << wall)) != 0;
+    };
     for (const Reading& reading : problem.readings) {
         const double along = p[alongIndex(reading.sensor)];
         const double lateral = p[lateralIndex(reading.sensor)];
@@ -420,10 +471,12 @@ std::vector<double> startAt(const Problem& problem, double headingRad) {
         const double uy = reading.cosBeam * cosHeading - reading.sinBeam * sinHeading;
         // where the center must be for this reading to reach the wall it points at
         if (std::fabs(ux) >= problem.cosMaxIncidence) {
+            if (ignored(ux > 0.0 ? kRight : kLeft)) continue;
             const double wall = ux > 0.0 ? problem.box.maxX : problem.box.minX;
             const double x = wall - dx - along * ux - lateral * uy - reading.distanceIn * ux;
             (ux > 0.0 ? fromRight : fromLeft).push_back(x);
         } else if (std::fabs(uy) >= problem.cosMaxIncidence) {
+            if (ignored(uy > 0.0 ? kFar : kNear)) continue;
             const double wall = uy > 0.0 ? problem.box.maxY : problem.box.minY;
             const double y = wall - dy - along * uy + lateral * ux - reading.distanceIn * uy;
             (uy > 0.0 ? fromFar : fromNear).push_back(y);
@@ -435,13 +488,20 @@ std::vector<double> startAt(const Problem& problem, double headingRad) {
 }
 
 // how well parameters explain every reading, slanted ones too, comparable between starts: Tukey's
-// cost at the beam model's own noise, a reading that misses the walls costing the most
+// cost at the beam model's own noise, a reading that misses the walls, or reaches one left out,
+// costing the most
 double score(const Problem& problem, const std::vector<double>& p) {
-    const std::vector<char> all(problem.readings.size(), 1);
-    const std::vector<double> errors = normalizedErrors(problem, p, all);
+    const double sinHeading = std::sin(p[kHeading]);
+    const double cosHeading = std::cos(p[kHeading]);
     double total = 0.0;
-    for (const double z : errors)
-        total += std::isfinite(z) ? rho(z, kTukeyC) : rho(kMissedU, kTukeyC);
+    for (const Reading& reading : problem.readings) {
+        const Prediction prediction = predict(reading, p, sinHeading, cosHeading, problem.box);
+        const bool explained =
+            prediction.usable && (problem.ignoredWalls & (1u << prediction.wall)) == 0;
+        total += explained
+                     ? rho((reading.distanceIn - prediction.expectedIn) / reading.sigmaIn, kTukeyC)
+                     : rho(kMissedU, kTukeyC);
+    }
     return total;
 }
 
@@ -582,7 +642,7 @@ Tally tally(Problem& problem, const std::vector<double>& p, std::size_t minWallR
         sums.error += errorIn;
         sums.slantError += prediction.slant * errorIn;
         sums.distance +=
-            (prediction.expectedIn + p[alongIndex(reading.sensor)]) * prediction.cosIncidence;
+            (prediction.rayIn + p[alongIndex(reading.sensor)]) * prediction.cosIncidence;
     }
     for (const std::array<std::size_t, 4>& walls : out.wallReadings) {
         const auto seen = [&](int wall) {
@@ -683,6 +743,14 @@ std::vector<double> spacingWeights(const std::vector<char>& inFit,
 
 } // namespace
 
+FieldMap calibrationWalls(const MountCalibrationConfig& config, const FieldMap& field) {
+    const auto half = [](double sizeIn) { return sizeIn > 0.0 ? sizeIn / 2.0 : kOpenSideIn; };
+    if (!(config.boxWidthIn > 0.0) && !(config.boxDepthIn > 0.0)) return field;
+    const double halfWidth = half(config.boxWidthIn);
+    const double halfDepth = half(config.boxDepthIn);
+    return FieldMap(-halfWidth, -halfDepth, halfWidth, halfDepth);
+}
+
 const char* mountFitStatusText(MountFitStatus status) {
     switch (status) {
         case MountFitStatus::calibrated: return "calibrated";
@@ -710,6 +778,14 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
     problem.box = Box{map.minXIn(), map.maxXIn(), map.minYIn(), map.maxYIn()};
     problem.beam = beam;
     problem.cosMaxIncidence = std::cos(config.maxIncidenceDeg * kDegToRad);
+    // Two parallel walls: the box's other two stand for nothing, just out of reach, and with them
+    // in, the fit slides along between the walls, which nothing else pins, until one of them lands
+    // on whatever flat thing is down the corridor
+    if (config.boxWidthIn > 0.0 && !(config.boxDepthIn > 0.0)) {
+        problem.ignoredWalls = (1u << kNear) | (1u << kFar);
+    } else if (config.boxDepthIn > 0.0 && !(config.boxWidthIn > 0.0)) {
+        problem.ignoredWalls = (1u << kLeft) | (1u << kRight);
+    }
 
     // the configured mounts, as offsets along and sideways from each beam
     const std::size_t parameterCount = kShared + 2 * sensorCount;
@@ -718,6 +794,8 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
     problem.priorSigma[kX] = kCenterPriorIn;
     problem.priorSigma[kY] = kCenterPriorIn;
     problem.priorSigma[kHeading] = kHeadingPriorRad;
+    problem.priorMean[kBeamShape] = kBeamShapePrior;
+    problem.priorSigma[kBeamShape] = kBeamShapePriorSigma;
     std::vector<double> sinFacing(sensorCount);
     std::vector<double> cosFacing(sensorCount);
     for (std::size_t s = 0; s < sensorCount; ++s) {
@@ -820,12 +898,14 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
         // A sensor saw both walls of a pair, so the field's width pins the spacing: let it go.
         // Unless that moves it further than a tape measure across the robot is ever off, when the
         // pair was really one wall and something across the room that happened to line up 140 in
-        // from it
+        // from it. A box's walls are there by design, so there it's only as far as any one
+        // sensor's believable
+        const bool inBox = config.boxWidthIn > 0.0 || config.boxDepthIn > 0.0;
+        const double maxSpacingChangeIn = inBox ? config.maxChangeIn : config.maxSpacingChangeIn;
         Problem released = problem;
         released.spacing.clear();
         std::vector<double> p = refine(released, best, kMaxScale);
-        if (std::fabs(spacingSum(problem, p) - problem.spacingTarget) <=
-            config.maxSpacingChangeIn) {
+        if (std::fabs(spacingSum(problem, p) - problem.spacingTarget) <= maxSpacingChangeIn) {
             problem = std::move(released);
             best = std::move(p);
             kept = tally(problem, best, config.minWallReadings);
@@ -930,6 +1010,7 @@ MountCalibrationResult fitSensorMounts(std::span<const MountSample> samples,
 
     result.start = odom::Pose{
         .xIn = best[kX], .yIn = best[kY], .headingDeg = wrapDegrees360(best[kHeading] / kDegToRad)};
+    result.beamShape = best[kBeamShape];
     if (!result.ok) {
         result.error = pinned || spacingKept ? "no sensor could be calibrated"
                        : sawWall             ? "no two opposite sensors saw a wall"

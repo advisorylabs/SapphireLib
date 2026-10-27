@@ -342,11 +342,14 @@ the delay that's left.
 **The fit** (`localization::fitSensorMounts()`) solves for everything at once against the walls in
 view: where the robot was and which way it faced when the spin started, and each sensor's offset
 **along its beam** and **sideways** from it. It uses only readings that hit a wall within 20° of
-square on (a slanted beam's cone reads short), and drops readings that match no wall as it goes.
+square on, and drops readings that match no wall as it goes. A slanted beam's cone reads short of
+its center ray, so it fits how short too (the **beam shape**, 0 to 1, in the log): taking slanted
+readings at face value would put every sensor a few tenths of an inch too far out wherever a width
+pins the spacing.
 
 | | Fitted? | Why |
 |---|---|---|
-| Along the beam | always | it decides what the sensor reads from a wall it faces. The readings pin each sensor's against the others; your spacing between opposite sensors (or a full field's width) pins the rest |
+| Along the beam | always | it decides what the sensor reads from a wall it faces. The readings pin each sensor's against the others; your spacing between opposite sensors (or a box's or a full field's width) pins the rest |
 | Sideways | only when pinned down | it shows only in slanted readings, and every sensor shifted sideways the same way looks like the robot facing a little differently. It stays near your measurement (within about an inch) unless the readings clearly say otherwise |
 | Facing | never | a sensor's facing and the robot's heading can't be told apart, and a degree of facing barely changes a square-on reading |
 
@@ -362,12 +365,48 @@ center) left to the robot.
 
 On a full field, from the halfway line, a sensor reads the left wall (`L`) and half a turn later
 the right wall (`R`) from the same spot: `L + R = 140.5 − 2 × along`, so there the field's width
-gives the spacing too. The fit uses it whenever a sensor sees both walls of a pair.
+gives the spacing too. The fit uses it whenever a sensor sees both walls of a pair. **A box does
+the same with no field**: spin inside one whose inside you've measured, or between two parallel
+walls a measured distance apart, and its width stands in for 140.5. Then nothing on the robot needs
+a tape measure, and any constant bias in a sensor's readings lands in its offset too, which no tape
+measure can see.
 
 ### Where to put the robot
 
+**Best: a box, or two walls facing each other.** Everything, the spacing included, comes from the
+readings.
+
 ```
-   a corner (best)                    one wall
+   a box                               two parallel walls (a corridor)
+
+   ┏━━━━━━━━━━━━━━━━━━━━━┓             ┃                       ┃
+   ┃                     ┃             ┃                       ┃
+   ┃         ●           ┃             ┃          ●            ┃
+   ┃     (3–6 in off     ┃             ┃   (off center,        ┃
+   ┃      center)        ┃             ┃    room to spin)      ┃
+   ┃                     ┃             ┃                       ┃
+   ┗━━━━━━━━━━━━━━━━━━━━━┛             ┃◀────── 36–48 in ─────▶┃
+         36–48 in each way
+```
+
+- **Size**: wider than the robot's diagonal with a few inches to spare, since it has to spin
+  inside, and big enough that the sensors mostly read 8 in or more (the V5 Distance Sensor is
+  reported to change how it measures, and widen its cone, closer than about 200 mm). **36 to 48 in
+  suits most robots.** A 20 in box doesn't work: an 18 in robot can't turn in it, and the readings
+  would all be in the sensor's close range. Rectangular is fine.
+- **Two parallel walls** work as well as a box: two field perimeter pieces on the tiles, facing each
+  other, their faces 36 to 48 in apart and parallel (measure the gap at both ends; they should agree
+  to a sixteenth). What's down the open ends doesn't matter.
+- **Measure it to the sixteenth**, inside face to inside face, and put it in `config.hpp`:
+  `kSensorCalibrationBoxWidthIn` and `kSensorCalibrationBoxDepthIn` (depth 0 for two walls). Every
+  sixteenth the width is off moves every sensor a thirty-second.
+- **A few inches off center.** Dead center, every wall is the same distance away, and the sideways
+  offsets can't show. Facing any way.
+
+**Without a box: a wall or a corner.** The spacing comes from your measurement (below).
+
+```
+   a corner                           one wall
 
    ━━━━━━━━━━━━━━━━━━━━━━━━┓          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             ▲               ┃                         ▲
@@ -412,10 +451,11 @@ gives the spacing too. The fit uses it whenever a sensor sees both walls of a pa
   | Left | `kLeftSensorForwardIn` | `kLeftSensorRightIn` | 270 |
 
   How careful to be:
-  - **The spacing, carefully.** Measure front face to back face and right face to left face across
-    the robot. `kFrontSensorForwardIn − kBackSensorForwardIn` must be the first, and
-    `kRightSensorRightIn − kLeftSensorRightIn` the second. Each of them an eighth of an inch long puts
-    every sensor a sixteenth too far out.
+  - **The spacing, carefully, unless you use a box.** Measure front face to back face and right face
+    to left face across the robot. `kFrontSensorForwardIn − kBackSensorForwardIn` must be the first,
+    and `kRightSensorRightIn − kLeftSensorRightIn` the second. Each of them an eighth of an inch long
+    puts every sensor a sixteenth too far out. In a box, within a few inches is enough: the box
+    finds it.
   - **Where the tracking center sits between them, roughly.** Within 2 or 3 in is fine: the fit finds
     it. (The along-beam numbers on a full field can be off by up to 6.)
   - **Sideways** is usually kept, so measure it as well as you can. The facing (set in `devices.cpp`)
@@ -425,13 +465,15 @@ gives the spacing too. The fit uses it whenever a sensor sees both walls of a pa
   as known, so a wrong width goes straight into the mounts: roughly half the error into each sensor
   of that pair. Off by more than a quarter inch, pass the real size in `localizer()` in
   `devices.cpp`: `FieldMap::centered(141.0)`. From a wall or a corner the size doesn't matter.
+- [ ] **In a box: its size** in `kSensorCalibrationBoxWidthIn` and `kSensorCalibrationBoxDepthIn`.
+  Back to 0 and 0 for a wall or a corner. The Odom page's status line says which it expects.
 - [ ] Rebuild.
 
 ### Run it
 
-1. [ ] Robot's tracking center 1 to 3 ft from a wall, or from both walls of a corner
-   ([Where to put the robot](#where-to-put-the-robot)), any heading. Nothing between it and the
-   walls.
+1. [ ] Robot in the box a few inches off center, or its tracking center 1 to 3 ft from a wall or
+   from both walls of a corner ([Where to put the robot](#where-to-put-the-robot)), any heading.
+   Nothing between it and the walls.
 2. [ ] Home page: **Start log** (the results go in the log too), and `pros terminal` if you have a
    cable.
 3. [ ] Odom page: **Calibrate Sensors**. Under 20 s.
@@ -442,15 +484,21 @@ The status line: "Sensors, fwd,right in (applied):" then each sensor's numbers, 
 `Front --` for one left as it was. The terminal has more: a summary, then one line per sensor.
 
 ```
-sensor mounts: 1193 readings, 476 used, from walls on one or two sides: spacing kept from the mounts
+sensor mounts: 1193 readings, 476 used, beam shape 0.85, from walls on one or two sides: spacing kept from the mounts
 sensor 0 (front, port 8): calibrated, {.forwardIn = 7.12, .rightIn = 0.00, .facingDeg = 0}, +0.12 in along the beam (+-0.04), sideways kept
 ```
 
 "spacing kept from the mounts" says your spacing between opposite sensors stood in for a field's
-width (it's missing when a full field's width was used). `+0.12 in along the beam` is how far the face moved from what
-you measured (positive is farther out), and `+-0.04` its standard error. With the spacing kept, the
-four changes average to 0: the fit moved the tracking center between the sensors, not their span.
-The log has the same as `mcl,mount,...` events.
+width (it's missing when a box's or a full field's width was used). `+0.12 in along the beam` is
+how far the face moved from what you measured (positive is farther out), and `+-0.04` its standard
+error. With the spacing kept, the four changes average to 0: the fit moved the tracking center
+between the sensors, not their span. The beam shape is how the sensors read a wall at a slant: 1
+the beam's center ray, 0 the face's square distance to the wall. The log has the same as
+`mcl,mount,...` events.
+
+In a box the summary should never say "spacing kept from the mounts" (the screen says "Box didn't
+set the spacing: check its size"). If it does, the box's walls didn't line up with the size in
+`config.hpp`: a typo, the robot outside it, or the walls not parallel.
 
 | It says | Means | Do |
 |---|---|---|
@@ -461,7 +509,7 @@ The log has the same as `mcl,mount,...` events.
 | no two opposite walls seen | on a full field, other sensors saw a pair of walls, but this one only walls they didn't | start nearer the halfway line, or use a corner |
 | too uncertain | the along-beam offset's standard error is over 0.25 in | something moving in view, a wobbly mount, walls too far. Run it again, closer |
 | moved too far, view blocked? | over 6 in from your measurement | something in front of a wall fooled it, or your measurement is badly off |
-| (whole run) no sensor saw a wall | nothing matched a wall 30 times | start within 3 ft of a wall |
+| (whole run) no sensor saw a wall | nothing matched a wall 30 times | start within 3 ft of a wall; in a box, check its size in `config.hpp` |
 | the spin didn't finish: blocked? | (whole run) a turn timed out | clear the robot, check the drive |
 
 ### Hardcode it

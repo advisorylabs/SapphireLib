@@ -886,6 +886,23 @@ changes. The guide is [`docs/LOCALIZATION.md`](LOCALIZATION.md).
       rooms to none within 3 ft. From a wall or corner within 3 ft, along-beam lands within about
       0.05 in of where the spacing puts it, closer than from a full field, since every reading is
       short.
+- [x] Mount calibration in a box, so the spacing is measured rather than taped: a box of known
+      inside size, or two parallel walls a known distance apart (`MountCalibrationConfig::
+      boxWidthIn`/`boxDepthIn`, `calibrationWalls()`, 96671H's `kSensorCalibrationBox*In`), spun in
+      a few inches off center, pins the spacing as a full field's halfway line does. Simulating it
+      with a beam cone showed the fit's center-ray model was the real limit once a width pins the
+      spacing: a sensor reading short at a slant put every offset 0.2–0.45 in too far out (worse
+      the bigger the box), hidden from one wall only because the held spacing soaked it up. So the
+      fit now has a beam shape, 0 (the face's square distance) to 1 (the center ray), every sensor
+      alike, kept in range by a stiff penalty (a clamp stalled the fit at the bound; left free, one
+      wall's furniture drove it to −3 and three classrooms in 40 refused). Two parallel walls leave
+      the box's other sides out of the fit, or it slides along the corridor to set one on the
+      furniture down it. In 34–56 in boxes and corridors with a cone, every sensor within 0.11 in;
+      about 0.03 in RMS in a 40 in box. A 20 in box can't work: the robot can't spin in it, and
+      sitting still, a degree of heading reads as 0.2 in of spacing when front and back sensors sit
+      on opposite sides of the centerline. Open: a sensor scale error (reading off by a share of
+      the distance) still passes as an offset, and facing isn't fitted (it needs a heading
+      reference, e.g. the chassis squared against a wall at the start).
 
 **Deliverable:** Odometry that stays honest all match. The math is unit-tested and the whole loop runs
 in the simulator; **on-robot validation is still outstanding**: the four sensors' ports and mounts

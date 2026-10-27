@@ -124,7 +124,8 @@ makes the localizer expect a wall that isn't, which is worse. The simulator's Ev
 The Odom page's **Calibrate Sensors** button finds where each sensor really sits, the way
 **Calibrate Offsets** finds the tracking wheels. Calibrate the wheel offsets first: this one trusts
 odometry's record of the spin. It needs **one wall, or two meeting at a right angle** (a corner):
-a couple of field perimeter pieces on the tiles will do, and so will a flat wall of the room.
+a couple of field perimeter pieces on the tiles will do, and so will a flat wall of the room. Two
+pieces set up **facing each other**, or a box, do better: see [In a box](#in-a-box) below.
 
 1. **Measure the spacing between opposite sensors**, face to face, across the robot: front to back
    and right to left. From a wall or a corner this is the one length the robot can't measure
@@ -147,14 +148,43 @@ a couple of field perimeter pieces on the tiles will do, and so will a flat wall
 of it, anywhere along it) too, and there the field's width stands in for step 1, so the spacing is
 fitted as well.
 
-**How it works.** As the robot turns, each sensor's face circles the tracking center, and what it
+#### In a box
+
+**The most accurate, and nothing to measure on the robot.** Spin inside a box whose
+inside you've measured, or between two parallel walls a measured distance apart (two field
+perimeter pieces facing each other), and its width stands in for step 1 the way a field's does.
+Give its size in `MountCalibrationConfig::boxWidthIn` and `boxDepthIn` (`boxDepthIn = 0` for two
+walls; 96671H's: `kSensorCalibrationBox*In` in `config.hpp`), measured to the sixteenth: every
+sixteenth it's off moves every sensor a thirty-second. The robot has to spin inside it a few inches
+off center, so it must be wider than the robot's diagonal with room to spare, and the sensors should
+mostly read 8 in or more: the V5 Distance Sensor is reported to switch how it measures, and widen its
+cone, closer than about 200 mm (from a VEX Forum thread, not VEX's documentation). 36 to 48 in each
+way suits most robots. A 20 in box doesn't work: an 18 in robot can't turn in it, and a robot that
+only sits in a box sees its sideways offsets and its heading mixed into every pair of readings (with
+the front sensor 5½ in right of the centerline and the back one 5½ in left, as on 96671H's, each
+degree the robot sits out of square reads as 0.2 in of front-to-back spacing).
+
+In simulated spins in 34 to 56 in boxes and corridors, with the simulator's sensor noise, readings
+off nothing, and a cone that reads short at a slant, every sensor came out within 0.11 in of where
+it really sat, and within about 0.03 in RMS in a 40 in box. Sensors set far to one side of their
+face of the robot, like 96671H's front and back ones (5½ in off the centerline), did about half as
+well, around 0.06 in RMS and 0.2 in at worst: their sideways offsets, mostly kept as measured, move
+what they read more.
+
+#### How the fit works
+
+As the robot turns, each sensor's face circles the tracking center, and what it
 reads from a wall depends on where the robot is, which way it faces, and where the sensor sits. The
 fit (`localization::fitSensorMounts()`) solves for all of them at once: the robot's position and
 heading when the spin started, and each sensor's offset along its beam and sideways from it. It
 searches the starting heading on a grid, so the robot can face any way, then refines with
-Levenberg-Marquardt. It uses only readings that hit a wall within 20° of square on, because a
-slanted beam's cone can read short. Readings off anything that isn't a wall drop out as the fit
-goes (Tukey's biweight).
+Levenberg-Marquardt. It uses only readings that hit a wall within 20° of square on, and even those
+read short of the beam's center ray, because the cone reaches the wall nearer than its center
+does. How short depends on the sensor, so the fit finds that too: a **beam shape** from 1 (the
+center ray) to 0 (the face's square distance to the wall), every sensor alike, from how readings
+curve as a beam sweeps past square on (logged as `beam shape`). Left out, a sensor that reads the
+nearest thing in its cone made every offset come out 0.2 to 0.4 in too far out in simulated boxes
+and corridors. Readings off anything that isn't a wall drop out as the fit goes (Tukey's biweight).
 
 **The one length it can't measure.** From walls on one or two sides, a robot an inch nearer them
 with every sensor an inch further out reads exactly the same. Everything else, the readings pin,
@@ -163,21 +193,28 @@ offset and shortens the opposite one's, and the two read the same wall half a tu
 left is how far apart opposite sensors are, and that comes from the configured mounts. With a
 sensor on each side, the fit holds their average along-beam offset where your mounts put it, which
 is the same as holding front-to-back plus right-to-left; their difference it finds. On a full field
-from the halfway line, a sensor sees both walls of an opposite pair, and the field's known width
-separates the two instead. The log says which it used ("spacing kept from the mounts").
+from the halfway line, or in a box, a sensor sees both walls of an opposite pair, and their known
+distance apart separates the two instead. The log says which it used ("spacing kept from the
+mounts"). Between two parallel walls, the box's other two sides are left out of the fit
+altogether, so it can't slide along the corridor to set one on whatever's down it.
 
 **What it finds, and what it leaves.**
 
 - **Along the beam: always fitted.** This is the offset that decides what a sensor reads from a wall
   it faces. In simulated spins with the simulator's sensor noise it lands within about 0.05 in of
-  where your spacing puts it from a wall or corner (closer walls read quieter), and within about
-  0.1 in from a full field; its reported standard error matches its real error. Each sensor needs
+  where your spacing puts it from a wall or corner (closer walls read quieter), within about 0.03 in
+  of the truth in a 40 in box, and within about 0.1 in from a full field; its reported standard
+  error matches its real error. A box can't do better than its tape measure, though, and the fit
+  can't see a sensor whose readings are off by a share of the distance (a scale error) rather than
+  a fixed amount. Each sensor needs
   30 readings matching a wall, a standard error under 0.25 in, and a change under 6 in, or it's
   left as it was.
 - **Sideways: only when it's pinned down.** A sideways offset shows only in slanted readings, and
   every sensor shifted sideways the same way looks almost exactly like the robot facing a little
   differently. The two separate only when the walls are at quite different distances, as in a
-  corner or near a wall with quiet sensors. Otherwise the configured offset is kept.
+  corner, a box with the robot off center, or near a wall with quiet sensors. Otherwise the
+  configured offset is kept, so measure it: where along the robot's side a sensor sits is easy to
+  get to an eighth of an inch.
 - **Facing: never.** A sensor's facing and the robot's heading can't be told apart, and a degree of
   facing error barely changes a square-on reading.
 
@@ -343,7 +380,7 @@ but real sensors, real walls and real wheel slip are what count. Before trusting
 | `Rng`: seeded xoshiro128**, and `fastGaussian()` (a ziggurat) | `util/random.hpp` | `tests/util/random_test.cpp` |
 | `LookupTable`: a function sampled and interpolated | `util/lookup_table.hpp` | `tests/util/lookup_table_test.cpp` |
 | `wallFix()`: x or y from one reading against the perimeter, for the distance resets | `localization/wall_reset.hpp` | `tests/localization/wall_reset_test.cpp`; `tools/sim/test/auton.test.js` resets the simulated robot |
-| `fitSensorMounts()`: each sensor's mount, from readings taken while spinning | `localization/mount_calibration.hpp` | `tests/localization/mount_calibration_test.cpp`: simulated spins with known mounts, from exact readings to noisy ones with outliers, a hidden wall, the halfway line; one wall and corners, in empty and furnished rooms, a cabinet askew, something lined up across the room, and two adjacent sensors it must refuse |
+| `fitSensorMounts()`: each sensor's mount, from readings taken while spinning | `localization/mount_calibration.hpp` | `tests/localization/mount_calibration_test.cpp`: simulated spins with known mounts, from exact readings to noisy ones with outliers, a hidden wall, the halfway line; one wall and corners, in empty and furnished rooms, a cabinet askew, something lined up across the room, and two adjacent sensors it must refuse; boxes and corridors of random sizes, mounts measured 3.5 in off, and beams that read their center ray, a calibrated cone, or the nearest thing in their cone |
 | `MonteCarloLocalizer`: sensors, gating, the correction, the mount calibration's spin | `localization/monte_carlo_localizer.hpp` | on the robot; its logic runs in the simulator |
 | Odometry's correction: `snapshot()`, `setPositionCorrection()`, the ease-in | `odom/odometry.hpp`, `odom/odometry_math.hpp` | `tests/odom/odometry_math_test.cpp` (`correctionStep()`) |
 
