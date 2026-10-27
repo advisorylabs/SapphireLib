@@ -35,8 +35,8 @@ struct MountSample {
 /**
  * @brief Settings for calibrating the distance sensors' mounts
  *
- * The first three are the spin MonteCarloLocalizer::calibrateSensorMounts() drives, the rest are
- * fitSensorMounts()'s
+ * The first three are the spin MonteCarloLocalizer::calibrateSensorMounts() drives, the box is
+ * where it fits against (calibrationWalls()), the rest are fitSensorMounts()'s
  */
 struct MountCalibrationConfig {
     /** how many turns to spin each way. Spinning both ways cancels most of the sensors' delay */
@@ -50,6 +50,25 @@ struct MountCalibrationConfig {
 
     /** the largest turn command the spin may use, 0 to 1 */
     double maxSpinPower = 0.5;
+
+    /**
+     * a box to calibrate inside instead of against the field's walls: its inside, wall to wall one
+     * way, in inches. Measure it to the sixteenth: its width is what the sensors' spacing is
+     * measured against, so every 1/16 in it's off moves every sensor 1/32 in. 0 for no box
+     * (boxDepthIn 0 too): the field's walls, or one wall or a corner of them
+     *
+     * The robot has to spin inside it, a few inches off center, so it needs to be wider than the
+     * robot's diagonal with room to spare, and the sensors read best at least 8 in from a wall
+     * (the V5 Distance Sensor works differently closer). 36 to 48 in suits most robots
+     */
+    double boxWidthIn = 0.0;
+
+    /**
+     * the box's inside the other way, wall to wall, in inches. 0 for no walls that way: two
+     * parallel walls boxWidthIn apart, a corridor, which pins the spacing just as well when the
+     * robot spins between them. Two field perimeter pieces set up facing each other will do
+     */
+    double boxDepthIn = 0.0;
 
     /**
      * only fit readings that hit a wall within this many degrees of square on. The sensor's beam
@@ -84,10 +103,24 @@ struct MountCalibrationConfig {
      * the most the field's width may move the configured mounts' spacing, in inches: how far every
      * sensor moves out on average (see fitSensorMounts()). More means the pair of walls a sensor
      * saw was really one wall and something across the room that happened to line up 140 in from
-     * it, so the spacing is held as from one wall
+     * it, so the spacing is held as from one wall. In a box (boxWidthIn) its walls are there by
+     * design, so maxChangeIn is the limit there instead
      */
     double maxSpacingChangeIn = 3.0;
 };
+
+/**
+ * @brief Get the walls a mount calibration fits against: the box the config describes, or the
+ * field's
+ *
+ * A box is centered on the origin, its width along x. With one side 0, the walls that way are
+ * put far out of any sensor's reach, leaving two parallel walls
+ *
+ * @param config boxWidthIn and boxDepthIn
+ * @param field the field's walls, for no box
+ * @return FieldMap the box, or field
+ */
+FieldMap calibrationWalls(const MountCalibrationConfig& config, const FieldMap& field);
 
 /**
  * @brief Whether one sensor's mount was calibrated, and if not, why
@@ -197,6 +230,14 @@ struct MountCalibrationResult {
      */
     odom::Pose start;
 
+    /**
+     * how the sensors read a wall at a slant: 1 the center ray's length, 0 the face's square
+     * distance to the wall, as when the near edge of the beam's cone decides it; square on they
+     * read the same. Fitted from how readings curve as a beam sweeps past square on, every sensor
+     * alike, and never outside 0 to 1. Near 0.5 when the readings don't say
+     */
+    double beamShape = 0.5;
+
     /** how many readings there were */
     std::size_t readings = 0;
 
@@ -229,19 +270,26 @@ struct MountCalibrationResult {
  *   across the robot, face to face; the tracking center can be a few inches off. It needs sensors
  *   facing opposite ways (or three ways) among those that saw a wall, or every sensor is left as
  *   it was (MountFitStatus::noOppositeSensor). result.spacingFromMounts says this is what it did
- * - Two opposite walls, when a sensor sees both walls of a pair during the spin: the field's known
- *   width, and the spacing is fitted too. From anywhere on the line halfway between them every
- *   sensor does, since the V5 Distance Sensor reaches 78 in and the walls are 70 in from the
- *   middle. A sensor that only ever saw walls on unpinned sides is then left as it was
- *   (MountFitStatus::noOppositeWalls)
+ * - Two opposite walls, when a sensor sees both walls of a pair during the spin: their known
+ *   distance apart, and the spacing is fitted too. On a field, from anywhere on the line halfway
+ *   between them every sensor does, since the V5 Distance Sensor reaches 78 in and the walls are
+ *   70 in from the middle. In a box (calibrationWalls()) or between two parallel walls, from
+ *   anywhere the robot can spin. A sensor that only ever saw walls on unpinned sides is then left
+ *   as it was (MountFitStatus::noOppositeWalls)
  *
  * The fit holds the spacing until a sensor turns out to see a pair, and lets it go only if the
- * width moves it no more than maxSpacingChangeIn: further, the "pair" was one wall and something
- * lined up across the room. From one wall, the walls square to it in the fit are free to sit
- * anywhere, and one can come to rest on something flat across the room; one that's more than a
- * few degrees out of square with the rest is left out. Within about 3 ft of the walls, the walls
- * it can't see are out of the sensors' reach, so the rest of the room only makes readings that
- * match nothing, and those are thrown out
+ * width moves it no more than maxSpacingChangeIn (maxChangeIn in a box): further, the "pair" was
+ * one wall and something lined up across the room. From one wall, the walls square to it in the
+ * fit are free to sit anywhere, and one can come to rest on something flat across the room; one
+ * that's more than a few degrees out of square with the rest is left out. Within about 3 ft of the
+ * walls, the walls it can't see are out of the sensors' reach, so the rest of the room only makes
+ * readings that match nothing, and those are thrown out
+ *
+ * A reading at a slant comes out short of the beam's center ray, by how much depending on the
+ * sensor: its cone reaches the wall nearer than its center does. The fit finds that too
+ * (result.beamShape), from how readings curve as a beam sweeps past square on. Taking every reading
+ * as the center ray instead would read the shortfall as every sensor sitting further out, a few
+ * tenths of an inch when a width pins the spacing
  *
  * Facing isn't fitted: a sensor's facing and the robot's heading can't be told apart, and a degree
  * or two of facing changes a square-on reading by a fraction of a percent
@@ -251,8 +299,8 @@ struct MountCalibrationResult {
  *
  * @param samples the readings, any order
  * @param mounts each sensor's configured mount, in the order samples' sensor indices count
- * @param map the field. Only its four perimeter walls are used, and from one wall or a corner only
- * that they're straight and square to each other
+ * @param map the field, or the box (calibrationWalls()). Only its four perimeter walls are used,
+ * and from one wall or a corner only that they're straight and square to each other
  * @param beam the sensor model, for each reading's noise
  * @param config which readings to use, and what counts as calibrated
  * @return MountCalibrationResult each sensor's fitted mount

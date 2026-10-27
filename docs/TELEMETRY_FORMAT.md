@@ -257,7 +257,9 @@ E,<t_us>,tune,wheel,<Tracking|Drive>,diameter_in=<in>
 - `auton`: `start,<routine name>` / `end,<routine name>` around each autonomous routine (a routine
   the competition switch cuts short has no `end`).
 - `mcl`: a distance sensor mount calibration (`MonteCarloLocalizer::calibrateSensorMounts()`, the
-  Odom page's Calibrate Sensors). It logs `mount_calibration,start` when the spin starts, then one
+  Odom page's Calibrate Sensors). It logs `mount_calibration,start` when the spin starts
+  (`mount_calibration,start,box=<width>x<depth>` in inches when it's inside a box, depth 0 for two
+  parallel walls), then one
   `mount,<index>,<calibrated|kept>,forward=<in>,right=<in>,facing=<deg>,stderr=<in>` per sensor
   with the mount the localizer uses from then on, or `mount_calibration,failed,<why>` if the spin
   didn't finish. A file's `#meta mcl.sensorN` lines record the mounts the program started with, so

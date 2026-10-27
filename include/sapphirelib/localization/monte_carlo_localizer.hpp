@@ -339,9 +339,12 @@ public:
      * mounts: the spacing between opposite sensors' faces, which a robot that only sees walls on
      * one or two sides can't tell from its distance to them (fitSensorMounts() says why). Measure
      * that across the robot; where the tracking center sits between the sensors it finds itself.
-     * A corner beats one wall. On a full field, the line halfway between two opposite walls
-     * (within about a foot, anywhere along it) lets the field's width stand in for the spacing
-     * instead. Keep the sensors' views of the walls clear: readings off anything else are thrown
+     * A corner beats one wall. Better still, a box whose inside you've measured
+     * (MountCalibrationConfig::boxWidthIn and boxDepthIn), or two parallel walls a measured
+     * distance apart: spun inside, a few inches off center, its width stands in for the spacing,
+     * so nothing on the robot needs measuring. On a full field, the line halfway between two
+     * opposite walls (within about a foot, anywhere along it) does the same with the field's
+     * width. Keep the sensors' views of the walls clear: readings off anything else are thrown
      * out, but a sensor that only ever sees something flat in front of a wall can't be told from
      * one seeing the wall. Calibrate the tracking wheel offsets first: odometry's record of the
      * spin is what the fit trusts for how the robot turned and drifted
@@ -351,7 +354,7 @@ public:
      *
      * @param setSpin spins the chassis in place, given a turn command from -1 to 1. Called with 0
      * to stop
-     * @param config the spin, and what counts as calibrated
+     * @param config the spin, the box it's in if any, and what counts as calibrated
      * @return MountCalibrationResult what each sensor's mount came to. error says why not when
      * none was calibrated, the spin didn't finish (blocked: it gives up after three times as long
      * as it should take), or a calibration was already running

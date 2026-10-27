@@ -134,6 +134,7 @@ constexpr double kHorizontalWheelOffsetIn = 0.0;
 // the robot, face to face: front to back (kFrontSensorForwardIn -
 // kBackSensorForwardIn) plus right to left (kRightSensorRightIn -
 // kLeftSensorRightIn). It finds everything else, the tracking center too.
+// In a box (kSensorCalibrationBox*In below) it finds that length as well.
 constexpr double kFrontSensorForwardIn = 0.25;
 constexpr double kFrontSensorRightIn = 5.75;
 constexpr double kRightSensorForwardIn = 0.25;
@@ -142,5 +143,18 @@ constexpr double kBackSensorForwardIn = -1.55;
 constexpr double kBackSensorRightIn = -5.5;
 constexpr double kLeftSensorForwardIn = 1.0;
 constexpr double kLeftSensorRightIn = -4.42;
+
+// Where "Calibrate Sensors" spins: 0 and 0 for a wall or a corner (keeping
+// the one length above), or the inside of a box, wall to wall each way, in
+// inches, which it measures that length against instead, so nothing on the
+// robot needs a tape measure (see MountCalibrationConfig::boxWidthIn). The
+// robot has to spin inside it a few inches off center, with the sensors
+// mostly 8in or more from the walls: 36 to 48in suits most robots. A 20in
+// box is too small (an 18in robot can't turn in it). Measure the box to the
+// sixteenth: every 1/16in off moves every sensor 1/32in. Depth 0 with a
+// width is two parallel walls that far apart, e.g. two field perimeter
+// pieces facing each other.
+constexpr double kSensorCalibrationBoxWidthIn = 0.0;
+constexpr double kSensorCalibrationBoxDepthIn = 0.0;
 
 } // namespace robot

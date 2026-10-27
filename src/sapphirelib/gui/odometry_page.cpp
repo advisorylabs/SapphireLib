@@ -1,5 +1,6 @@
 #include "sapphirelib/gui/odometry_page.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -47,13 +48,33 @@ std::string sensorName(const localization::DistanceSensorMount& mount, std::size
     return "S" + std::to_string(index + 1);
 }
 
+bool inBox(const localization::MountCalibrationConfig& config) {
+    return config.boxWidthIn > 0.0 || config.boxDepthIn > 0.0;
+}
+
+// where to put the robot for a sensor calibration, as the status line says it
+std::string sensorPlacementText(const localization::MountCalibrationConfig& config) {
+    if (!inBox(config)) return "within 3 ft of a wall or corner, walls in view";
+    char text[64];
+    if (config.boxWidthIn > 0.0 && config.boxDepthIn > 0.0) {
+        std::snprintf(text, sizeof(text), "in the %.0fx%.0fin box, off center", config.boxWidthIn,
+                      config.boxDepthIn);
+    } else {
+        std::snprintf(text, sizeof(text), "between the walls %.0fin apart, off center",
+                      std::max(config.boxWidthIn, config.boxDepthIn));
+    }
+    return text;
+}
+
 // what the status line says after a sensor calibration: each sensor's forward and right offsets,
 // two to a row, "--" for one left as it was
-std::string sensorResultText(const localization::MountCalibrationResult& result) {
+std::string sensorResultText(const localization::MountCalibrationResult& result,
+                             const localization::MountCalibrationConfig& config) {
     if (!result.ok) {
         std::string text = std::string("Sensors not calibrated: ") + result.error;
         if (std::strcmp(result.error, "no sensor saw a wall") == 0) {
-            text += ". Start within 3 ft of a wall";
+            text += inBox(config) ? ". Is the box the size the code says?"
+                                  : ". Start within 3 ft of a wall";
         } else if (std::strcmp(result.error, "no two opposite sensors saw a wall") == 0) {
             text += ". Check the ones facing the other way";
         }
@@ -71,6 +92,11 @@ std::string sensorResultText(const localization::MountCalibrationResult& result)
         }
         text += s % 2 == 0 ? "\n" : "  ";
         text += entry;
+    }
+    // in a box the spacing should have come from its width: if it didn't, the box isn't what the
+    // code says, or the robot couldn't see across it
+    if (inBox(config) && result.spacingFromMounts) {
+        text += "\nBox didn't set the spacing: check its size";
     }
     text += "\nCopy into your code to keep";
     return text;
@@ -172,11 +198,10 @@ void OdometryPage::build(lv_obj_t* container) {
     lv_obj_set_width(calibStatusLabel_, kCalibrateColumnWidthPx);
     lv_label_set_long_mode(calibStatusLabel_, LV_LABEL_LONG_WRAP);
     if (sensorsToo) {
-        lv_label_set_text(calibStatusLabel_,
-                          calibSetSpin_
-                              ? "Offsets: room to spin free. Sensors: within 3 ft of a "
-                                "wall or corner, walls in view"
-                              : "Sensors: within 3 ft of a wall or corner, walls in view");
+        const std::string text =
+            std::string(calibSetSpin_ ? "Offsets: room to spin free. Sensors: " : "Sensors: ") +
+            sensorPlacementText(sensorConfig_);
+        lv_label_set_text(calibStatusLabel_, text.c_str());
     } else {
         lv_label_set_text(calibStatusLabel_,
                           calibSetSpin_ ? "Spin the bot free, then tap Calibrate" : "");
@@ -229,7 +254,7 @@ void OdometryPage::update() {
         setLabelText(calibStatusLabel_, "Calibrating sensors... keep the walls in view");
     } else if (sensorResultReady_.exchange(false)) {
         // once: the label keeps it until the next calibration
-        setLabelText(calibStatusLabel_, sensorResultText(sensorResult_).c_str());
+        setLabelText(calibStatusLabel_, sensorResultText(sensorResult_, sensorConfig_).c_str());
     } else if (calibResultsReady_.load()) {
         char calibBuf[64];
         if (calibVertical_ && calibHorizontal_) {
