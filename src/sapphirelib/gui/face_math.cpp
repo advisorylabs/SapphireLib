@@ -49,18 +49,22 @@ constexpr double kSquintEaseMs = 120.0;
 constexpr double kSurpriseEyeScale = 1.22;
 constexpr double kSurpriseBrowLiftPx = 26.0;
 constexpr double kSurpriseBrowTiltDeg = -8.0;
+// and a round mouth, this wide at full surprise, its center this far below the eyes' centers
+constexpr double kSurpriseMouthPx = 40.0;
+constexpr double kMouthDropPx = 92.0;
 constexpr std::uint32_t kSurpriseHoldMs = 1200;
 constexpr double kSurpriseRiseMs = 60.0;
 constexpr double kSurpriseFallMs = 300.0;
 
 // wink: the eye on the screen's right shuts, holds, and opens again, slower than a blink so it
-// reads as meant, and its brow dips toward it
+// reads as meant, and its brow dips toward it with its inner end tipped down
 constexpr int kWinkEye = 1;
 constexpr std::uint32_t kWinkCloseMs = 80;
 constexpr std::uint32_t kWinkShutMs = 280;
 constexpr std::uint32_t kWinkOpenMs = 160;
 constexpr std::uint32_t kWinkMs = kWinkCloseMs + kWinkShutMs + kWinkOpenMs;
-constexpr double kWinkBrowDropPx = 22.0;
+constexpr double kWinkBrowDropPx = 28.0;
+constexpr double kWinkBrowTiltDeg = 12.0;
 
 // frames further apart than this ease as if they weren't, so a stalled frame never jumps a mood
 // all the way
@@ -191,12 +195,8 @@ FaceShape FaceAnimator::shape() const {
 
     const double browY = eyeY - kBrowRaisePx * scale + kSquintBrowDropPx * scale * squint -
                          kSurpriseBrowLiftPx * scale * surprise;
-    const double tiltRad =
-        (kSquintBrowTiltDeg * squint + kSurpriseBrowTiltDeg * surprise) * (kPi / 180.0);
+    const double tiltDeg = kSquintBrowTiltDeg * squint + kSurpriseBrowTiltDeg * surprise;
     const double halfLengthPx = kBrowLengthPx * scale / 2.0;
-    const double halfDx = halfLengthPx * std::cos(tiltRad);
-    // positive tilt puts the inner end lower, and screen y grows downward
-    const double halfDy = halfLengthPx * std::sin(tiltRad);
 
     FaceShape face;
     for (int side = 0; side < 2; ++side) {
@@ -208,6 +208,10 @@ FaceShape FaceAnimator::shape() const {
         const double eyeHeightPx =
             openHeightPx * (1.0 - (1.0 - kShutHeight) * std::max(blink_, wink));
         const double sideBrowY = browY + kWinkBrowDropPx * scale * wink;
+        const double tiltRad = (tiltDeg + kWinkBrowTiltDeg * wink) * (kPi / 180.0);
+        const double halfDx = halfLengthPx * std::cos(tiltRad);
+        // positive tilt puts the inner end lower, and screen y grows downward
+        const double halfDy = halfLengthPx * std::sin(tiltRad);
         face.eyes[side] = EyeShape{.centerX = px(eyeX),
                                    .centerY = px(eyeY),
                                    .widthPx = px(eyeSizePx),
@@ -219,6 +223,9 @@ FaceShape FaceAnimator::shape() const {
                       .innerY = px(sideBrowY + halfDy),
                       .thicknessPx = std::max<std::int32_t>(1, px(kBrowThicknessPx * scale))};
     }
+    face.mouth = MouthShape{.centerX = px(middleX),
+                            .centerY = px(eyeY + kMouthDropPx * scale),
+                            .sizePx = px(kSurpriseMouthPx * scale * surprise)};
     return face;
 }
 

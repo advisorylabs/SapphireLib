@@ -61,6 +61,13 @@ void FaceScreen::start() {
         lv_obj_set_style_line_rounded(brows_[side], false, 0);
     }
 
+    mouth_ = lv_obj_create(root_);
+    stripStyle(mouth_);
+    lv_obj_set_style_bg_color(mouth_, lv_color_hex(config_.colorHex), 0);
+    lv_obj_set_style_bg_opa(mouth_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(mouth_, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+
     timer_ = lv_timer_create(&FaceScreen::timerTrampoline, config_.periodMs, this);
 }
 
@@ -160,6 +167,19 @@ void FaceScreen::draw(const FaceShape& face) {
             browPoints_[side][1] = {static_cast<lv_value_precise_t>(brow.innerX - left),
                                     static_cast<lv_value_precise_t>(brow.innerY - top)};
             lv_line_set_points(brows_[side], browPoints_[side], 2);
+        }
+    }
+
+    const MouthShape& mouth = face.mouth;
+    if (!drawnValid_ || !(mouth == drawn_.mouth)) {
+        // hidden while not surprised, rather than a 0x0 object
+        if (mouth.sizePx <= 0) {
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_set_size(mouth_, mouth.sizePx, mouth.sizePx);
+            lv_obj_set_pos(mouth_, mouth.centerX - mouth.sizePx / 2,
+                           mouth.centerY - mouth.sizePx / 2);
+            lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         }
     }
     drawn_ = face;
