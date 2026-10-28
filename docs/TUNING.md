@@ -176,8 +176,8 @@ From each update where the localizer trusted its estimate, a reading's error aga
   ([`docs/LOCALIZATION.md`](LOCALIZATION.md#calibrating-the-mounts)).
 - **Tracking wheels**: how far raw odometry drifts from the estimate per inch driven, along each
   wheel, in the robot's frame. "+2.1%" means the wheel reads 2.1% long: its real diameter is
-  1/1.021 of the configured one, and the table gives the factor to multiply
-  `kTrackingWheelDiameterIn` by.
+  1/1.021 of the configured one, and the table gives the factor to multiply that wheel's
+  `kVerticalWheelDiameterIn` or `kHorizontalWheelDiameterIn` by.
 - **CPU**: the localizer's update time and the logger's share, from the same logs.
 
 **Use this world** gives the simulated robot those errors (the Robot tab shows them), sets the MCL
