@@ -103,12 +103,12 @@ RotationTrackingWheel& verticalWheel() {
     // forward direction. The competition robot keeps it until checked the
     // same way (see config.hpp); re-check it whenever this sensor is
     // re-mounted or swapped.
-    static RotationTrackingWheel instance(ports::kVerticalTracking, kTrackingWheelDiameterIn);
+    static RotationTrackingWheel instance(ports::kVerticalTracking, kVerticalWheelDiameterIn);
     return instance;
 }
 
 RotationTrackingWheel& horizontalWheel() {
-    static RotationTrackingWheel instance(ports::kHorizontalTracking, kTrackingWheelDiameterIn);
+    static RotationTrackingWheel instance(ports::kHorizontalTracking, kHorizontalWheelDiameterIn);
     return instance;
 }
 

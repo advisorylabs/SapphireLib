@@ -246,10 +246,11 @@ them, once the run ends (a run that was stopped or failed its fit logs no `model
 axis's: inches for Fwd/Strafe, degrees for Turn and the lift. A mechanism's model adds `kG`, the
 volts that hold it against gravity.
 
-The PID page's Wheel calibration logs each diameter it applies, `Tracking` or `Drive`:
+The PID page's Wheel calibration logs each diameter it applies, `Vertical` or `Drive` (Fwd) or
+`Horizontal` (Strafe):
 
 ```
-E,<t_us>,tune,wheel,<Tracking|Drive>,diameter_in=<in>
+E,<t_us>,tune,wheel,<Vertical|Horizontal|Drive>,diameter_in=<in>
 ```
 
 ### Other tags
