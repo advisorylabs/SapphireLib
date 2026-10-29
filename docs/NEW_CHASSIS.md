@@ -267,32 +267,34 @@ it drove is an inch on the field.
    backward gets its port's sign flipped in `config.hpp` (the vertical one is reversed today; check
    it again on this chassis). Do this first: Wheel can't correct a wheel that reads backward, and
    says so ("reads backward").
-2. [ ] **Diameter.** PID page, **Wheel** (beside Auto-Tune). Put the robot on clear floor with 5 ft
+2. [ ] **Forward.** PID page, **Wheel** (beside Auto-Tune). Put the robot on clear floor with 5 ft
    free ahead, square to a tile seam, and mark one of its edges on the floor (tape along the front
-   bumper). Tap **Drive 48in**: it drives straight ahead, gently so the drive wheels don't slip, and
+   bumper). Tap **Fwd 48**: it drives straight ahead, gently so the drive wheels don't slip, and
    stops. Tape-measure from the mark to the same edge, set **Actual** to that with **-**/**+** (1/8 in a
-   tap, hold to repeat; it starts at what the tracking wheel read), and tap **Apply**.
-3. [ ] The readout shows how far each wheel read over the run and its new diameter: **Tracking**
-   (what odometry measures with, so every trajectory and `moveTo*()`) and **Drive** (what
-   `driveDistance()` measures with). They're applied to the running program; tap **Drive 48in** again
-   and Tracking should read within an eighth of the tape. Changed Actual after an Apply? Apply again:
-   it corrects the run, it doesn't stack.
-4. [ ] Put them in `kTrackingWheelDiameterIn` and `kDriveWheelDiameterIn` in `config.hpp` (the terminal
-   and the SD log's `tune,wheel` events have them to four places). The two tracking wheels share
-   theirs, and Apply gives the horizontal wheel the vertical's; check it by pushing the robot
-   sideways along a wall a known distance and reading `X` on the Odom page. If they come out more
-   than about half a percent apart, give each its own (they're separate constructor arguments in
-   `devices.cpp`): `kTrackingWheelDiameterIn × actual / X`.
+   tap, hold to repeat; it starts at what the vertical wheel read), and tap **Apply**.
+3. [ ] The readout shows how far each wheel read over the run and its new diameter: **Vertical**
+   (what odometry measures forward travel with, so every trajectory and `moveTo*()`) and **Drive**
+   (what `driveDistance()` measures with). They're applied to the running program; tap **Fwd 48**
+   again and Vertical should read within an eighth of the tape. Changed Actual after an Apply? Apply
+   again: it corrects the run, it doesn't stack.
+4. [ ] **Strafe.** The same with 5 ft free to the robot's right, a mark along its right side, and
+   **Strafe 48**: it strafes straight right and corrects **Horizontal** (what odometry measures
+   sideways travel with). Actual starts at what the horizontal wheel read.
+5. [ ] Put them in `kVerticalWheelDiameterIn`, `kHorizontalWheelDiameterIn` and
+   `kDriveWheelDiameterIn` in `config.hpp` (the terminal and the SD log's `tune,wheel` events have
+   them to four places).
 
-**What it does.** Drive notes each wheel's distance, drives `wheelCalibrationDrive()` in
-[`tuning.cpp`](../src/robot/tuning.cpp) (a trajectory 48 in straight ahead, heading held, at most 6 V
-and 24 in/s²; `driveDistance()` instead before there are axis models to plan with), waits for the
-robot to stop, and notes how far each wheel read. Apply sets each diameter to
-`odom::calibrateWheelDiameterIn()`: the diameter it drove with × actual / read. It doesn't matter
-how far the robot really went, only that the tape and the wheels measured the same run. The wheel
-offsets aren't calibrated yet, which is why it holds its heading: a turn mid-run would put their
-error into the reading. Step 6's log calibration checks the tracking diameter again from real
-driving.
+**What it does.** Fwd and Strafe note each of their wheels' distance, drive `wheelCalibrationDrive()`
+in [`tuning.cpp`](../src/robot/tuning.cpp) (a trajectory 48 in straight ahead or straight right,
+heading held, at most 6 V and 24 in/s²; before there are axis models to plan with, `driveDistance()`
+for Fwd and `moveToPoint()` at 6 V for Strafe), wait for the robot to stop, and note how far each
+wheel read. Apply sets each diameter of the last run's wheels to `odom::calibrateWheelDiameterIn()`:
+the diameter it drove with × actual / read. It doesn't matter how far the robot really went, only
+that the tape and the wheels measured the same run. The wheel offsets aren't calibrated yet, which
+is why it holds its heading: a turn mid-run would put their error into the reading. The drive wheels
+are only corrected by Fwd: the drivetrain has one diameter for them, and `driveDistance()`, what
+measures by it, drives forward. Step 6's log calibration checks the tracking diameters again from
+real driving.
 
 ### 3c. Wheel offsets: Calibrate Offsets
 
@@ -723,9 +725,9 @@ Off the field, X+UP runs the selected routine from driver control.
      will get.
    - **Sensor bias** flagged past 0.3 in: that mount is off by about twice it. Re-run Calibrate Sensors
      (step 4), or a tape measure.
-   - **Tracking wheels**: the factor to multiply `kTrackingWheelDiameterIn` by ("+2.1%" reads 2.1%
-     long). Past about 1%, fix the diameter and re-run Calibrate Offsets (3c). The PIDs don't need
-     redoing for a percent.
+   - **Tracking wheels**: the factor to multiply `kVerticalWheelDiameterIn` and
+     `kHorizontalWheelDiameterIn` by ("+2.1%" reads 2.1% long). Past about 1%, fix the diameter and
+     re-run Calibrate Offsets (3c). The PIDs don't need redoing for a percent.
    - **CPU**: the localizer's update time and the logger's share.
 5. [ ] **Use this world**, then search on **Your robot**. Keep the result only when the holdout says
    "better" (not "within noise" or "no better"). **Save TUNE.CFG**: it keeps the analyzer's PID lines.
@@ -792,8 +794,8 @@ window), or too few volts to move it well past friction.
 | Number | Measured by | Lives in |
 |---|---|---|
 | IMU heading scale | 10 turns by hand (3a) | `imuHeadingScale`, `devices.cpp` |
-| Tracking wheel diameter | PID page, Wheel, and a tape measure (3b); checked by the simulator's log calibration | `kTrackingWheelDiameterIn`, `config.hpp` |
-| Drive wheel diameter (for `driveDistance()`) | PID page, Wheel (3b) | `kDriveWheelDiameterIn`, `config.hpp` |
+| Tracking wheel diameters | PID page, Wheel's Fwd (vertical) and Strafe (horizontal), and a tape measure (3b); checked by the simulator's log calibration | `kVerticalWheelDiameterIn`, `kHorizontalWheelDiameterIn`, `config.hpp` |
+| Drive wheel diameter (for `driveDistance()`) | PID page, Wheel's Fwd (3b) | `kDriveWheelDiameterIn`, `config.hpp` |
 | Tracking wheel offsets | Odom page, Calibrate Offsets | `kVerticalWheelOffsetIn`, `kHorizontalWheelOffsetIn`, `config.hpp` |
 | Distance sensor mounts | Odom page, Calibrate Sensors | `k*Sensor*In`, `config.hpp` |
 | Field size | tape measure | `FieldMap::centered()` in `localizer()`, `devices.cpp` |
@@ -811,8 +813,6 @@ code's.
 
 - **IMU heading scale.** Only the math, `sensors::calibrateHeadingScale()`; nothing on the robot runs the
   turns or reads the result.
-- **The horizontal tracking wheel's own diameter.** Wheel (3b) drives forward, so it measures the
-  vertical wheel and gives the horizontal one the same; a strafe run would measure it on its own.
 - **Calibrate Offsets has no timeout** ([`ROADMAP.md`](ROADMAP.md)): a blocked spin never ends, and a
   non-finite IMU reading ends it at once with NaN offsets in the live odometry.
 - **The lift's Auto-Tune window** has to be found by a first run and a look at the log.

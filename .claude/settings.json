@@ -60,7 +60,15 @@
       "Bash(awk 'NR==119||NR==120{print NR\": \"length\" : \"$0}' src/sapphirelib/gui/pid_tuner_page.cpp)",
       "Bash(awk 'NR==44||NR==53{print NR\": \"length\" : \"$0}' src/sapphirelib/tuning/auto_tune_math.cpp)",
       "Bash(git check-ignore *)",
-      "Bash(pros make *)"
+      "Bash(pros make *)",
+      "Bash(awk 'length > 100 {print FILENAME\":\"FNR\": \"length}' src/sapphirelib/gui/pid_tuner_page.cpp include/sapphirelib/gui/pid_tuner_page.hpp src/robot/tuning.cpp include/robot/config.hpp src/robot/devices.cpp)",
+      "Bash(time make -j8)",
+      "Bash(awk 'length > 100 {print \"HEAD tuning:\"FNR\": \"length}')",
+      "Bash(cd \"C:/Users/Cody/Desktop/2025 96671H/SapphireLib\")",
+      "Bash(export TMP=\"C:/Users/Cody/AppData/Local/Temp/claude/c--Users-Cody-Desktop-2025-96671H-SapphireLib/b6459342-a5c5-449d-ad7f-d6646251be85/scratchpad\" TEMP=\"C:/Users/Cody/AppData/Local/Temp/claude/c--Users-Cody-Desktop-2025-96671H-SapphireLib/b6459342-a5c5-449d-ad7f-d6646251be85/scratchpad\" TMPDIR=\"C:/Users/Cody/AppData/Local/Temp/claude/c--Users-Cody-Desktop-2025-96671H-SapphireLib/b6459342-a5c5-449d-ad7f-d6646251be85/scratchpad\")",
+      "Bash(make -j8)",
+      "PowerShell($env:TMP = 'C:\\\\Users\\\\Cody\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Cody-Desktop-2025-96671H-SapphireLib\\\\b6459342-a5c5-449d-ad7f-d6646251be85\\\\scratchpad'; $env:TEMP = $env:TMP; $env:PATH = 'C:\\\\Users\\\\Cody\\\\AppData\\\\Roaming\\\\Code\\\\User\\\\globalStorage\\\\sigbots.pros\\\\install\\\\pros-toolchain-windows\\\\usr\\\\bin;' + $env:PATH; make -j8 2>&1 | Select-String -NotMatch 'OK' | Select-Object -Last 40)",
+      "PowerShell($env:TMP = 'C:\\\\Users\\\\Cody\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Cody-Desktop-2025-96671H-SapphireLib\\\\b6459342-a5c5-449d-ad7f-d6646251be85\\\\scratchpad'; $env:TEMP = $env:TMP; $env:PATH = 'C:\\\\Users\\\\Cody\\\\AppData\\\\Roaming\\\\Code\\\\User\\\\globalStorage\\\\sigbots.pros\\\\install\\\\pros-toolchain-windows\\\\usr\\\\bin;' + $env:PATH; make -j8 2>&1 | Select-String -Pattern 'ERROR|WARN|warning|error|DONE')"
     ]
   }
 }

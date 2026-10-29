@@ -94,51 +94,65 @@ void trackingTuningTest() {
 
 // --- Wheel size for PidTunerPage ---
 //
-// The Wheel button drives the robot straight ahead, you tape-measure how far
-// it really went, and it corrects each wheel's diameter so an inch reads as
-// an inch: the tracking wheels' (odometry, so every trajectory and
-// moveTo*()) and the drive wheels' (driveDistance(), and the Asterisk's drift
-// correction). See PidTunerPage::enableWheelCalibration().
+// The Wheel panel's Fwd drives the robot straight ahead and its Strafe
+// straight to the right; you tape-measure how far it really went, and it
+// corrects each wheel's diameter so an inch reads as an inch. Fwd corrects the
+// vertical tracking wheel (odometry, so every trajectory and moveTo*()) and
+// the drive wheels (driveDistance(), and the Asterisk's drift correction);
+// Strafe the horizontal tracking wheel. See
+// PidTunerPage::enableWheelCalibration().
 
 constexpr double kWheelCalibrationDistanceIn = 48.0;
 
 // Gentle, so the drive wheels don't slip: their encoders would count the
 // slip as travel and the drive wheels would come out too small. At most 6V
-// planned and 24in/s^2 forward, about a second and a half to get going.
+// planned and 24in/s^2 along the drive, about a second and a half to get
+// going.
 constexpr double kWheelCalibrationVolts = 6.0;
 constexpr double kWheelCalibrationAccelInPerS2 = 24.0;
 
-// The calibration's drive: a trajectory straight ahead from wherever the
-// robot faces, heading held, planned from the axis models. Without models to
-// plan from (no Auto-Tune yet), driveDistance() instead, which measures by
-// the drive wheels it's calibrating: still fine, since the page only compares
+// The calibration's drives: a trajectory from wherever the robot faces to a
+// point aheadIn ahead and rightIn to the right, heading held, planned from the
+// axis models. Without models to plan from (no Auto-Tune yet), Fwd uses
+// driveDistance() instead, which measures by the drive wheels it's
+// calibrating, and Strafe moveToPoint(), which measures by odometry, so by the
+// horizontal wheel it's calibrating: still fine, since the page only compares
 // what each wheel read against the tape, however far that was.
-void wheelCalibrationDrive(double inches) {
+void wheelCalibrationDrive(double aheadIn, double rightIn) {
     const Pose start = odometry().getPose();
     const double rad = start.headingDeg * 3.14159265358979323846 / 180.0;
+    // aheadIn ahead and rightIn to the right, on the field
+    const double endX = start.xIn + aheadIn * std::sin(rad) + rightIn * std::cos(rad);
+    const double endY = start.yIn + aheadIn * std::cos(rad) - rightIn * std::sin(rad);
     const std::vector<TrajectorySection> chain{
         {.waypoints = {{.xIn = start.xIn, .yIn = start.yIn, .headingDeg = start.headingDeg},
-                       {.xIn = start.xIn + inches * std::sin(rad),
-                        .yIn = start.yIn + inches * std::cos(rad),
-                        .headingDeg = start.headingDeg}},
+                       {.xIn = endX, .yIn = endY, .headingDeg = start.headingDeg}},
          .constraints = TrajectoryConstraints{
              .voltageBudget = kWheelCalibrationVolts,
-             .forward = {.maxAcceleration = kWheelCalibrationAccelInPerS2}}},
+             .forward = {.maxAcceleration = kWheelCalibrationAccelInPerS2},
+             .strafe = {.maxAcceleration = kWheelCalibrationAccelInPerS2}}},
     };
     const TrajectoryResult plan = generateTrajectory(chain, drivetrain().axisModels());
-    if (!plan.ok) {
-        SAPPHIRELIB_LOG_ERROR("tune", "wheel drive: %s; driving by the encoders instead",
-                              plan.error.c_str());
-        drivetrain().driveDistance(inches);
+    if (plan.ok) {
+        drivetrain().followTrajectory(plan.trajectory);
         return;
     }
-    drivetrain().followTrajectory(plan.trajectory);
+    if (rightIn == 0.0) {
+        SAPPHIRELIB_LOG_ERROR("tune", "wheel drive: %s; driving by the encoders instead",
+                              plan.error.c_str());
+        drivetrain().driveDistance(aheadIn);
+    } else {
+        SAPPHIRELIB_LOG_ERROR("tune", "wheel drive: %s; driving by odometry instead",
+                              plan.error.c_str());
+        drivetrain().moveToPoint(endX, endY, odometry(),
+                                 {.errorThreshold = 1.0, .maxVolts = kWheelCalibrationVolts});
+    }
 }
 
 // A corrected diameter, over `pros terminal` and to the SD log, with where to
 // put it: the page shows it only until the next run, and nothing saves it.
 void logWheelDiameter(const char* wheel, const char* constant, double diameterIn) {
-    SAPPHIRELIB_LOG_INFO("tune", "%s wheels: %.4fin across (applied; copy into %s in config.hpp)",
+    SAPPHIRELIB_LOG_INFO("tune", "%s wheel diameter: %.4fin (applied; copy into %s in config.hpp)",
                          wheel, diameterIn, constant);
     sapphirelib::telemetry::event("tune", "wheel,%s,diameter_in=%.4f", wheel, diameterIn);
 }
@@ -339,21 +353,20 @@ void registerTuning(PidTunerPage& page) {
                        kTrackingResponse);
     page.addController("Track T", drivetrain().trackingTurnPID(), &trackingTuningTest, "Turn",
                        kTrackingResponse);
-    // Wheel: drive 48in, tape it, Apply (see the Wheel size section above).
-    // The vertical tracking wheel is the one a forward drive measures; the
-    // horizontal one gets the same diameter, since they share
-    // kTrackingWheelDiameterIn and copying the number in does the same. If
-    // strafing reads off afterwards, they need a diameter each.
+    // Wheel: Fwd or Strafe 48in, tape it, Apply (see the Wheel size section
+    // above). Each tracking wheel is measured by the drive that rolls it: the
+    // vertical one by Fwd, the horizontal one by Strafe. The drive wheels only
+    // by Fwd: the drivetrain has one diameter for them, and driveDistance(),
+    // the motion that measures by it, drives forward.
     page.enableWheelCalibration(
         {
-            {.name = "Tracking",
+            {.name = "Vertical",
              .distanceIn = [] { return verticalWheel().getDistanceIn(); },
              .diameterIn = [] { return verticalWheel().wheelDiameterIn(); },
              .setDiameterIn =
                  [](double diameterIn) {
                      verticalWheel().setWheelDiameterIn(diameterIn);
-                     horizontalWheel().setWheelDiameterIn(diameterIn);
-                     logWheelDiameter("Tracking", "kTrackingWheelDiameterIn", diameterIn);
+                     logWheelDiameter("Vertical", "kVerticalWheelDiameterIn", diameterIn);
                  }},
             {.name = "Drive",
              .distanceIn = [] { return drivetrain().forwardTravelIn(); },
@@ -364,7 +377,19 @@ void registerTuning(PidTunerPage& page) {
                      logWheelDiameter("Drive", "kDriveWheelDiameterIn", diameterIn);
                  }},
         },
-        &wheelCalibrationDrive, kWheelCalibrationDistanceIn);
+        [](double inches) { wheelCalibrationDrive(inches, 0.0); }, kWheelCalibrationDistanceIn);
+    page.enableStrafeCalibration(
+        {
+            {.name = "Horizontal",
+             .distanceIn = [] { return horizontalWheel().getDistanceIn(); },
+             .diameterIn = [] { return horizontalWheel().wheelDiameterIn(); },
+             .setDiameterIn =
+                 [](double diameterIn) {
+                     horizontalWheel().setWheelDiameterIn(diameterIn);
+                     logWheelDiameter("Horizontal", "kHorizontalWheelDiameterIn", diameterIn);
+                 }},
+        },
+        [](double inches) { wheelCalibrationDrive(0.0, inches); }, kWheelCalibrationDistanceIn);
     // Driver stick mode - see DriverInputMode. Velocity needs Auto-Tune's
     // models; until an axis has one, that axis quietly keeps voltage behavior.
     page.setToggle(

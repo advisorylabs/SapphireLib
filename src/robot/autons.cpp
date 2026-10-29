@@ -81,9 +81,9 @@ void asyncExample() {
 // Pure pursuit through points: an S-curve out to the right, then straight
 // back to the start. Needs about 4ft ahead and 2ft to the right.
 void pathExample() {
-    setPose(0, 0, 0);
-    followPath({{0, 0}, {0, 16}, {16, 28}, {16, 44}});
-    moveToPoint(0, 0);
+    setPose(0, -48, 0);
+    followPath({{0, -48}, {0, -16}, {16, -28}, {16, -44}});
+    moveToPoint(0, -48);
     turnTo(0);
 }
 
