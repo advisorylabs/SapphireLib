@@ -17,6 +17,7 @@
 
 #include "sapphirelib/gui/face_math.hpp"
 
+using sapphirelib::gui::BowtieShape;
 using sapphirelib::gui::BrowShape;
 using sapphirelib::gui::EyeShape;
 using sapphirelib::gui::FaceAnimator;
@@ -44,6 +45,26 @@ bool shut(const EyeShape& eye) { return eye.heightPx * 5 < eye.widthPx; }
 bool flat(const BrowShape& brow) { return brow.innerY == brow.outerY; }
 
 std::int32_t browMiddleY(const BrowShape& brow) { return (brow.innerY + brow.outerY) / 2; }
+
+std::int32_t bowtieTop(const BowtieShape& bowtie) {
+    std::int32_t top = bowtie.centerY - bowtie.knotPx / 2;
+    for (const auto& wing : bowtie.cornerY) {
+        for (std::int32_t y : wing) top = y < top ? y : top;
+    }
+    return top;
+}
+
+/// Whether every corner is on a 480x272 screen.
+bool onScreen(const BowtieShape& bowtie) {
+    for (int wing = 0; wing < 2; ++wing) {
+        for (int corner = 0; corner < 2; ++corner) {
+            const std::int32_t x = bowtie.cornerX[wing][corner];
+            const std::int32_t y = bowtie.cornerY[wing][corner];
+            if (x < 0 || x >= 480 || y < 0 || y >= 272) return false;
+        }
+    }
+    return true;
+}
 
 /// Runs frames until `untilMs`, with the same inputs every frame, and returns
 /// the last face.
@@ -81,6 +102,18 @@ void testOpenAtRest() {
     CHECK(shape.eyes[0].centerY + kEyePx / 2 < 272);
     // no mouth unless surprised
     CHECK(shape.mouth.sizePx == 0);
+    // the bowtie in the middle under the eyes, level: wing 0 out to the left, corner 0 on top
+    const BowtieShape& bowtie = shape.bowtie;
+    CHECK(bowtie.centerX == 240);
+    CHECK(bowtie.centerY > shape.eyes[0].centerY + kEyePx / 2);
+    CHECK(bowtie.cornerX[0][0] < 240 && bowtie.cornerX[1][0] > 240);
+    CHECK(bowtie.cornerX[0][0] + bowtie.cornerX[1][0] == 480);
+    CHECK(bowtie.cornerX[0][0] == bowtie.cornerX[0][1]);
+    CHECK(bowtie.cornerY[0][0] < bowtie.centerY && bowtie.cornerY[0][1] > bowtie.centerY);
+    CHECK(bowtie.cornerY[0][0] == bowtie.cornerY[1][0]);
+    CHECK(bowtie.knotPx > 0);
+    CHECK(onScreen(bowtie));
+    CHECK(face.bowtieTurn() == 0.0);
 }
 
 void testBlinksNowAndThen() {
@@ -171,12 +204,15 @@ void testSurprise() {
         CHECK(surprised.brows[side].innerY < surprised.brows[side].outerY);
         CHECK(surprised.brows[side].innerY - surprised.brows[side].thicknessPx > 0);
     }
-    // a round mouth in the middle, below the wide eyes and on the screen
+    // a round mouth in the middle, low between the wide eyes, clear of them and above the bowtie
     CHECK(surprised.mouth.sizePx > 30);
     CHECK(surprised.mouth.centerX == 240);
-    CHECK(surprised.mouth.centerY - surprised.mouth.sizePx / 2 >
-          surprised.eyes[0].centerY + surprised.eyes[0].heightPx / 2);
-    CHECK(surprised.mouth.centerY + surprised.mouth.sizePx / 2 < 272);
+    CHECK(surprised.mouth.centerY > surprised.eyes[0].centerY);
+    CHECK(surprised.mouth.centerX - surprised.mouth.sizePx / 2 >
+          surprised.eyes[0].centerX + surprised.eyes[0].widthPx / 2);
+    CHECK(surprised.mouth.centerY + surprised.mouth.sizePx / 2 < bowtieTop(surprised.bowtie));
+    // the bowtie stays put
+    CHECK(surprised.bowtie == open.bowtie);
     // held a moment after the bump, then back to open
     run(face, now, 1200, false);
     CHECK(face.surprise() == 1.0);
@@ -236,6 +272,76 @@ void testWink() {
     const FaceShape after = run(face, now, 760, false);
     CHECK(face.wink() == 0.0);
     CHECK(after == open);
+}
+
+void testBowtieSpinsWithAWink() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    const FaceShape open = run(face, now, 200, false);
+    face.startWink(now);
+    // round once, clockwise: always further on, never off the screen, upright a quarter of the
+    // way and upside down halfway
+    double lastTurn = 0.0;
+    bool upright = false;
+    bool upsideDown = false;
+    bool turned = false;
+    for (; now < 200 + 520; now += kFrameMs) {
+        const FaceShape shape = face.update(now, false, false);
+        const double turn = face.bowtieTurn();
+        CHECK(turn >= lastTurn && turn < 1.0);
+        lastTurn = turn;
+        CHECK(onScreen(shape.bowtie));
+        CHECK(shape.bowtie.centerX == open.bowtie.centerX);
+        CHECK(shape.bowtie.centerY == open.bowtie.centerY);
+        const BowtieShape& b = shape.bowtie;
+        if (turn > 0.2 && turn < 0.3) {
+            // clockwise on the screen: the left wing has swung up
+            CHECK(b.cornerY[0][0] < b.centerY && b.cornerY[0][1] < b.centerY);
+            upright = true;
+        }
+        if (turn > 0.45 && turn < 0.55) {
+            // the left wing on the right now
+            CHECK(b.cornerX[0][0] > b.centerX && b.cornerX[0][1] > b.centerX);
+            upsideDown = true;
+        }
+        if (!(b == open.bowtie)) turned = true;
+    }
+    CHECK(turned && upright && upsideDown);
+    CHECK(lastTurn > 0.95);
+    // eased: barely moving one frame in
+    FaceAnimator eased(480, 272);
+    std::uint32_t easedNow = 0;
+    run(eased, easedNow, 200, false);
+    eased.startWink(easedNow);
+    eased.update(easedNow + kFrameMs, false, false);
+    CHECK(eased.bowtieTurn() > 0.0 && eased.bowtieTurn() < 0.02);
+    // and back where it started once round
+    const FaceShape after = run(face, now, 800, false);
+    CHECK(face.bowtieTurn() == 0.0);
+    CHECK(after.bowtie == open.bowtie);
+}
+
+void testWinkHeldShutSpinsOnce() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    const FaceShape open = run(face, now, 200, false);
+    face.startWink(now);
+    run(face, now, 500, false);
+    const double turnBefore = face.bowtieTurn();
+    // holding the wink shut doesn't start the spin over: it carries on and finishes on time
+    face.startWink(now);
+    now += kFrameMs;
+    face.update(now, false, false);
+    CHECK(face.bowtieTurn() > turnBefore);
+    const FaceShape held = run(face, now, 740, false);
+    CHECK(shut(held.eyes[1]));
+    CHECK(face.bowtieTurn() == 0.0);
+    CHECK(held.bowtie == open.bowtie);
+    // a new wink once that one's over spins it again
+    run(face, now, 1100, false);
+    face.startWink(now);
+    run(face, now, 1300, false);
+    CHECK(face.bowtieTurn() > 0.25);
 }
 
 void testWinkEasesShut() {
@@ -347,6 +453,8 @@ int main() {
     testSurpriseBeatsSquint();
     testNoBlinkWhileSurprised();
     testWink();
+    testBowtieSpinsWithAWink();
+    testWinkHeldShutSpinsOnce();
     testWinkEasesShut();
     testWinkDuringAWinkHoldsItShut();
     testWinkOverAMood();

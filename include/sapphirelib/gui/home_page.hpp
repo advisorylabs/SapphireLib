@@ -61,7 +61,7 @@ public:
     /**
      * @brief Add an on/off button for a mode of your own, like a debug mode
      *
-     * It reads "<name>: ON" or "<name>: OFF" and is highlighted red while on. The state is polled
+     * It reads "<name>: ON" or "<name>: OFF" and is highlighted purple while on. The state is polled
      * every refresh, so the button shows the truth even if something else changes it. Buttons stack
      * down the page's top right corner, in the order added; there's room for three
      *

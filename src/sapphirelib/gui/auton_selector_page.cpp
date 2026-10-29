@@ -11,7 +11,7 @@ namespace sapphirelib::gui {
 
 namespace {
 
-constexpr std::uint32_t kSelectedBgColor = 0x2563eb;
+constexpr std::uint32_t kSelectedBgColor = 0x991b1b;
 constexpr std::uint32_t kSelectedTextColor = 0xffffff;
 
 // how often the status line is refreshed

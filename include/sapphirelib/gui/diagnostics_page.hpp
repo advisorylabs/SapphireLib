@@ -31,7 +31,7 @@ public:
      * Logger is running, so a cable knocked loose mid-match shows up in the log
      *
      * @param checks the sensors to check
-     * @param gui shows a red header banner while any check fails. nullptr (the default) for none
+     * @param gui shows a purple header banner while any check fails. nullptr (the default) for none
      */
     explicit DiagnosticsPage(std::vector<diag::SensorCheck> checks, Gui* gui = nullptr);
 

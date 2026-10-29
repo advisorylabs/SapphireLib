@@ -149,8 +149,8 @@ void OdometryPage::build(lv_obj_t* container) {
     fieldView_ = lv_obj_create(container);
     lv_obj_set_size(fieldView_, fieldViewWidthPx_, fieldViewHeightPx_);
     lv_obj_set_pos(fieldView_, 4, 24);
-    lv_obj_set_style_bg_color(fieldView_, lv_color_hex(0x0f172a), 0);
-    lv_obj_set_style_border_color(fieldView_, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_bg_color(fieldView_, lv_color_hex(0x1c0f0f), 0);
+    lv_obj_set_style_border_color(fieldView_, lv_color_hex(0x7f1d1d), 0);
     lv_obj_set_style_border_width(fieldView_, 2, 0);
     lv_obj_set_style_radius(fieldView_, 4, 0);
     // no card shadow, which would be recomputed every time the dot moves
@@ -162,12 +162,12 @@ void OdometryPage::build(lv_obj_t* container) {
     robotDot_ = lv_obj_create(fieldView_);
     lv_obj_set_size(robotDot_, kRobotDotSizePx, kRobotDotSizePx);
     lv_obj_set_style_radius(robotDot_, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(robotDot_, lv_color_hex(0x22d3ee), 0);
+    lv_obj_set_style_bg_color(robotDot_, lv_color_hex(0xf87171), 0);
     lv_obj_set_style_border_width(robotDot_, 0, 0);
     lv_obj_set_style_shadow_width(robotDot_, 0, 0);
 
     headingLine_ = lv_line_create(fieldView_);
-    lv_obj_set_style_line_color(headingLine_, lv_color_hex(0x22d3ee), 0);
+    lv_obj_set_style_line_color(headingLine_, lv_color_hex(0xf87171), 0);
     lv_obj_set_style_line_width(headingLine_, 2, 0);
     lv_obj_set_style_line_rounded(headingLine_, true, 0);
 

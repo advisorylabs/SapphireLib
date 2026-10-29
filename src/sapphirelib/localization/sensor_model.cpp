@@ -14,7 +14,7 @@ constexpr double kMmPerIn = 25.4;
 
 // what the V5 Distance Sensor reports when it sees nothing, and its shortest reading
 constexpr std::int32_t kNoObjectMm = 9999;
-constexpr std::int32_t kMinRangeMm = 20;
+constexpr std::int32_t kMinRangeMm = 1;
 
 // confidence only means something past this distance
 constexpr std::int32_t kConfidenceMinMm = 200;

@@ -18,7 +18,8 @@ constexpr double kStepP = 0.05;
 constexpr double kStepI = 0.01;
 constexpr double kStepD = 0.01;
 
-constexpr std::uint32_t kSelectedBgColor = 0x2563eb;
+// darker than the theme's red buttons
+constexpr std::uint32_t kSelectedBgColor = 0x991b1b;
 constexpr std::uint32_t kSelectedTextColor = 0xffffff;
 
 constexpr std::int32_t kRowY0 = 0;

@@ -57,7 +57,7 @@ public:
     void start(std::uint32_t periodMs = 50);
 
     /**
-     * @brief Replace the header with a red warning banner, visible on every tab
+     * @brief Replace the header with a purple warning banner, visible on every tab
      *
      * For things a driver shouldn't miss, like a sensor in the wrong port. Safe to call every tick
      *

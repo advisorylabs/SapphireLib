@@ -16,8 +16,8 @@ constexpr std::int32_t kRecordButtonH = 34;
 
 // addToggle() buttons, stacked down the top right corner, beside the short battery and
 // competition lines rather than under every row, where the page would run out of height. A mode
-// left on should be hard to miss, so on is red
-constexpr std::uint32_t kToggleOnBgColor = 0xdc2626;
+// left on should be hard to miss, so on is purple, against the theme's red
+constexpr std::uint32_t kToggleOnBgColor = 0x9333ea;
 constexpr std::int32_t kToggleW = 140;
 constexpr std::int32_t kToggleH = 34;
 constexpr std::int32_t kToggleGap = 6;

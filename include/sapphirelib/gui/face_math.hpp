@@ -59,19 +59,46 @@ struct MouthShape {
 };
 
 /**
+ * @brief The bowtie under the face: two triangular wings meeting at a round knot, turned as a
+ * whole about the knot while it spins
+ */
+struct BowtieShape {
+    /** the knot's center x, in pixels from the screen's left */
+    std::int32_t centerX = 0;
+
+    /** the knot's center y, in pixels from the screen's top */
+    std::int32_t centerY = 0;
+
+    /**
+     * each wing's two outer corners, [wing][corner], in pixels from the screen's top left. A wing
+     * is the triangle between its two corners and the knot's center. Unspun, wing 0 points to the
+     * screen's left and corner 0 is the top one
+     */
+    std::int32_t cornerX[2][2] = {};
+    std::int32_t cornerY[2][2] = {};
+
+    /** the knot's width and height, in pixels */
+    std::int32_t knotPx = 0;
+
+    bool operator==(const BowtieShape&) const = default;
+};
+
+/**
  * @brief Everything FaceScreen draws. Index 0 is on the screen's left, 1 on its right
  */
 struct FaceShape {
     EyeShape eyes[2];
     BrowShape brows[2];
     MouthShape mouth;
+    BowtieShape bowtie;
 
     bool operator==(const FaceShape&) const = default;
 };
 
 /**
  * @brief The face's moods and timing: open eyes that blink every few seconds (now and then
- * twice), a squint, a surprised look (and an open mouth) after a bump, and a wink when asked for one
+ * twice), a squint, a surprised look (and an open mouth) after a bump, and a wink when asked for
+ * one, the bowtie under the face spinning a full turn with it
  *
  * Pure: no LVGL, no clock, no sensors. Each frame, pass the time and what's going on, and draw the
  * FaceShape that comes back. Moods ease in and out over a few frames instead of snapping. A
@@ -126,6 +153,9 @@ public:
      * One asked for while a wink is shut or opening again keeps the eye shut a little longer,
      * rather than opening it all the way to start over
      *
+     * The bowtie spins a full turn clockwise over the wink, speeding up and slowing down again.
+     * Only a new wink spins it, not one that holds the eye shut longer
+     *
      * @param nowMs the current time, in milliseconds
      */
     void startWink(std::uint32_t nowMs);
@@ -150,9 +180,16 @@ public:
      */
     double surprise() const;
 
+    /**
+     * @brief How far round a wink's spin has the bowtie, 0 (unspun) to 1 (a full turn). Back to 0
+     * once the spin is over
+     */
+    double bowtieTurn() const;
+
 private:
     double blinkAt(std::uint32_t nowMs) const;
     double winkAt(std::uint32_t nowMs) const;
+    double spinAt(std::uint32_t nowMs) const;
     void waitForNextBlink(std::uint32_t nowMs);
     FaceShape shape() const;
 
@@ -176,10 +213,16 @@ private:
     bool winking_ = false;
     std::uint32_t winkStartMs_ = 0;
 
+    // the bowtie's spin, from when its wink started. A wink held shut longer moves winkStartMs_
+    // but not this
+    bool spinning_ = false;
+    std::uint32_t spinStartMs_ = 0;
+
     double blink_ = 0.0;
     double wink_ = 0.0;
     double squint_ = 0.0;
     double surprise_ = 0.0;
+    double spin_ = 0.0;
 };
 
 } // namespace sapphirelib::gui
