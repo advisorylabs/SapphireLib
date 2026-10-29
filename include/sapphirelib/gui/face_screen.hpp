@@ -12,11 +12,12 @@
 namespace sapphirelib::gui {
 
 /**
- * @brief A face over the whole brain screen: two eyes and two eyebrows on black, nothing else
+ * @brief A face over the whole brain screen: two eyes, two eyebrows and a bowtie on black,
+ * nothing else
  *
  * The eyes blink every few seconds, squint while squinting() says so (a lift on its way up, say),
  * go wide with the brows raised when the IMU feels a bump (see sensors::BumpDetector), and wink
- * each time winks() goes up (a count of scores, say). It
+ * each time winks() goes up (a count of scores, say), the bowtie spinning a full turn. It
  * covers everything, the Gui's header and tabs included, and comes up on its own for a match:
  * autonomous and driver control under competition control, not while disabled, so the auton
  * selector is there before the match. show() puts it up any other time
@@ -66,8 +67,9 @@ public:
         /** come up on its own during autonomous and driver control under competition control */
         bool showDuringMatch = true;
 
-        /** eye and brow color, 0xRRGGBB. SapphireLib's header blue by default */
-        std::uint32_t colorHex = 0x7dd3fc;
+        /** the face's color (eyes, brows, mouth and bowtie), 0xRRGGBB. SapphireLib's header red
+         * by default */
+        std::uint32_t colorHex = 0xf87171;
 
         /** frame period, in milliseconds. 20 by default */
         std::uint32_t periodMs = 20;
@@ -108,6 +110,7 @@ private:
     void draw(const FaceShape& face);
     static void timerTrampoline(lv_timer_t* timer);
     static void tapped(lv_event_t* e);
+    static void drawBowtie(lv_event_t* e);
 
     Config config_;
     FaceAnimator animator_;
@@ -127,6 +130,8 @@ private:
     lv_obj_t* eyes_[2] = {};
     lv_obj_t* brows_[2] = {};
     lv_obj_t* mouth_ = nullptr;
+    // drawn by drawBowtie(): LVGL has no triangle object, and the wings turn
+    lv_obj_t* bowtie_ = nullptr;
     // members because lv_line_set_points() keeps the pointer, not a copy
     lv_point_precise_t browPoints_[2][2] = {};
     // what's on the screen now, so a frame that changes nothing redraws nothing

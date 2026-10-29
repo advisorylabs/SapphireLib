@@ -14,6 +14,9 @@ namespace {
 
 constexpr std::uint32_t kBackgroundColor = 0x000000;
 
+// room around the bowtie's corners for their antialiased edges, which a tight fit would clip
+constexpr std::int32_t kBowtieMarginPx = 2;
+
 // a plain object with no theme styling: no padding, border, shadow, or scrolling, and not
 // clickable, so a tap on an eye or a brow lands on the face behind it
 void stripStyle(lv_obj_t* obj) {
@@ -68,6 +71,11 @@ void FaceScreen::start() {
     lv_obj_set_style_radius(mouth_, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
 
+    // no style of its own to draw: drawBowtie() draws the wings and the knot over it
+    bowtie_ = lv_obj_create(root_);
+    stripStyle(bowtie_);
+    lv_obj_add_event_cb(bowtie_, &FaceScreen::drawBowtie, LV_EVENT_DRAW_MAIN, this);
+
     timer_ = lv_timer_create(&FaceScreen::timerTrampoline, config_.periodMs, this);
 }
 
@@ -93,6 +101,41 @@ void FaceScreen::tapped(lv_event_t* e) {
     face->requested_.store(false);
     // during a match, down until the next period; outside one, nothing else would bring it back
     face->dismissed_ = true;
+}
+
+void FaceScreen::drawBowtie(lv_event_t* e) {
+    auto* face = static_cast<FaceScreen*>(lv_event_get_user_data(e));
+    // drawn_ is what draw() last laid the object out for. The root is at the screen's top left,
+    // so the shape's screen coordinates are the layer's
+    const BowtieShape& bowtie = face->drawn_.bowtie;
+    lv_layer_t* layer = lv_event_get_layer(e);
+    const lv_color_t color = lv_color_hex(face->config_.colorHex);
+
+    lv_draw_triangle_dsc_t wing;
+    lv_draw_triangle_dsc_init(&wing);
+    wing.bg_color = color;
+    wing.bg_opa = LV_OPA_COVER;
+    for (int side = 0; side < 2; ++side) {
+        wing.p[0] = {static_cast<lv_value_precise_t>(bowtie.centerX),
+                     static_cast<lv_value_precise_t>(bowtie.centerY)};
+        for (int corner = 0; corner < 2; ++corner) {
+            wing.p[corner + 1] = {static_cast<lv_value_precise_t>(bowtie.cornerX[side][corner]),
+                                  static_cast<lv_value_precise_t>(bowtie.cornerY[side][corner])};
+        }
+        lv_draw_triangle(layer, &wing);
+    }
+
+    // round, so it looks the same however far round the spin is
+    lv_draw_rect_dsc_t knot;
+    lv_draw_rect_dsc_init(&knot);
+    knot.bg_color = color;
+    knot.bg_opa = LV_OPA_COVER;
+    knot.radius = LV_RADIUS_CIRCLE;
+    const lv_area_t knotArea = {bowtie.centerX - bowtie.knotPx / 2,
+                                bowtie.centerY - bowtie.knotPx / 2,
+                                bowtie.centerX - bowtie.knotPx / 2 + bowtie.knotPx - 1,
+                                bowtie.centerY - bowtie.knotPx / 2 + bowtie.knotPx - 1};
+    lv_draw_rect(layer, &knot, &knotArea);
 }
 
 void FaceScreen::tick() {
@@ -181,6 +224,29 @@ void FaceScreen::draw(const FaceShape& face) {
                            mouth.centerY - mouth.sizePx / 2);
             lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         }
+    }
+
+    const BowtieShape& bowtie = face.bowtie;
+    if (!drawnValid_ || !(bowtie == drawn_.bowtie)) {
+        // the object only as big as the bowtie at this turn, as with the brows, so a spin redraws
+        // around the bowtie and not the whole screen
+        std::int32_t left = bowtie.centerX - bowtie.knotPx / 2;
+        std::int32_t top = bowtie.centerY - bowtie.knotPx / 2;
+        std::int32_t right = left + bowtie.knotPx;
+        std::int32_t bottom = top + bowtie.knotPx;
+        for (int side = 0; side < 2; ++side) {
+            for (int corner = 0; corner < 2; ++corner) {
+                left = std::min(left, bowtie.cornerX[side][corner]);
+                right = std::max(right, bowtie.cornerX[side][corner]);
+                top = std::min(top, bowtie.cornerY[side][corner]);
+                bottom = std::max(bottom, bowtie.cornerY[side][corner]);
+            }
+        }
+        lv_obj_set_pos(bowtie_, left - kBowtieMarginPx, top - kBowtieMarginPx);
+        lv_obj_set_size(bowtie_, right - left + 2 * kBowtieMarginPx,
+                        bottom - top + 2 * kBowtieMarginPx);
+        // a half turn can leave it the same size in the same place, which LVGL wouldn't redraw
+        lv_obj_invalidate(bowtie_);
     }
     drawn_ = face;
     drawnValid_ = true;

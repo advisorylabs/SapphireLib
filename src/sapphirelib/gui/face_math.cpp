@@ -16,7 +16,7 @@ constexpr double kLayoutWidthPx = 480.0;
 constexpr double kLayoutHeightPx = 272.0;
 // eye centers: each this far from the middle, and this far below the screen's center
 constexpr double kEyeSpacingPx = 112.0;
-constexpr double kEyeDropPx = 14.0;
+constexpr double kEyeDropPx = 6.0;
 constexpr double kEyeSizePx = 104.0;
 // brows: centered over each eye, this high above its center
 constexpr double kBrowLengthPx = 112.0;
@@ -49,9 +49,10 @@ constexpr double kSquintEaseMs = 120.0;
 constexpr double kSurpriseEyeScale = 1.22;
 constexpr double kSurpriseBrowLiftPx = 26.0;
 constexpr double kSurpriseBrowTiltDeg = -8.0;
-// and a round mouth, this wide at full surprise, its center this far below the eyes' centers
+// and a round mouth, this wide at full surprise, its center this far below the eyes' centers:
+// between the eyes' lower halves, leaving the bottom of the screen to the bowtie
 constexpr double kSurpriseMouthPx = 40.0;
-constexpr double kMouthDropPx = 92.0;
+constexpr double kMouthDropPx = 54.0;
 constexpr std::uint32_t kSurpriseHoldMs = 1200;
 constexpr double kSurpriseRiseMs = 60.0;
 constexpr double kSurpriseFallMs = 300.0;
@@ -65,6 +66,17 @@ constexpr std::uint32_t kWinkOpenMs = 160;
 constexpr std::uint32_t kWinkMs = kWinkCloseMs + kWinkShutMs + kWinkOpenMs;
 constexpr double kWinkBrowDropPx = 28.0;
 constexpr double kWinkBrowTiltDeg = 12.0;
+
+// the bowtie: wings this wide and tall all told, its knot's center this far below the eyes'
+// centers. Low enough to clear the mouth, high enough that its corners stay on the screen all the
+// way round a spin
+constexpr double kBowtieWidthPx = 68.0;
+constexpr double kBowtieHeightPx = 28.0;
+constexpr double kBowtieKnotPx = 16.0;
+constexpr double kBowtieDropPx = 92.0;
+// a full turn with each wink, over the wink's length, so it's round before the next wink can
+// start another
+constexpr std::uint32_t kBowtieSpinMs = kWinkMs;
 
 // frames further apart than this ease as if they weren't, so a stalled frame never jumps a mood
 // all the way
@@ -89,10 +101,12 @@ void FaceAnimator::reset(std::uint32_t nowMs) {
     blinking_ = false;
     surprised_ = false;
     winking_ = false;
+    spinning_ = false;
     blink_ = 0.0;
     wink_ = 0.0;
     squint_ = 0.0;
     surprise_ = 0.0;
+    spin_ = 0.0;
     doubleBlinkNext_ = false;
     waitForNextBlink(nowMs);
 }
@@ -111,6 +125,7 @@ FaceShape FaceAnimator::update(std::uint32_t nowMs, bool squinting, bool bumped)
     squint_ = approach(squint_, squinting ? 1.0 : 0.0, stepMs / kSquintEaseMs);
 
     if (winking_ && elapsedMs(winkStartMs_, nowMs) >= kWinkMs) winking_ = false;
+    if (spinning_ && elapsedMs(spinStartMs_, nowMs) >= kBowtieSpinMs) spinning_ = false;
 
     if (blinking_) {
         if (elapsedMs(blinkStartMs_, nowMs) >= kBlinkMs) {
@@ -126,6 +141,7 @@ FaceShape FaceAnimator::update(std::uint32_t nowMs, bool squinting, bool bumped)
     }
     blink_ = blinkAt(nowMs);
     wink_ = winkAt(nowMs);
+    spin_ = spinAt(nowMs);
     return shape();
 }
 
@@ -134,6 +150,8 @@ void FaceAnimator::startWink(std::uint32_t nowMs) {
     if (!winking_ || t >= kWinkMs) {
         winking_ = true;
         winkStartMs_ = nowMs;
+        spinning_ = true;
+        spinStartMs_ = nowMs;
     } else if (t > kWinkCloseMs) {
         // shut or opening again: back to just shut, so the eye holds shut a little longer
         // (elapsedMs() is unsigned arithmetic, so this is right even this close to boot)
@@ -149,6 +167,8 @@ double FaceAnimator::wink() const { return wink_; }
 double FaceAnimator::squint() const { return squint_; }
 
 double FaceAnimator::surprise() const { return surprise_; }
+
+double FaceAnimator::bowtieTurn() const { return spin_; }
 
 double FaceAnimator::blinkAt(std::uint32_t nowMs) const {
     if (!blinking_) return 0.0;
@@ -166,6 +186,14 @@ double FaceAnimator::winkAt(std::uint32_t nowMs) const {
     if (t < kWinkCloseMs + kWinkShutMs) return 1.0;
     if (t < kWinkMs) return 1.0 - (t - kWinkCloseMs - kWinkShutMs) / kWinkOpenMs;
     return 0.0;
+}
+
+double FaceAnimator::spinAt(std::uint32_t nowMs) const {
+    if (!spinning_) return 0.0;
+    const double t = elapsedMs(spinStartMs_, nowMs);
+    if (t >= kBowtieSpinMs) return 0.0;
+    // slow out of rest, fastest halfway round, slow into rest again
+    return (1.0 - std::cos(kPi * t / kBowtieSpinMs)) / 2.0;
 }
 
 void FaceAnimator::waitForNextBlink(std::uint32_t nowMs) {
@@ -226,6 +254,24 @@ FaceShape FaceAnimator::shape() const {
     face.mouth = MouthShape{.centerX = px(middleX),
                             .centerY = px(eyeY + kMouthDropPx * scale),
                             .sizePx = px(kSurpriseMouthPx * scale * surprise)};
+
+    const double bowtieY = eyeY + kBowtieDropPx * scale;
+    const double spinRad = 2.0 * kPi * spin_;
+    face.bowtie = BowtieShape{.centerX = px(middleX),
+                              .centerY = px(bowtieY),
+                              .knotPx = std::max<std::int32_t>(1, px(kBowtieKnotPx * scale))};
+    for (int wing = 0; wing < 2; ++wing) {
+        for (int corner = 0; corner < 2; ++corner) {
+            // unspun: wing 0 out to the left, corner 0 the top one
+            const double dx = (wing == 0 ? -1.0 : 1.0) * kBowtieWidthPx * scale / 2.0;
+            const double dy = (corner == 0 ? -1.0 : 1.0) * kBowtieHeightPx * scale / 2.0;
+            // turned about the knot, clockwise since screen y grows downward
+            face.bowtie.cornerX[wing][corner] =
+                px(middleX + dx * std::cos(spinRad) - dy * std::sin(spinRad));
+            face.bowtie.cornerY[wing][corner] =
+                px(bowtieY + dx * std::sin(spinRad) + dy * std::cos(spinRad));
+        }
+    }
     return face;
 }
 

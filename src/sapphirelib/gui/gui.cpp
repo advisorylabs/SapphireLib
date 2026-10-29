@@ -1,5 +1,7 @@
 #include "sapphirelib/gui/gui.hpp"
 
+#include "liblvgl/themes/default/lv_theme_default.h"
+
 namespace sapphirelib::gui {
 
 namespace {
@@ -7,15 +9,29 @@ namespace {
 constexpr std::int32_t kHeaderHeightPx = 18;
 constexpr std::int32_t kTabBarSizePx = 43; // 28 + 10%, then +12px more
 
-constexpr std::uint32_t kBrandBgColor = 0x1a1a2e;
-constexpr std::uint32_t kBrandTextColor = 0x7dd3fc;
-constexpr std::uint32_t kWarningBgColor = 0x7f1d1d;
-constexpr std::uint32_t kWarningTextColor = 0xfef2f2;
+constexpr std::uint32_t kBrandBgColor = 0x2e1a1a;
+constexpr std::uint32_t kBrandTextColor = 0xf87171;
+// purple, which a red header couldn't be told apart from
+constexpr std::uint32_t kWarningBgColor = 0x581c87;
+constexpr std::uint32_t kWarningTextColor = 0xfaf5ff;
+
+// LVGL's default theme in red: buttons, the selected tab, sliders and switches. A checked button
+// (a toggle left on) is purple, so it stands out against them
+constexpr std::uint32_t kThemePrimaryColor = 0xdc2626;
+constexpr std::uint32_t kThemeSecondaryColor = 0x9333ea;
 
 } // namespace
 
 Gui::Gui(const char* brandText) : brandText_(brandText) {
     lv_obj_t* screen = lv_screen_active();
+
+    // the kernel starts LVGL on its default theme in blue. The same theme again, dark as before
+    // and in the same font, recolors every widget on every page, the ones already made included
+    lv_display_t* display = lv_display_get_default();
+    lv_display_set_theme(display, lv_theme_default_init(display, lv_color_hex(kThemePrimaryColor),
+                                                        lv_color_hex(kThemeSecondaryColor),
+                                                        LV_THEME_DEFAULT_DARK,
+                                                        lv_theme_get_font_normal(screen)));
 
     header_ = lv_obj_create(screen);
     lv_obj_set_size(header_, LV_HOR_RES, kHeaderHeightPx);

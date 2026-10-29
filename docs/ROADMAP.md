@@ -274,7 +274,7 @@ defaults shipped here.
       via `runCheck()`/`runChecks()`, without needing the device to already be constructed. `gui::
       DiagnosticsPage` re-runs every registered check on a 250ms poll, not just at startup, so a
       sensor knocked loose mid-match shows up too, and lists failures with what's actually plugged in
-      instead; optionally raises a red header banner via `Gui::showWarning()`/`clearWarning()` so a bad
+      instead; optionally raises a purple header banner via `Gui::showWarning()`/`clearWarning()` so a bad
       sensor is visible from any tab. Every change of verdict is also logged (`device` events:
       missing, lost, back), so a sensor that came loose mid-match is in the SD log with its port.
 - [x] Motor health telemetry: `Logger::motor(name, port)` logs any motor's volts, current,
