@@ -122,6 +122,26 @@ test('maxVolts caps every wheel, and the move still lands', () => {
   assert.ok(Math.hypot(sim.world.truth.xIn - 12, sim.world.truth.yIn + 10) < 1);
 });
 
+test('setSpeedLimit() caps the motions after it, below their own maxVolts, until it\'s lifted', () => {
+  const worst = [0, 0];
+  let leg = 0;
+  const sim = run(START, function* (a) {
+    a.setPose(0, -40, 0);
+    a.setSpeedLimit(4);
+    assert.equal(a.speedLimit(), 4);
+    yield* a.moveToPose(12, -10, 0, { maxVolts: 8, timeoutMs: 8000 });
+    a.setSpeedLimit(12);
+    leg = 1;
+    yield* a.moveToPoint(0, -40);
+  }, { during: (s) => {
+    const v = s.robot.drivetrain.applied;
+    worst[leg] = Math.max(worst[leg], Math.abs(v.forward) + Math.abs(v.strafe) + Math.abs(v.turn));
+  } });
+  assert.ok(worst[0] <= 4 + 1e-9, `a wheel got ${worst[0].toFixed(2)}V under the limit`);
+  assert.ok(worst[1] > 6, `and ${worst[1].toFixed(2)}V once it was lifted`);
+  assert.ok(Math.hypot(sim.world.truth.xIn, sim.world.truth.yIn + 40) < 1);
+});
+
 test('drive() and strafe() go straight, robot-relative', () => {
   const sim = run({ xIn: 0, yIn: -40, headingDeg: 90 }, function* (a) {
     a.setPose(0, -40, 90);

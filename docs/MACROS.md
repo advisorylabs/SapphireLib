@@ -198,10 +198,11 @@ controller line shows which branch is in charge (`track`, `seat`, `rest`, `no se
 | `update()` | drives it | ignored, with a one-time warning (two loops on one motor group fight) |
 | While disabled | nothing runs | brakes with its PID cleared, so nothing winds up while VEXos ignores the motors |
 
-Manual mode is the smallest change from a hand-written loop (96671H's lift works this way). But
-nothing drives the mechanism while your loop isn't running, and its motors keep whatever was last
-sent, so stop it explicitly before anything blocks the loop. Use task mode whenever autonomous moves
-the mechanism.
+Manual mode is the smallest change from a hand-written loop. But nothing drives the mechanism while
+your loop isn't running, and its motors keep whatever was last sent, so stop it explicitly before
+anything blocks the loop. Use task mode whenever autonomous moves the mechanism. 96671H's lift
+started out in manual mode and moved to task mode once its autons needed it: the per-tick function
+kept computing the target every tick, and only its `lift.update(now)` call went.
 
 In both modes, commands and queries are safe from any task: they go through lock-free atomics,
 never a mutex, so a competition task PROS deletes mid-call can't leave a lock held. `setTarget()`
@@ -260,6 +261,12 @@ if (master.pressed(Button::l1)) levels.up();          // stops at the top
 if (master.pressed(Button::right)) levels.nextTable(); // keeps the level, capped
 lift.setTarget(levels.levelPosition());
 ```
+
+A table without the lowest levels the others have can number its levels from higher up:
+`{"CENTER", {0, 225, 450}, /*firstLevelNumber=*/2}` calls its level 1 "level 2". `levelNumber()` is
+that number, for screens, while `level()`, `setLevel()` and the positions still go by the table's
+own index. Switching tables carries the number over, so ALLIANCE's level 2 goes to CENTER's level 1,
+and ALLIANCE's level 1, which CENTER doesn't have, also to CENTER's level 1.
 
 `midpointBelow(level)` answers "halfway to the level below", a common way to score. It holds numbers
 only; feeding them to a mechanism is your code's job. It's the most optional primitive here: if your

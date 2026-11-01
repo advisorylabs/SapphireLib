@@ -58,7 +58,8 @@ constexpr std::int8_t kHorizontalTracking = 3;
 constexpr std::array<std::int8_t, 3> kLiftMotors{14, -13, -10};
 // A limit switch the lift presses at the bottom of its travel, on a 3-wire
 // port. Each press zeroes the lift's encoders, and a lift heading for the
-// bottom drives down until it's pressed.
+// bottom creeps down until it's pressed (only so far past where the encoders
+// put the bottom, see macros.cpp).
 constexpr char kLiftBottomSwitch = 'A';
 // Sees a pin in the claw: autoClaw closes on it at the bottom, and the Branch
 // autons pick their branch by it.
@@ -105,9 +106,7 @@ constexpr double kHorizontalWheelDiameterIn = 2.043;
 // wrong for the competition robot until it's measured: run the Odom page's
 // "Calibrate Offsets", which applies what it measures to the running odometry
 // and shows the numbers, but doesn't change this file: copy them in here to
-// keep them. Orbit mode (driver.cpp) leans on these too: they're how the
-// tracking wheels tell turning from moving, so wrong ones make every turn of
-// an orbit read as drifting off the circle, and the radius hold "corrects" it.
+// keep them.
 //
 // Mind the vertical wheel's sign, which is the opposite of what you'd guess
 // (see OdometryConfig): positive is LEFT of center. A vertical wheel on the

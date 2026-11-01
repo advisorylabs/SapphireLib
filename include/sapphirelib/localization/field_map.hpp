@@ -105,6 +105,44 @@ public:
     double castRayAtHeadingIn(double xIn, double yIn, double headingDeg) const;
 
     /**
+     * @brief Get the distance to the nearest thing added to the map (addSegment(), addBox()) anywhere
+     * in a cone, the way a distance sensor's beam sees it
+     *
+     * A V5 Distance Sensor's beam is a cone, and it reads the nearest thing anywhere in it: a narrow
+     * object, like a loader, well off the beam's center, which a single ray would miss. Only
+     * segments turned within 60 degrees of facing the beam count: one running along the beam, like
+     * the side of a box seen from beside it, sends too little back to be what the sensor reads. The
+     * walls aren't counted here (castRayIn() has them, and castBeamIn() takes both)
+     *
+     * @param xIn the cone's tip x, in inches
+     * @param yIn the cone's tip y, in inches
+     * @param dirX the cone's center direction x. (dirX, dirY) must be a unit vector
+     * @param dirY the cone's center direction y
+     * @param halfAngleDeg how far either side of its center the cone reaches, in degrees. 0 or
+     * less sees nothing
+     * @return double straight-line distance from the tip to the nearest point of an added segment
+     * inside the cone, in inches. Infinity if none of them is
+     */
+    double castConeIn(double xIn, double yIn, double dirX, double dirY, double halfAngleDeg) const;
+
+    /**
+     * @brief Get what a distance sensor's beam reads: the walls along its center ray, or anything
+     * added to the map anywhere in its cone, whichever is nearer
+     *
+     * The walls stay the center ray's: at a slant, how short of it a wall reads is the sensor's
+     * own (see MountCalibrationResult::beamShape)
+     *
+     * @param xIn the sensor face's x, in inches
+     * @param yIn the sensor face's y, in inches
+     * @param dirX the beam's direction x. (dirX, dirY) must be a unit vector
+     * @param dirY the beam's direction y
+     * @param halfAngleDeg the cone's half angle, in degrees (BeamModel::coneHalfAngleDeg). 0 is
+     * castRayIn()
+     * @return double distance to what it reads, in inches. Infinity if it would see nothing
+     */
+    double castBeamIn(double xIn, double yIn, double dirX, double dirY, double halfAngleDeg) const;
+
+    /**
      * @brief Whether a point is inside the perimeter walls
      */
     bool contains(double xIn, double yIn) const;
@@ -201,6 +239,74 @@ private:
     std::size_t perimeterEdges_ = 0;
     double dirX_ = 0.0;
     double dirY_ = 0.0;
+};
+
+/**
+ * @brief FieldMap::castConeIn() for many cones pointing the same way, from different tips
+ *
+ * The beam's cone, as ParallelRayCaster is its center ray: every particle shares the robot's
+ * heading, so all of one sensor's cones point the same way. aim() puts each added segment in the
+ * cones' own frame (along the beam, and across it) once, leaving out any that don't face the beam,
+ * so each castIn() is a few subtractions per segment, and a segment well clear of the cone is
+ * passed over after a few more. Only the segments added to the map: the walls are the center
+ * ray's. Agrees with castConeIn() up to rounding
+ *
+ * @b Example
+ * @code {.cpp}
+ * using namespace sapphirelib::localization;
+ * FieldMap map = FieldMap::centered();
+ * map.addBox(-70.25, -60.82, -66.51, -56.8); // a loader
+ * ConeCaster cone;
+ * cone.aim(map, -1.0, 0.0, 15.0);            // every cone points along -x, 15 degrees either side
+ * double loader = cone.castIn(-57.6, -54.8); // as map.castConeIn(-57.6, -54.8, -1, 0, 15)
+ * @endcode
+ */
+class ConeCaster {
+public:
+    /**
+     * @brief Point every cone one way, against a map's added segments
+     *
+     * @note keeps its storage, so it only allocates the first time it sees a map this size
+     *
+     * @param map what the cones can see. Only read here; later changes to it aren't seen
+     * @param dirX the cones' center direction x. (dirX, dirY) must be a unit vector
+     * @param dirY the cones' center direction y
+     * @param halfAngleDeg how far either side of its center each cone reaches, in degrees. 0 or
+     * less sees nothing
+     */
+    void aim(const FieldMap& map, double dirX, double dirY, double halfAngleDeg);
+
+    /**
+     * @brief Get the distance from a cone's tip to the nearest added segment inside it
+     *
+     * @param xIn the tip's x, in inches
+     * @param yIn the tip's y, in inches
+     * @return double straight-line distance to the nearest point inside the cone, in inches.
+     * Infinity if there's none
+     */
+    double castIn(double xIn, double yIn) const;
+
+private:
+    // one added segment in the cones' frame, measured from the field's origin: its ends and its
+    // middle along the beam and across it, half its length, and 1 / its length squared
+    struct Edge {
+        double along1;
+        double across1;
+        double along2;
+        double across2;
+        double alongMiddle;
+        double acrossMiddle;
+        double halfLength;
+        double inverseLengthSquared;
+    };
+
+    double dirX_ = 0.0;
+    double dirY_ = 0.0;
+    // tan(the half angle): inside the cone, |across| <= this * along
+    double slope_ = 0.0;
+    // sqrt(1 + slope_^2), which puts a distance in the units of that test
+    double slopeNorm_ = 1.0;
+    std::vector<Edge> edges_;
 };
 
 } // namespace sapphirelib::localization

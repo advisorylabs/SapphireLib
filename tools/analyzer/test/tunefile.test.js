@@ -43,7 +43,7 @@ test('LOCALIZER_SETTINGS mirrors the C++ table, key for key and range for range'
   const cpp = fs.readFileSync(path.join(repo, 'src', 'sapphirelib', 'localization', 'localizer_config.cpp'), 'utf8');
   const rows = [...cpp.matchAll(/\{\{"([\w.]+)", ([-\d.e]+), ([-\d.e]+), (true|false)\}/g)]
     .map((m) => ({ key: m[1], min: Number(m[2]), max: Number(m[3]), whole: m[4] === 'true' }));
-  assert.equal(rows.length, 26);
+  assert.equal(rows.length, 27);
   assert.deepEqual(TF.LOCALIZER_SETTINGS.map(({ key, min, max, whole }) => ({ key, min, max, whole })), rows);
   for (const s of TF.LOCALIZER_SETTINGS) {
     assert.ok(s.default >= s.min && s.default <= s.max, `${s.key} default in range`);

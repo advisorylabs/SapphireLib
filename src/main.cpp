@@ -3,13 +3,14 @@
  *
  * PROS's competition callbacks, and nothing else: each one hands off to the
  * robot program in src/robot/ (ports in include/robot/config.hpp, devices,
- * screen, autons, tuning, telemetry, driver control, and the
- * lift/claw/extender macros).
+ * screen, autons, tuning, telemetry, driver control, the lift/claw/extender
+ * macros, and the auto cycle).
  *
  * Team 96671H: Hitmen
  */
 
 #include "main.h"
+#include "robot/autocycle.hpp"
 #include "robot/devices.hpp"
 #include "robot/driver.hpp"
 #include "robot/macros.hpp"
@@ -40,6 +41,11 @@ void initialize() {
     // the card is checked and the file opened on the logger's own task.
     robot::startTelemetry();
     SAPPHIRELIB_LOG_INFO("init", "telemetry started");
+
+    // The lift's own loop, from here on through autonomous and driver
+    // control. After startTelemetry(), whose lift step listener has to be in
+    // place before the task starts.
+    robot::macros::startLift();
 
     // Pages need the devices (and the Home page the logger); also starts the
     // screen refreshing.
@@ -110,16 +116,21 @@ void opcontrol() {
         // the driver asked for next to what the robot did.
         robot::logDriver(controller);
 
-        // Claw, lift, and extender buttons (R1/R2/L1/L2/Y/RIGHT/LEFT). Runs
-        // ahead of the busy check below, so they keep working during a GUI
-        // routine.
+        // Claw, lift, and extender buttons (R1/R2/L1/L2/Y/DOWN/RIGHT/LEFT). Runs
+        // ahead of the busy checks below, so they keep working during a GUI
+        // routine and the auto cycle.
         robot::macros::update(controller);
 
-        // Skip driving from the sticks (and B/DOWN, the drive modes) while a
-        // GUI routine (the Odom page's offset calibration, or a PID tuner
-        // test or Auto-Tune run) is driving the chassis on its own, see
-        // robot::screenBusy().
-        if (!robot::screenBusy()) robot::drive(controller);
+        // A starts the auto cycle, which drives the chassis itself between the
+        // matchloader and a goal; A again or any drive stick ends it, and the
+        // sticks drive from that same tick. See robot/autocycle.hpp.
+        const bool cycling = robot::autocycle::update(controller);
+
+        // Skip driving from the sticks (and B, the drive's invert) while the
+        // auto cycle or a GUI routine (the Odom page's offset calibration, or
+        // a PID tuner test or Auto-Tune run) is driving the chassis on its
+        // own, see robot::screenBusy().
+        if (!cycling && !robot::screenBusy()) robot::drive(controller);
 
         // X+UP runs the selected auton, off the field only. Every tick, busy
         // or not, see shortcuts().

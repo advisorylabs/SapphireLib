@@ -57,6 +57,7 @@
     { key: 'filter.beam.minSigmaIn', min: 0.01, max: 20, whole: false, default: 0.6 },
     { key: 'filter.beam.sigmaFraction', min: 0, max: 1, whole: false, default: 0.05 },
     { key: 'filter.beam.outlierProbability', min: 0.001, max: 0.99, whole: false, default: 0.1 },
+    { key: 'filter.beam.coneHalfAngleDeg', min: 0, max: 45, whole: false, default: 15 },
     { key: 'filter.resampleThreshold', min: 0, max: 1, whole: false, default: 0.5 },
     { key: 'filter.recovery.enabled', min: 0, max: 1, whole: true, default: 1 },
     { key: 'filter.recovery.slowRate', min: 0, max: 1, whole: false, default: 0.01 },

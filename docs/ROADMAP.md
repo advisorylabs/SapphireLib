@@ -512,6 +512,45 @@ defaults shipped here.
       [`docs/QUICKSTART.md`](QUICKSTART.md) is the guide. Host-tested in `turn_math_test.cpp` and
       `wall_reset_test.cpp`, and against the simulated robot in `tools/sim/test/auton.test.js`. **Not
       yet run on the robot.**
+- [x] The auto cycle again (2026-10-31), as a plain routine on the auton functions this time
+      (`src/robot/autocycle.cpp`): A in driver control backs off the right-hand matchloader into
+      line with the goal, turns right, drives up to 2in short of the goal point and creeps the rest
+      at 6V, waits for the driver's score to open the claw, and drives back to wait for the driver's
+      R1 on the next pin. It runs on `runAsync()`'s task, so the macros keep the lift and claw on
+      the driver's buttons the whole time; any drive stick or A ends it with `cancelMotion()`. Logs
+      where it stopped at each end (`autocycle` events) for tuning its points. First run
+      (SL000028) found the three fixes below; with its points tuned on the second (SL000029), its
+      motions are chained between the goal and the loader, the drive after each turn a
+      `moveToPose()` to finish the chained turn. **Not yet run chained.**
+- [x] From that first run (2026-10-31):
+      - **Motions stalled just short.** Near the target a PID asks for less than it takes to start
+        the robot moving, so turns sat 5.5° short at 1.5V and moves sat 1in off sideways at 2.2V
+        (the asterisk's center wheels drag sideways), each until its 3s timeout. Every
+        `HolonomicDrivetrain` motion now pushes with at least `DrivetrainConfig::minForwardVolts`,
+        `minStrafeVolts` and `minTurnVolts` (96671H's 1, 4 and 2.5; strafing at 3V only crept, in
+        SL000029) until it's first within its threshold, never against the PID's braking. The floor
+        comes back if the error grows past twice the threshold: creeping into the goal, the robot
+        pressed on it, twisted 6° and stayed there, with 1.5V too little to turn back (SL000030).
+      - **The drive braked early.** The rotation sensors' positions changed every other 10ms
+        update, so the derivative terms read double then zero, and with the output clamped at 12V
+        the drive PID braked about twice as hard as designed from 17in out. `RotationTrackingWheel`
+        now sets a 5ms data rate.
+      - **The localizer mistook the loader for the wall.** From the cycle's start the front sensor
+        read the loader's face, and with only the walls in its map the localizer moved the robot
+        3.7in toward the wall, so it backed out too far and came back short of the loader. 96671H's
+        map now has the four loaders.
+- [x] The beam's cone in the localizer (2026-10-31). A sensor reads the nearest thing anywhere in its
+      beam's cone, and from beside a loader the face of one just off the center ray read like the
+      wall behind it from 3.7in nearer: in SL000035 the localizer chose that and stopped the robot
+      3.3in short of the loader. `FieldMap::castBeamIn()` reads the walls along the center ray as
+      before and anything added to the map anywhere in the cone (`BeamModel::coneHalfAngleDeg`, 15°,
+      from three logs' readings of the loaders), faces turned more than 60° from the beam left out;
+      `ConeCaster` does it for every particle at once, beside `ParallelRayCaster`, and a walls-only
+      map is unchanged (the golden run too). The loaders went back to their real 4.02in width.
+      Tested in `field_map_test.cpp` (against rays 0.005° apart, and the caster against the exact
+      version) and `particle_filter_test.cpp` (SL000035's approach: the center ray picks where the
+      localizer went, the cone where the robot was). The simulator carries the setting but still
+      reads the center ray. **Not yet run on the robot.**
 
 **Deliverable:** Tools that make tuning and debugging fast during practice. **The brain-screen GUI has
 been confirmed working on real hardware**; tab bar height has been bumped twice in response to that

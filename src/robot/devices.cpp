@@ -48,9 +48,22 @@ HolonomicDrivetrain& drivetrain() {
     static HolonomicDrivetrain instance(
         ports::kFrontLeft, ports::kFrontRight, ports::kBackLeft, ports::kBackRight, Gearset::blue,
         ports::kImu,
+        // The min*Volts push a motion on until it's first within its exit
+        // threshold. Each is over what starts the robot moving that way from
+        // rest, more than the axis model's kS (measured moving, see
+        // initDevices()): a turn sat 5.5 degrees short at 1.5V until it timed
+        // out (SL000028), and 1.6V took 0.9s over the last 6 (SL000022); 2.5V
+        // finishes 90 degree turns 1 degree short. The center wheels drag
+        // sideways: a move sat 1in off sideways at 2.2V (SL000028), 2.5V didn't
+        // strafe either (SL000024), and 3V only crept, about 1in/s, so two
+        // moves spent 2-3s on the last 1.5in (SL000029). Lower one if its
+        // motions overshoot the threshold, raise it if they still stall.
         DrivetrainConfig{.wheelDiameterIn = kDriveWheelDiameterIn,
                          .externalGearRatio = 1.0,
-                         .headingCorrectionKP = 0.4},
+                         .headingCorrectionKP = 0.4,
+                         .minForwardVolts = 1.0,
+                         .minStrafeVolts = 4.0,
+                         .minTurnVolts = 2.5},
         // Auto-Tune's gains for the PID page's Drive and Turn entries,
         // designed from the axis models in initDevices(). kI/kD are
         // continuous-time gains (per second), not per control tick, see
@@ -128,6 +141,39 @@ Odometry& odometry() {
     return instance;
 }
 
+namespace {
+
+// What the localizer's sensors can see: the perimeter, and Override's four
+// loaders, fixed to red's and blue's walls. Each reaches 3.74in in from its
+// wall, is 4.02in wide, and is centered 11.44in from an end wall (the
+// manual's Appendix A). With only the walls to explain the front sensor
+// reading a loader's face, the localizer put the robot 3.7in nearer the wall
+// than it was (SL000028). A sensor sees a loader well off its beam's center,
+// which the localizer models as the beam's cone (BeamModel::coneHalfAngleDeg).
+// Only the faces a sensor out on the field can see: the back one is the
+// wall's.
+FieldMap fieldMap() {
+    constexpr double kHalfIn = sapphirelib::localization::kVrcFieldSizeIn / 2.0;
+    constexpr double kLoaderDepthIn = 3.74;
+    constexpr double kLoaderFromEndWallIn = 11.44;
+    constexpr double kLoaderHalfWidthIn = 4.02 / 2.0;
+    FieldMap map = FieldMap::centered();
+    for (const double side : {-1.0, 1.0}) {    // red's wall, then blue's
+        for (const double end : {-1.0, 1.0}) { // the near end, then the far one
+            const double wallX = side * kHalfIn;
+            const double faceX = side * (kHalfIn - kLoaderDepthIn);
+            const double nearY = end * (kHalfIn - kLoaderFromEndWallIn) - kLoaderHalfWidthIn;
+            const double farY = nearY + 2.0 * kLoaderHalfWidthIn;
+            map.addSegment({faceX, nearY, faceX, farY});
+            map.addSegment({wallX, nearY, faceX, nearY});
+            map.addSegment({wallX, farY, faceX, farY});
+        }
+    }
+    return map;
+}
+
+} // namespace
+
 MonteCarloLocalizer& localizer() {
     // Four distance sensors, one per side, watching the field walls. The
     // localizer moves its particles by odometry's own measured travel, weighs
@@ -136,11 +182,12 @@ MonteCarloLocalizer& localizer() {
     // moveToPoint()/moveToPose()/followPath() drives by the corrected pose
     // with the same Auto-Tuned PIDs. Heading stays the IMU's.
     //
-    // The map is just the perimeter, origin in the middle of the field.
-    // Game elements get pushed around, and one in the map where it no longer
-    // is does more harm than one missing from it: a reading off something
-    // that isn't in the map is treated as an outlier, and the other sensors
-    // carry on. Try a change in the simulator (tools/sim) before the robot.
+    // The map is the perimeter and the four loaders (fieldMap() above), origin
+    // in the middle of the field. Game elements get pushed around, and one in
+    // the map where it no longer is does more harm than one missing from it:
+    // a reading off something that isn't in the map is treated as an outlier,
+    // and the other sensors carry on. Try a change in the simulator
+    // (tools/sim) before the robot.
     //
     // The settings are LocalizerConfig's defaults with TUNE.CFG's mcl.* lines
     // on top (see tune.hpp): what the simulator's tuner found, and what the
@@ -165,7 +212,7 @@ MonteCarloLocalizer& localizer() {
                                            .rightIn = kLeftSensorRightIn,
                                            .facingDeg = 270.0}},
         },
-        FieldMap::centered(), localizerSettings());
+        fieldMap(), localizerSettings());
     return instance;
 }
 
@@ -219,8 +266,8 @@ void initDevices() {
                             {.wallReset = {.cornerMarginIn = 18.0, .maxJumpIn = 8.0}});
 
     // Lift/claw/extender driver macros, see macros.hpp. Zeroes the lift's
-    // encoders here, and driver control's homing zeroes them again on the
-    // bottom switch (the only time the switch does).
+    // encoders here, and driver control zeroes them again on every press of
+    // the bottom switch.
     macros::initialize();
 
     // Auto-Tune's measured axis models (its readout and the SD log print

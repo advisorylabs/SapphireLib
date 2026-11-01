@@ -248,7 +248,8 @@ void MonteCarloLocalizer::update() {
             // knowing about too
             const SensorRay ray =
                 sensorRay(estimate.xIn, estimate.yIn, beamHeadingDeg, filter_.sensors()[s]);
-            beam.expectedIn = filter_.map().castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+            beam.expectedIn = filter_.map().castBeamIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY,
+                                                       filter_.config().beam.coneHalfAngleDeg);
         }
     }
     callback_(LocalizerUpdate{.timeMs = nowMs,

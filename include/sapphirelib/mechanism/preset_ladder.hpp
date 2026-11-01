@@ -14,6 +14,12 @@ struct PresetTable {
 
     /** each level's position, level 0 first */
     std::vector<double> positions;
+
+    /**
+     * the number level 1 goes by, for a table without the lowest levels the others have: with 2,
+     * its levels are numbered 0, 2, 3 and up. Level 0 is always 0. Below 1 counts as 1
+     */
+    int firstLevelNumber = 1;
 };
 
 /**
@@ -66,7 +72,9 @@ public:
     /**
      * @brief Switch to the next table, wrapping to the first
      *
-     * The level carries over, capped at the new table's top level
+     * The level's number (see levelNumber()) carries over, so tables numbered from different
+     * levels agree on which one is level 2. A number the new table doesn't have goes to the
+     * closest one it does: its level 1, or its top level
      */
     void nextTable();
 
@@ -88,11 +96,36 @@ public:
     int maxLevel() const;
 
     /**
+     * @brief Get the number the current level goes by, for screens: the level itself, but for a
+     * table with a firstLevelNumber above 1
+     */
+    int levelNumber() const;
+
+    /**
+     * @brief Get the number a level goes by in the current table
+     *
+     * @param level the level. Clamped to range
+     */
+    int levelNumber(int level) const;
+
+    /**
      * @brief Set the level
      *
      * @param level the new level. Clamped to [0, maxLevel()]
      */
     void setLevel(int level);
+
+    /**
+     * @brief Set the level by the number it goes by (see levelNumber()), for a level picked by
+     * the number a screen shows
+     *
+     * A number the current table doesn't have goes to the closest one it does, as nextTable()
+     * does: its level 1 (never level 0 for a number above 0), or its top level. 0 and below is
+     * level 0
+     *
+     * @param number the level's number
+     */
+    void setLevelNumber(int number);
 
     /**
      * @brief Go up one level, stopping at the top

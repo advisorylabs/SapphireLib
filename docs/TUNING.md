@@ -59,7 +59,7 @@ rev=8
 note=PID refinement: Turn
 pid.turn=0.442,0,0.0849        # kP,kI,kD
 model.turn=0.6,0.045,0.00992   # kS,kV,kA
-mcl.periodMs=50
+mcl.periodMs=33
 mcl.filter.motionNoise.perInch=0.07
 ```
 
@@ -214,6 +214,11 @@ step's error over time, with the gains in effect.
      step): something else is going on, like a blocked turn, contact with another robot, or a
      different load. Look at those steps in **PID responses**.
 
+The pid channels log each PID's own output. Near the end of a step a motion can push harder than
+that, at the drivetrain's floor (`DrivetrainConfig::minForwardVolts` and the rest) until it first
+gets within its threshold, and the `chassis` channel has what it really sent. Replays that don't
+know about the floor read those last few inches or degrees as faster than the gains explain.
+
 The panel shows the reasons, the recorded steps against what the old model promised and what the
 refined model predicts, and one step at a time with the replays overlaid. Tick the proposals you
 accept, then **Save TUNE.CFG** (open the card's current one first, to keep its other lines).
@@ -241,7 +246,7 @@ Before relying on it:
    Plug into a competition switch: a new file starts by itself; unplug, and it closes about 5 s
    later.
 2. **CPU.** In a match log, `H` rows' `samp_us + fmt_us` per second, and `mcl`'s `us` against its
-   50 ms period. Both are upper bounds; if either looks high, that's the first thing to report.
+   33 ms period. Both are upper bounds; if either looks high, that's the first thing to report.
 3. **TUNE.CFG.** Put the file on the card: the Home page shows its revision, and the PID page shows
    its gains. Then break a line on purpose (`pid.turn=1,2`): the Home page shows REJECTED with the
    line, and the robot runs the code's gains.

@@ -36,10 +36,16 @@ ParticleFilter::ParticleFilter(FieldMap map, std::vector<DistanceSensorMount> se
     logLikelihoods_.resize(count);
     rays_.resize(sensors_.size());
     casters_.resize(sensors_.size());
+    cones_.resize(sensors_.size());
     scorers_.resize(sensors_.size());
     usedSensors_.reserve(sensors_.size());
+    // the walls are the first four segments, and a cone only sees the rest
+    useCones_ = config_.beam.coneHalfAngleDeg > 0.0 && map_.segments().size() > 4;
     // aim each caster once, so weigh() never allocates
     for (ParallelRayCaster& caster : casters_) caster.aim(map_, 0.0, 1.0);
+    if (useCones_) {
+        for (ConeCaster& cone : cones_) cone.aim(map_, 0.0, 1.0, config_.beam.coneHalfAngleDeg);
+    }
 }
 
 void ParticleFilter::reset(double xIn, double yIn, double spreadIn) {
@@ -89,6 +95,9 @@ bool ParticleFilter::weigh(double headingDeg, std::span<const DistanceReading> r
         if (!readings[s].valid) continue;
         rays_[s] = sensorRay(0.0, 0.0, headingDeg, sensors_[s]);
         casters_[s].aim(map_, rays_[s].dirX, rays_[s].dirY);
+        if (useCones_) {
+            cones_[s].aim(map_, rays_[s].dirX, rays_[s].dirY, config_.beam.coneHalfAngleDeg);
+        }
         scorers_[s] = ReadingScorer(readings[s].distanceIn,
                                     readingSigmaIn(config_.beam, readings[s]), config_.beam);
         // the most this reading could score, from a particle exactly where it says
@@ -106,8 +115,11 @@ bool ParticleFilter::weigh(double headingDeg, std::span<const DistanceReading> r
         double logLikelihood = map_.contains(p.xIn, p.yIn) ? 0.0 : kOutsideLogPenalty;
         for (const std::size_t s : usedSensors_) {
             const SensorRay& ray = rays_[s];
-            logLikelihood +=
-                scorers_[s].logLikelihood(casters_[s].castIn(p.xIn + ray.xIn, p.yIn + ray.yIn));
+            const double xIn = p.xIn + ray.xIn;
+            const double yIn = p.yIn + ray.yIn;
+            double expectedIn = casters_[s].castIn(xIn, yIn);
+            if (useCones_) expectedIn = std::min(expectedIn, cones_[s].castIn(xIn, yIn));
+            logLikelihood += scorers_[s].logLikelihood(expectedIn);
         }
         logLikelihoods_[i] = logLikelihood;
         logWeights_[i] = (uniformWeights_ ? uniformLogWeight : logWeights_[i]) + logLikelihood;
@@ -256,7 +268,8 @@ std::size_t ParticleFilter::checkSensors(double xIn, double yIn, double headingD
         if (check.used) {
             const SensorRay ray = sensorRay(xIn, yIn, headingDeg, sensors_[s]);
             check.measuredIn = readings[s].distanceIn;
-            check.expectedIn = map_.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+            check.expectedIn = map_.castBeamIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY,
+                                               config_.beam.coneHalfAngleDeg);
             check.sigmaIn = readingSigmaIn(config_.beam, readings[s]);
             check.residualSigmas = (check.measuredIn - check.expectedIn) / check.sigmaIn;
             check.agrees = std::fabs(check.residualSigmas) <= agreementSigmas;

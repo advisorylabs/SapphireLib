@@ -330,10 +330,13 @@
   const kMinRangeMm = 20;
   const kConfidenceMinMm = 200;
 
-  /** BeamModel defaults. */
+  /**
+   * BeamModel defaults. coneHalfAngleDeg is the robot's beam cone (FieldMap::castBeamIn()), carried
+   * so a config round-trips, but not modeled here yet: this port reads along the center ray alone.
+   */
   function beamModel(overrides = {}) {
     return Object.assign(
-      { maxRangeIn: 78.0, minSigmaIn: 0.6, sigmaFraction: 0.05, outlierProbability: 0.1 },
+      { maxRangeIn: 78.0, minSigmaIn: 0.6, sigmaFraction: 0.05, outlierProbability: 0.1, coneHalfAngleDeg: 15.0 },
       overrides,
     );
   }

@@ -184,10 +184,10 @@ constexpr double kTurnStepVolts = 6.0;
 // are designed from the same axis measurements; only these specs differ.
 constexpr ResponseSpec kDriveResponse{.settleTimeS = 0.6, .dampingRatio = 1.0};
 constexpr ResponseSpec kTurnResponse{.settleTimeS = 0.5, .dampingRatio = 1.0};
-// Softer on purpose: orbiting (driver.cpp) turns the robot with the hold, to
-// keep its back to the pivot while the driver steers it around, and a hold
-// that snaps onto that as hard as an autonomous turn feels twitchy and fights
-// them whenever the robot gets bumped.
+// Softer on purpose: the hold turns the robot while a driver steers it
+// (HolonomicDrivetrain::holonomicHeadingHold()), and one that snaps back as
+// hard as an autonomous turn feels twitchy and fights them whenever the robot
+// gets bumped. Driver control doesn't use it at the moment.
 constexpr ResponseSpec kHeadingHoldResponse{.settleTimeS = 0.9, .dampingRatio = 1.0};
 // The lift, designed from its own measurement (with gravity), see
 // macros::liftExperiment(). Its loop runs at the 20ms opcontrol tick, which

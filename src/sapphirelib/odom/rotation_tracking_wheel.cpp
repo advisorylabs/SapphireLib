@@ -13,6 +13,11 @@ RotationTrackingWheel::RotationTrackingWheel(std::int8_t port, double wheelDiame
     : rotation_(port), externalGearRatio_(externalGearRatio),
       scale_(Scale{.wheelDiameterIn = wheelDiameterIn}) {
     rotation_.reset_position();
+    // fresh data at every 10ms copy into the brain's shared memory, which PROS says only a rate
+    // under 10ms guarantees. Left at the default, both of 96671H's wheels moved every other 10ms
+    // update (SL000028), and the motions' derivative terms, differencing a pose that moved in
+    // 20ms steps, read double then zero: the drive PID braked twice as hard as its gains said
+    rotation_.set_data_rate(5);
 }
 
 std::int32_t RotationTrackingWheel::readCentidegrees() const {

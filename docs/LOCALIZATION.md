@@ -26,7 +26,8 @@ Contents: [How it works](#how-it-works) · [Setting it up](#setting-it-up) ·
 
 The localizer keeps a few hundred *particles*, each one a guess at where the robot is (x and y;
 heading always comes from the IMU, which on a V5 robot is far better than anything the distance
-sensors could work out). Every 50 ms it runs three steps:
+sensors could work out). Every update (33 ms on 96671H, about as often as the sensors measure) it
+runs three steps:
 
 1. **Predict.** Move every particle by the distance odometry measured since the last update, plus a
    little random noise, because odometry isn't perfect. The cloud follows the robot and spreads out a
@@ -118,6 +119,23 @@ downfield, the same frame as `odom::Pose`. Add solid, fixed structures the senso
 `addBox()` or `addSegment()`. Leave out anything that gets pushed around. A thing in the world but not
 in the map only produces outliers, which the model shrugs off; a thing in the map that isn't there
 makes the localizer expect a wall that isn't, which is worse. The simulator's Events tab shows both.
+
+The exception is a fixed thing the sensors read *instead of* a wall from a common spot, square on, a
+few inches nearer: that isn't an outlier, it's a believable wall in the wrong place, and the
+localizer moves the robot to match. Override's loaders do this from beside them, so 96671H's map
+(`fieldMap()` in `devices.cpp`) has all four, at their real size.
+
+**The beam's cone.** A distance sensor's beam is a cone, not a ray, and it reads the nearest thing
+anywhere in it. The walls are read along each beam's center ray (how short of it one reads at a
+slant is the sensor's own, the mount calibration's beam shape), but anything added to the map is
+seen anywhere in the cone (`FieldMap::castBeamIn()`), as long as its face is turned within 60° of
+the beam: the side of a box seen from beside it sends too little back. `filter.beam.coneHalfAngleDeg`
+(15) is how far either side of center it reaches. From 96671H's logs: from 9 in out the front sensor
+read a loader's face 2 in clear of its center ray, 13° off (SL000028), and from about there read
+past one 3 in clear, 19° off (SL000034). Read along the center ray alone, the face of a loader just
+off it looks like the wall behind it seen from 3.7 in nearer, and in SL000035 the localizer chose
+that, stopping the robot 3.3 in short of the loader. The particle filter casts the cones as it does
+the rays, for every particle at once (`ConeCaster`), and only with something added to the map.
 
 ### Calibrating the mounts
 
@@ -311,6 +329,7 @@ in `TUNE.CFG` on the SD card, no rebuild needed. The whole loop is
 | `filter.particleCount` | 300 | recovery after bumps is slow, or for `relocalizeGlobally()`: 1000 costs about what 300 did before the lookup tables (1–2.5 ms an update) | the brain is short on CPU (check `mcl`'s `us`) |
 | `filter.motionNoise.perInch` | 0.05 | odometry's error outruns the cloud (worn wheels, slip): the corrected pose lags behind | the estimate wanders between readings |
 | `filter.beam.outlierProbability` | 0.1 | the field is crowded and readings are often blocked | the sensors always see clean walls and you want sharper corrections |
+| `filter.beam.coneHalfAngleDeg` | 15 | sensors read things in the map well off their beam's center that the localizer doesn't expect them to | they read past things the localizer expects them to see; 0 reads along the center ray alone |
 | `maxCorrectionRateInPerS` | 4 | corrections after a bump take too long to land | motions twitch while a correction eases in |
 | `minAgreeingSensors` | 2 | a blocked sensor ever pulls the pose | the robot rarely has two walls in range |
 | `sensorLatencyMs` | 30 | readings lag the robot at speed | never set it above what you've measured |

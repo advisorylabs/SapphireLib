@@ -171,6 +171,111 @@ void testSanitizesBadTables() {
     CHECK(holes.maxLevel() == 0);
     CHECK(holes.level() == 0);
     CHECK(holes.levelPosition() == 0.0);
+
+    // A first level number below 1 counts as 1.
+    PresetLadder low({{"ZERO", {0.0, 1.0}, 0}, {"NEGATIVE", {0.0, 1.0}, -3}});
+    CHECK(low.levelNumber(1) == 1);
+    low.nextTable();
+    CHECK(low.levelNumber(1) == 1);
+}
+
+void testFirstLevelNumber() {
+    // CENTER has no level 1: its first position above the bottom is level 2.
+    PresetLadder ladder({
+        {"ALLIANCE", {0, 150, 300, 450, 600}},
+        {"CENTER", {0, 300, 450}, /*firstLevelNumber=*/2},
+    });
+    CHECK(ladder.levelNumber() == 0);
+    CHECK(ladder.levelNumber(1) == 1); // the default numbers levels as they are
+    CHECK(ladder.levelNumber(4) == 4);
+    ladder.nextTable();
+    CHECK(ladder.levelNumber(0) == 0); // the bottom is always 0
+    CHECK(ladder.levelNumber(1) == 2);
+    CHECK(ladder.levelNumber(2) == 3);
+    CHECK(ladder.levelNumber(9) == 3);  // clamped to the top level
+    CHECK(ladder.levelNumber(-1) == 0); // clamped to level 0
+    // Positions, maxLevel(), up() and down() still go by the level.
+    CHECK(ladder.maxLevel() == 2);
+    CHECK(ladder.up());
+    CHECK(ladder.level() == 1);
+    CHECK(ladder.levelNumber() == 2);
+    CHECK(ladder.levelPosition() == 300.0);
+
+    // The number carries over between tables, not the level.
+    ladder.nextTable(); // CENTER's 2 is ALLIANCE's level 2
+    CHECK(ladder.level() == 2);
+    CHECK(ladder.levelNumber() == 2);
+    CHECK(ladder.levelPosition() == 300.0);
+    ladder.setLevel(3);
+    ladder.nextTable(); // and ALLIANCE's 3, CENTER's level 2
+    CHECK(ladder.level() == 2);
+    CHECK(ladder.levelNumber() == 3);
+
+    // ALLIANCE's level 1 has no number in CENTER: up off the bottom, it stays up, on CENTER's
+    // level 1.
+    ladder.selectTable(0);
+    ladder.setLevel(1);
+    ladder.nextTable();
+    CHECK(ladder.level() == 1);
+    CHECK(ladder.levelNumber() == 2);
+
+    // Above CENTER's top, capped there.
+    ladder.selectTable(0);
+    ladder.setLevel(4);
+    ladder.nextTable();
+    CHECK(ladder.level() == 2);
+    CHECK(ladder.levelNumber() == 3);
+
+    // The bottom stays the bottom.
+    ladder.setLevel(0);
+    ladder.nextTable();
+    CHECK(ladder.level() == 0);
+    ladder.nextTable();
+    CHECK(ladder.level() == 0);
+}
+
+void testSetLevelNumber() {
+    PresetLadder ladder({
+        {"ALLIANCE", {0, 150, 300, 450, 600}},
+        {"CENTER", {0, 300, 450}, /*firstLevelNumber=*/2},
+    });
+    ladder.setLevelNumber(3); // numbered as they are
+    CHECK(ladder.level() == 3);
+    ladder.setLevelNumber(9); // capped at the top
+    CHECK(ladder.level() == 4);
+    ladder.setLevelNumber(0);
+    CHECK(ladder.level() == 0);
+    ladder.setLevelNumber(-2); // below 0 is the bottom too
+    CHECK(ladder.level() == 0);
+
+    ladder.nextTable();
+    ladder.setLevelNumber(3);
+    CHECK(ladder.level() == 2);
+    CHECK(ladder.levelNumber() == 3);
+    ladder.setLevelNumber(2);
+    CHECK(ladder.level() == 1);
+    CHECK(ladder.levelPosition() == 300.0);
+    // CENTER has no 1: up off the bottom, to its first level up.
+    ladder.setLevelNumber(0);
+    ladder.setLevelNumber(1);
+    CHECK(ladder.level() == 1);
+    CHECK(ladder.levelNumber() == 2);
+    ladder.setLevelNumber(7);
+    CHECK(ladder.level() == 2);
+
+    // Every level's own number sets that level, in every table.
+    for (std::size_t table = 0; table < ladder.tableCount(); ++table) {
+        ladder.selectTable(table);
+        for (int level = 0; level <= ladder.maxLevel(); ++level) {
+            ladder.setLevelNumber(ladder.levelNumber(level));
+            CHECK(ladder.level() == level);
+        }
+    }
+
+    // A table with nothing above the bottom has only level 0 to go to.
+    PresetLadder flat({{"FLAT", {0.0}}});
+    flat.setLevelNumber(2);
+    CHECK(flat.level() == 0);
 }
 
 } // namespace
@@ -248,6 +353,7 @@ void testMatchesOriginalModeLogic() {
         }
         CHECK(ladder.tableIndex() == original::state.mode);
         CHECK(ladder.level() == original::state.level);
+        CHECK(ladder.levelNumber() == original::state.level);
         CHECK(ladder.maxLevel() == original::maxLevel());
         CHECK(std::strcmp(ladder.tableName(), original::currentMode().name) == 0);
         // The three lift targets liftTargetDeg() could pick.
@@ -272,6 +378,8 @@ int main() {
     testLevelPositionClamps();
     testMidpointBelow();
     testSanitizesBadTables();
+    testFirstLevelNumber();
+    testSetLevelNumber();
     testMatchesOriginalModeLogic();
     std::puts("preset_ladder_test: all assertions passed");
     return 0;

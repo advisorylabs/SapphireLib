@@ -131,6 +131,26 @@ struct Options {
     double exitError = 0.0;
 };
 
+/**
+ * @brief Slow every motion from the next one on: each runs at no more than this many volts, or
+ * its own Options::maxVolts (PathOptions::maxVolts) if that's lower. For a stretch driven gently,
+ * up to a game element a sensor grabs by itself, say. A motion already running keeps the limit it
+ * started with. followTrajectory() isn't limited: its plan sets its own speeds
+ *
+ * @param volts the limit, 0 to 12. 12, the default, is none
+ *
+ * @b Example
+ * @code {.cpp}
+ * setSpeedLimit(5);
+ * moveToPoint(0, 24); // at 5V
+ * setSpeedLimit(12);  // full speed again
+ * @endcode
+ */
+void setSpeedLimit(double volts);
+
+/** @brief The limit setSpeedLimit() last set: 12 for none. Safe from any task */
+double speedLimit();
+
 /** turn to the right (heading increasing), even when left is shorter: turnTo(180, clockwise) */
 inline constexpr motion::TurnDirection clockwise = motion::TurnDirection::clockwise;
 

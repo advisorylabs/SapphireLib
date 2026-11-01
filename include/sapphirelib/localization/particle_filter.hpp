@@ -240,8 +240,11 @@ public:
     /**
      * @brief Weigh every particle by how well it explains the sensor readings
      *
-     * Every particle shares the heading, so each sensor's rays are cast with a ParallelRayCaster
-     * and scored with a ReadingScorer: no division, exp() or log() per particle per sensor
+     * What a sensor should read from a particle is FieldMap::castBeamIn(): the walls along its
+     * center ray, and anything added to the map anywhere in its cone (BeamModel::coneHalfAngleDeg).
+     * Every particle shares the heading, so each sensor's rays are cast with a ParallelRayCaster,
+     * its cones with a ConeCaster (only with something added to the map), and both scored with a
+     * ReadingScorer: no division, exp() or log() per particle per sensor
      *
      * @param headingDeg the robot's heading, in degrees clockwise from +y
      * @param readings one per sensor, in the order they were given to the constructor. Invalid
@@ -346,6 +349,9 @@ private:
     std::vector<double> logLikelihoods_;
     std::vector<SensorRay> rays_;
     std::vector<ParallelRayCaster> casters_;
+    std::vector<ConeCaster> cones_;
+    // whether the beams' cones can see anything: a cone, and something added to the map
+    bool useCones_ = false;
     std::vector<ReadingScorer> scorers_;
     std::vector<std::size_t> usedSensors_;
 

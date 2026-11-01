@@ -40,9 +40,7 @@ Contents: [Before you start](#before-you-start) · [1. Macros and lift heights](
   bottom switch, the claw piston and the extender get their check in step 1.
 - [ ] **The drive controls** ([`driver.cpp`](../src/robot/driver.cpp)). Driving is robot-centric
   holonomic split arcade: the left stick drives and strafes, the right stick turns, and B swaps front
-  and back. Steps 3, 5 and 6 spin and drive the robot with the sticks. DOWN orbits a pivot behind the
-  robot, turning it with the heading-hold PID that step 5 tunes and telling turning from moving with
-  step 3's wheel offsets, so leave orbiting alone until both are in.
+  and back. Steps 3, 5 and 6 spin and drive the robot with the sticks.
 - [ ] `kDriveWheelDiameterIn` in `config.hpp` and the drivetrain's `externalGearRatio` in
   [`devices.cpp`](../src/robot/devices.cpp). Push each stick: every wheel turns the way it should.
   Step 3b's Wheel button measures the diameter `driveDistance()` really needs.
@@ -74,18 +72,16 @@ Yours to finish first. Everything here is a constant at the top of
 | `kLiftMotors` (`config.hpp`) | 14, -13, -10 | the lift's motors, all driven together; add or remove one and everything that drives, checks, logs or shows them follows |
 | `kLiftBottomSwitch`, `kClawPiston`, `kExtenderPiston` (`config.hpp`) | 'A', 'B', 'H' | the 3-wire ports: the lift's bottom switch, the claw and the extender |
 | `ladder` | placeholders | each goal's level heights, in motor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift rests on its switch and autoClaw picks up pins, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has. Names show on the controller, 8 characters at most |
-| `kPieceDetectMm` | 80 | the claw's distance sensor reading at or under which a pin counts as in the claw |
-| `kAutoClawDetectMs` | 0 | how long the sensor must see a pin, without a break, before autoClaw closes the claw on it. 0 closes it on the first reading |
-| `kAutoClawClearMs` | 0 | once the claw opens on a pin, how long the sensor must see nothing before autoClaw can close it again. 0 is the first reading that sees nothing; raise it (it was 200) if the claw snaps shut on a pin it was just opened to drop |
-| `kAutoClawLeadMs` | 100 | driving onto a pin, autoClaw closes this many ms of travel early: the reach is `kPieceDetectMm` plus the robot's speed toward the claw's side (mm/ms, the same as m/s) times this. More if pins taken at speed end up past the claw or pushed out, less if it closes before the pin gets there |
-| `kAutoClawMaxReachMm` | 200 | the furthest out that lead ever closes the claw, however fast the robot goes |
-| `kClawFacingDeg` | 0 | which way the claw's mouth faces, degrees clockwise from the robot's front (180 the back). Only driving that way counts toward the lead |
+| `kPieceDetectMm` | 65 | where autoClaw grabs: it closes the claw the first time the claw's distance sensor reads this or closer, at any speed. Also what counts as a pin in the claw, for re-arming autoClaw and for the Branch autons |
+| `kAutoClawClearMs` | 400 | once the claw opens on a pin, how long the sensor must see the claw empty before autoClaw can close it again. Raise it if the claw snaps shut on a pin it was just opened to drop |
 | `kScoreBackOffIn` | 3 | once a score opens the claw, how far the robot must back off the goal, by the vertical tracking wheel, before the lift lowers to the bottom (L2 lowers it sooner). Needs the wheel's sign right: driving forward must raise it |
 | `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
 | `kLiftToleranceDeg` | 15 | how close the lift must get before a score's dip moves on to opening the claw |
 | `kLiftDescendTimeoutMs` | 1000 | how long a score's dip waits for the lift before opening the claw anyway |
 | `kLiftMaxDownVolts` | 9 | the most the lift is ever driven down with, 75% of full power: its loop, the seat, debug mode's L2, Auto-Tune's ramps and the Lift Testing auton all stop here. Up is still full power |
 | `kLiftDebugVolts` | 12 | debug mode: the volts L1 and L2 put on the lift motors while held (L2's capped at `kLiftMaxDownVolts`) |
+| `kClawSpeedVolts` | 5.75 | clawSpeed (DOWN): the most any drive wheel gets while it's on. autoClaw only works while clawSpeed is on |
+| `kClawSpeedOffDelayMs` | 350 | how long after the claw closes with the lift at the bottom clawSpeed turns itself off. The claw opening again first keeps it on |
 
 - [ ] **Debug mode** (Home page, **Debug**) for the checks below: L1 and L2 drive the lift motors
   directly, up and down, encoders or no encoders, and nothing else moves the lift (R2 never scores,
@@ -108,21 +104,26 @@ Yours to finish first. Everything here is a constant at the top of
   its reading along with its direction. Once L1 drives the lift up, raising it makes the
   controller's `LIFT` reading grow, which is what Auto-Tune needs to fit it.
 - [ ] **Zero.** `macros::initialize()` zeroes the encoders wherever the lift is when the program
-  starts, and driver control's homing drives it down onto the bottom switch and zeroes them there.
-  That's the only time the switch zeroes them: after homing, level 0 is encoder 0, switch or no
-  switch.
+  starts, so start it with the lift down. Every press of the bottom switch zeroes them again, since
+  they drift: each trip down to level 0 creeps onto the switch (see step 5 below), and the `events`
+  channel logs `lift_zeroed,deg=<reading>` with how far off they were.
 - [ ] **Level heights.** The controller's third line shows `LIFT reading/target`. In debug mode it
-  shows just the reading, so let the lift home first (leave debug mode at driver control's start),
-  then drive it to
-  each of a goal's heights with L1 and copy the numbers into its table. Leaving debug mode puts the
+  shows just the reading, so first lower the lift onto the bottom switch with L2, which zeroes it,
+  then drive it to each of a goal's heights with L1 and copy the numbers into its table. Leaving debug mode puts the
   lift back on its level, so expect it to move.
 - [ ] **The top of travel.** Read the encoders with the lift at its highest safe point. Step 2's
   window is set from it, and no goal's top level should be above it.
 - [ ] **`kPieceDetectMm`.** Start log, sit a pin in the claw, take it out, a few times. In the
   analyzer's **Charts**, the `mech` channel's `piece_mm` shows both readings; pick a value between.
-- [ ] **autoClaw.** Out of debug mode, lift at the bottom, R1 to open the claw with no pin in it, then
-  push a pin in: it closes. R1 to open it again on that pin: it stays open until you take the pin out
-  and put one back.
+- [ ] **autoClaw.** Out of debug mode, lift at the bottom, R1 to open the claw with no pin in it, and
+  DOWN to turn clawSpeed on (autoClaw is off without it), then push a pin in: it closes. R1 to open it
+  again on that pin: it stays open until you take the pin out and put one back. Then DOWN again, since
+  the grab turned clawSpeed off.
+- [ ] **autoClaw at speed.** With clawSpeed on, drive onto pins as you would in a match, filming in
+  slow motion.
+  The jaws should shut just as each pin reaches the back of the claw. If the claw shoves the pin first,
+  raise `kPieceDetectMm`, so it closes further out; if the pin hits jaws that are already shut, lower
+  it. Either way, keep it between the two readings from the `kPieceDetectMm` step above.
 
 Measure the heights again after step 2: a lift that settled short with the old gains lands on its
 target now, so what you read is where it really is.
@@ -224,10 +225,16 @@ In the analyzer ([`tools/analyzer`](../tools/analyzer/)):
    Copy from the analyzer, not the screen: the PID page shows gains to three decimals, and kD often
    lives in the fourth. The analyzer refits the logged run with a port of the robot's own math, so its
    numbers are the robot's, in full.
-5. [ ] **Seat volts.** If the lift heading for level 0 slows to a crawl just above its bottom stop,
-   raise `kLiftSeatVolts` (0 now). Heading for level 0 it drives down with at least that many volts,
-   without gravity volts, until its encoders read within `kLiftRestDeg` (2) of 0, then cuts power
-   and rests, whether or not the bottom switch is pressed.
+5. [ ] **The bottom approach.** Heading for level 0, the lift's loop brings it down to
+   `kLiftSlowDeg` (150), then it creeps at `kLiftSlowVolts` (4) onto the bottom switch, which zeroes
+   the encoders, and rests there. If it still carries on down past the switch, lower the volts or
+   raise the degrees; if the creep is too slow, the reverse. When the encoders read 0 before the
+   switch is pressed, it stops there, and only after `kLiftSeekWaitMs` (2s) without the switch does it
+   creep on to find it, giving up `kLiftSeekBelowDeg` (100) below 0 or `kLiftSeekTimeoutMs` (1s) into
+   the search, and resting where it is (logging `seek_failed,deg=<reading>`), so a lift held up off
+   the switch doesn't unwind. Keep `kLiftSeekBelowDeg` a little more than the
+   furthest below 0 any `lift_zeroed` event reads: that's how far the switch can be below the
+   encoders' zero.
 6. [ ] Rebuild, flash, Run Test again: the same behavior, now from the code.
 
 **Tweaking.** `kLiftResponse` in [`tuning.cpp`](../src/robot/tuning.cpp) is what the design aims for:
@@ -573,7 +580,7 @@ All in [`tuning.cpp`](../src/robot/tuning.cpp):
 | `kTurnStepVolts` | 6 | the Turn steps' volts |
 | `kDriveResponse` | 0.6 s, damping 1 | the Drive controller's spec (`driveDistance()`, and the drive term of the point motions) |
 | `kTurnResponse` | 0.5 s, damping 1 | the Turn controller's spec (`turnToHeading()`) |
-| `kHeadingHoldResponse` | 0.9 s, damping 1 | the heading hold's spec, which orbiting turns the robot with: softer on purpose, since the driver steers the robot around the pivot |
+| `kHeadingHoldResponse` | 0.9 s, damping 1 | the heading hold's spec (`holonomicHeadingHold()`): softer on purpose, since a driver steers alongside it. Driver control doesn't use it at the moment |
 
 Each spec also has `minPhaseMarginDeg` (50 unless set). More travel or volts gives the fit more
 samples at speed; fewer volts if the robot lurches or tips.
@@ -597,9 +604,8 @@ facing along it, works.
    the top speed the model predicts, in in/s for Fwd and °/s for Turn. Far from what the robot really
    does, suspect the wheel diameter or the IMU scale.
 5. [ ] **Run Test** on Drive: `driveDistance(24)`, then `driveDistance(-24)`. On Turn:
-   `turnToHeading(90)`, then back to 0. Hold has no Run Test: it's what orbiting turns the robot
-   with. Press DOWN to orbit, let go of the sticks, and push the robot's nose aside: it should come
-   back to facing away from the pivot without ringing. DOWN again to stop.
+   `turnToHeading(90)`, then back to 0. Hold has no Run Test, and driver control doesn't use it at
+   the moment, so there's nothing to check it with.
 6. [ ] Home page: **Stop log**. Copy the card.
 
 ### Judge it and hardcode it
@@ -649,7 +655,6 @@ So tweaking means changing the spec, not the gains:
 | Asking for faster changes nothing | `lag-capped` | the measured delay limits it. Lowering `minPhaseMarginDeg` (50) buys speed for ringing: 45 to 60 is usual |
 | You'd trade a little overshoot for speed | | `dampingRatio` under 1 (0.8, say) |
 | Motions stop a hair short, or time out just outside the threshold | `fric ±` wider than the exit threshold (1 in, 2°) | friction can hold the error at kS/kP, and there's no kI: a faster spec (more kP), or a wider `errorThreshold` on that motion |
-| Orbiting feels twitchy, snapping round to face away from the pivot | | raise `kHeadingHoldResponse.settleTimeS` |
 | No fit, or a low `R2` | | sensor signs, then more travel or volts |
 | Overshoots although damping is 1 | | the model is off: delay, or a different load. Step 6's Refine finds the model the real motions imply |
 

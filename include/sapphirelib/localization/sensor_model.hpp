@@ -56,6 +56,17 @@ struct BeamModel {
 
     /** the chance any one reading is an outlier, 0 to 1 */
     double outlierProbability = 0.1;
+
+    /**
+     * how far either side of its center the beam reaches, in degrees: a reading is the nearest
+     * thing added to the map (FieldMap::addBox(), addSegment()) anywhere in that cone and facing
+     * it, or the wall along the center ray if that's nearer (FieldMap::castBeamIn()). The beam is
+     * a cone, and it sees a narrow object well off its center: from 9in out, the face of a loader
+     * 2in clear of the center (96671H's SL000028), but not 3in clear (SL000034), so somewhere from
+     * 13 to 19 degrees. 0 reads along the center ray alone. Only maps with something added to them
+     * see a difference
+     */
+    double coneHalfAngleDeg = 15.0;
 };
 
 /**

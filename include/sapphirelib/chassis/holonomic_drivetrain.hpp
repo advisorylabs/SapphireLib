@@ -79,12 +79,14 @@ public:
     /**
      * @brief Drive with robot-centric holonomic control
      *
-     * The mix is scaled so no wheel goes past 12V without changing direction. How each stick
+     * The mix is scaled so no wheel goes past maxVolts without changing direction. How each stick
      * becomes volts depends on setDriverInputMode()
      *
      * @param throttle forward/backward, -1 to 1
      * @param strafe left/right, -1 to 1
      * @param turn rotation, -1 to 1
+     * @param maxVolts the most any wheel gets, for a slower drive: past it, more stick doesn't go
+     * any faster. Clamped to 12
      *
      * @b Example
      * @code {.cpp}
@@ -99,19 +101,21 @@ public:
      * }
      * @endcode
      */
-    void holonomic(double throttle, double strafe, double turn);
+    void holonomic(double throttle, double strafe, double turn, double maxVolts = 12.0);
 
     /**
      * @brief Drive each axis at a voltage, before wheel mixing
      *
      * Not affected by setDriverInputMode(), so it's for characterization runs, calibration spins,
-     * and custom controllers. Scaled like holonomic() so no wheel goes past 12V
+     * and custom controllers. Scaled like holonomic() so no wheel goes past maxVolts
      *
      * @param forwardVolts forward/backward, in volts
      * @param strafeVolts left/right, in volts
      * @param turnVolts rotation, in volts
+     * @param maxVolts the most any wheel gets. Clamped to 12
      */
-    void holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts);
+    void holonomicVolts(double forwardVolts, double strafeVolts, double turnVolts,
+                        double maxVolts = 12.0);
 
     /**
      * @brief Get the voltage last commanded on each axis, before wheel mixing
@@ -666,9 +670,6 @@ private:
 
     double degreesToInches(double degrees) const;
     void setWheelVoltages(double frontLeft, double frontRight, double backLeft, double backRight);
-
-    // holonomicVolts(), with no wheel past ceilingVolts instead of 12
-    void driveAxes(double forwardVolts, double strafeVolts, double turnVolts, double ceilingVolts);
 
     // mean of the four corner encoders, in motor degrees
     double cornerAverageDegrees() const;

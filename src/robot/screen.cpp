@@ -275,6 +275,9 @@ void runSelectedAuton() {
     // the drive stops then, even if the last motion chained into nothing.
     sapphirelib::auton::waitForMotion();
     drivetrain().stop();
+    // A routine that left setAutoClaw() on: the next one starts at full
+    // speed, and the claw stays where the routine left it.
+    macros::setAutoClaw(false);
     sapphirelib::telemetry::event("auton", "end,%s", name.c_str());
     SAPPHIRELIB_LOG_INFO("auton", "finished \"%s\"", name.c_str());
 }

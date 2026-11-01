@@ -10,6 +10,7 @@ PresetLadder::PresetLadder(std::vector<PresetTable> tables) : tables_(std::move(
     if (tables_.empty()) tables_.push_back({.name = "", .positions = {}});
     for (PresetTable& table : tables_) {
         if (table.positions.empty()) table.positions.push_back(0.0);
+        table.firstLevelNumber = std::max(table.firstLevelNumber, 1);
     }
 }
 
@@ -25,16 +26,34 @@ const char* PresetLadder::tableName() const {
 void PresetLadder::nextTable() { selectTable(table_ + 1); }
 
 void PresetLadder::selectTable(std::size_t index) {
+    const int number = levelNumber();
     table_ = index % tables_.size();
-    // the level carries over, capped if the new table has fewer levels
-    level_ = std::min(level_, maxLevel());
+    // the level's number carries over, capped if the new table has fewer levels
+    setLevelNumber(number);
 }
 
 int PresetLadder::level() const { return level_; }
 
 int PresetLadder::maxLevel() const { return static_cast<int>(positions().size()) - 1; }
 
+int PresetLadder::levelNumber() const { return levelNumber(level_); }
+
+int PresetLadder::levelNumber(int level) const {
+    level = clampLevel(level);
+    if (level == 0) return 0;
+    return level + tables_[table_].firstLevelNumber - 1;
+}
+
 void PresetLadder::setLevel(int level) { level_ = clampLevel(level); }
+
+void PresetLadder::setLevelNumber(int number) {
+    // never down to 0 from a number above it
+    if (number <= 0) {
+        level_ = 0;
+    } else {
+        level_ = clampLevel(std::max(number - tables_[table_].firstLevelNumber + 1, 1));
+    }
+}
 
 bool PresetLadder::up() {
     if (level_ >= maxLevel()) return false;

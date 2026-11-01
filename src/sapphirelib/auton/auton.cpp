@@ -1,5 +1,6 @@
 #include "sapphirelib/auton/auton.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -32,6 +33,15 @@ constexpr double kChainExitDeg = 5.0;
 
 // a sensor counts as facing a side within this many degrees of it
 constexpr double kFacingToleranceDeg = 45.0;
+
+// full power, and setSpeedLimit()'s none
+constexpr double kFullVolts = 12.0;
+
+// setSpeedLimit()'s, read as each motion starts. Any task may set it
+std::atomic<double> speedLimitVolts{kFullVolts};
+
+// a motion's top volts: its own, held to setSpeedLimit()'s
+double limitedVolts(double volts) { return std::min(volts, speedLimitVolts.load()); }
 
 // what use() was given. Set once in initialize(), before any routine runs, so unsynchronized
 chassis::HolonomicDrivetrain* holonomic = nullptr;
@@ -113,7 +123,7 @@ chassis::ExitConditions exitFor(const Options& options, double error, double cha
     chassis::ExitConditions exit{options.exitError > 0.0 ? options.exitError
                                                          : (options.chain ? chainError : error)};
     if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
-    exit.maxVolts = options.maxVolts;
+    exit.maxVolts = limitedVolts(options.maxVolts);
     exit.chain = options.chain;
     return exit;
 }
@@ -285,6 +295,16 @@ void setPose(double xIn, double yIn, double headingDeg) {
 
 odom::Pose pose() { return odometry != nullptr ? odometry->getPose() : odom::Pose{}; }
 
+void setSpeedLimit(double volts) {
+    if (std::isnan(volts)) {
+        SAPPHIRELIB_LOG_WARN("auton", "setSpeedLimit: not a number, ignored");
+        return;
+    }
+    speedLimitVolts.store(std::clamp(volts, 0.0, kFullVolts));
+}
+
+double speedLimit() { return speedLimitVolts.load(); }
+
 motion::MotionResult drive(double inches, Options options) {
     if (auto skip = begin("drive")) return *skip;
     const chassis::ExitConditions exit = exitFor(options, kExitIn, kChainExitIn);
@@ -327,7 +347,7 @@ motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg, Optio
         options.exitError > 0.0 ? options.exitError : (options.chain ? kChainExitIn : kExitIn);
     exit.headingErrorThresholdDeg = options.chain ? kChainExitDeg : kExitDeg;
     if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
-    exit.maxVolts = options.maxVolts;
+    exit.maxVolts = limitedVolts(options.maxVolts);
     exit.chain = options.chain;
     return onChassis([&](auto& drivetrain) {
         return drivetrain.moveToPose(xIn, yIn, headingDeg, *odometry, exit);
@@ -348,11 +368,12 @@ motion::MotionResult strafe(double inches, Options options) {
 motion::MotionResult followPath(std::vector<motion::Waypoint> points, PathOptions options) {
     if (auto skip = begin("followPath")) return *skip;
     const motion::Path path(std::move(points));
+    const double volts = limitedVolts(options.maxVolts);
     chassis::ExitConditions finalExit{options.chain ? kChainExitIn : kExitIn};
-    finalExit.maxVolts = options.maxVolts;
+    finalExit.maxVolts = volts;
     finalExit.chain = options.chain;
     const motion::PursuitConfig config{.lookaheadIn = options.lookaheadIn,
-                                       .cruiseVoltage = options.maxVolts,
+                                       .cruiseVoltage = volts,
                                        .finalExit = finalExit,
                                        .timeoutMs = options.timeoutMs};
     return onChassis(

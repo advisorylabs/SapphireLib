@@ -50,6 +50,24 @@ struct DrivetrainConfig {
 
     /** kP for keeping driveDistance() straight with the IMU. 0 disables it */
     double headingCorrectionKP = 0.0;
+
+    /**
+     * the least a motion pushes with on each axis, in volts, until it first gets within its exit
+     * threshold: near the target a PID alone asks for less than it takes to start the robot moving,
+     * so it would sit just outside the threshold until it timed out. Set each a little over what
+     * starts the robot moving that way from rest (more than the axis model's kS, which is measured
+     * moving). Only while the PID pushes toward the target, never against its braking, and off
+     * from when the motion first gets within the threshold until it's back past twice the
+     * threshold: a hold that drifts just past it doesn't kick, but one knocked well off it (a
+     * bump, or a robot twisted by what it's pressing on) is pushed back. 0 (the default) leaves an
+     * axis alone. HolonomicDrivetrain's driveDistance(), turnToHeading(), moveToPoint() and
+     * moveToPose() only
+     */
+    double minForwardVolts = 0.0;
+    /** see minForwardVolts: sideways, for moveToPoint() and moveToPose() */
+    double minStrafeVolts = 0.0;
+    /** see minForwardVolts: turning, for turnToHeading() and moveToPose()'s heading */
+    double minTurnVolts = 0.0;
 };
 
 /**

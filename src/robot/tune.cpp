@@ -33,7 +33,11 @@ using sapphirelib::tuning::TuneSchema;
 
 namespace {
 
-constexpr std::uint32_t kDefaultLocalizerPeriodMs = 50;
+// The distance sensors measure at about 30Hz, and PROS has no way to make them
+// faster, so the localizer reads them about that often: every reading once. Any
+// faster and it would weigh the same reading twice, as if it were two; 50ms
+// skipped a third of them.
+constexpr std::uint32_t kDefaultLocalizerPeriodMs = 33;
 
 // Everything this robot's TUNE.CFG may set besides mcl.*: the PID page's
 // seven controllers (by their telemetry channel names), Auto-Tune's three

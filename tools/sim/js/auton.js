@@ -82,6 +82,18 @@
     let planMotion = 0;
     // followTrajectory()'s plans, by the sections they're for
     const plans = new Map();
+    // setSpeedLimit()'s, read as each motion starts
+    let speedLimitVolts = 12.0;
+
+    // a motion's top volts: its own, held to setSpeedLimit()'s
+    const limitedVolts = (volts) => Math.min(volts, speedLimitVolts);
+
+    // exitFor(), with the speed limit
+    function limitedExit(options, error, chainError) {
+      const exit = exitFor(options, error, chainError);
+      exit.maxVolts = limitedVolts(exit.maxVolts);
+      return exit;
+    }
 
     const isMotionRunning = () => current !== null || waiting.length > 0;
 
@@ -160,28 +172,36 @@
         return odometry.getPose();
       },
 
+      /** setSpeedLimit(volts): every motion from the next one on, but trajectories. 12 is none. */
+      setSpeedLimit(volts) {
+        if (Number.isNaN(volts)) return;
+        speedLimitVolts = Math.min(Math.max(volts, 0.0), 12.0);
+      },
+
+      speedLimit: () => speedLimitVolts,
+
       *drive(inches, options = {}) {
         yield* begin();
-        return yield* dt.driveDistance(inches, exitFor(options, kExitIn, kChainExitIn));
+        return yield* dt.driveDistance(inches, limitedExit(options, kExitIn, kChainExitIn));
       },
 
       /** turnTo(heading, options), or turnTo(heading, a.clockwise / a.counterclockwise, options). */
       *turnTo(headingDeg, direction = 'shortest', options = {}) {
         if (typeof direction === 'object') return yield* a.turnTo(headingDeg, 'shortest', direction);
         yield* begin();
-        return yield* dt.turnToHeading(headingDeg, exitFor(options, kExitDeg, kChainExitDeg), direction);
+        return yield* dt.turnToHeading(headingDeg, limitedExit(options, kExitDeg, kChainExitDeg), direction);
       },
 
       *turnToPoint(xIn, yIn, options = {}) {
         yield* begin();
         const now = odometry.getPose();
         const bearingDeg = L.wrapDegrees360(Math.atan2(xIn - now.xIn, yIn - now.yIn) * 180.0 / Math.PI);
-        return yield* dt.turnToHeading(bearingDeg, exitFor(options, kExitDeg, kChainExitDeg));
+        return yield* dt.turnToHeading(bearingDeg, limitedExit(options, kExitDeg, kChainExitDeg));
       },
 
       *moveToPoint(xIn, yIn, options = {}) {
         yield* begin();
-        return yield* dt.moveToPoint(xIn, yIn, exitFor(options, kExitIn, kChainExitIn));
+        return yield* dt.moveToPoint(xIn, yIn, limitedExit(options, kExitIn, kChainExitIn));
       },
 
       *moveToPose(xIn, yIn, headingDeg, options = {}) {
@@ -190,7 +210,7 @@
           positionErrorThresholdIn: options.exitError > 0 ? options.exitError
             : (options.chain ? kChainExitIn : kExitIn),
           headingErrorThresholdDeg: options.chain ? kChainExitDeg : kExitDeg,
-          maxVolts: options.maxVolts === undefined ? 12.0 : options.maxVolts,
+          maxVolts: limitedVolts(options.maxVolts === undefined ? 12.0 : options.maxVolts),
           chain: options.chain === true,
         };
         if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
@@ -202,13 +222,13 @@
         const now = odometry.getPose();
         const headingRad = now.headingDeg * Math.PI / 180.0;
         return yield* dt.moveToPoint(now.xIn + inches * Math.cos(headingRad), now.yIn - inches * Math.sin(headingRad),
-          exitFor(options, kExitIn, kChainExitIn));
+          limitedExit(options, kExitIn, kChainExitIn));
       },
 
       /** followPath(points, { timeoutMs, maxVolts, lookaheadIn, chain }): PathOptions. */
       *followPath(points, options = {}) {
         yield* begin();
-        const maxVolts = options.maxVolts === undefined ? 8.0 : options.maxVolts;
+        const maxVolts = limitedVolts(options.maxVolts === undefined ? 8.0 : options.maxVolts);
         return yield* dt.followPath(waypoints(points), {
           lookaheadIn: options.lookaheadIn === undefined ? 10.0 : options.lookaheadIn,
           cruiseVoltage: maxVolts,

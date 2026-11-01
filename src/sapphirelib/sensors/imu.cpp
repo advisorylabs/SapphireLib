@@ -18,6 +18,10 @@ Imu::Imu(std::uint8_t port, double headingScale)
     if (!calibrated_) {
         SAPPHIRELIB_LOG_ERROR("imu", "port %u: calibration failed", static_cast<unsigned>(port));
     }
+    // its fastest, 5ms rather than the default 10ms, so every 10ms copy into the brain's shared
+    // memory is a fresh reading (as RotationTrackingWheel does). Only once calibrated: PROS
+    // refuses it while calibrating
+    if (calibrated_) imu_.set_data_rate(5);
     updateCumulative();
 }
 

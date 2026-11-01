@@ -320,8 +320,9 @@ void testRecoveryAfterABump() {
     }
 }
 
-// weigh() as it was before the lookup tables: castRayIn() and readingLogLikelihood() per particle
-// per sensor, and log(weight). Returns the normalized weights, and the fit recovery averages
+// weigh() as it was before the lookup tables: castBeamIn() (castRayIn() before the beam's cone)
+// and readingLogLikelihood() per particle per sensor, and log(weight). Returns the normalized
+// weights, and the fit recovery averages
 struct ExactWeigh {
     std::vector<double> weights;
     double fit = 0.0;
@@ -350,7 +351,8 @@ ExactWeigh exactWeigh(const ParticleFilter& filter, double headingDeg,
         for (std::size_t s = 0; s < readings.size(); ++s) {
             if (!readings[s].valid) continue;
             const SensorRay ray = sensorRay(p.xIn, p.yIn, headingDeg, filter.sensors()[s]);
-            const double expected = filter.map().castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+            const double expected = filter.map().castBeamIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY,
+                                                            beam.coneHalfAngleDeg);
             logLikelihood += readingLogLikelihood(readings[s].distanceIn, expected,
                                                   readingSigmaIn(beam, readings[s]), beam);
         }
@@ -408,6 +410,38 @@ void testWeighMatchesTheExactModel() {
             assert(filter.recoveryFraction() > 0.1);
         }
     }
+}
+
+void testConeTellsTheLoaderFromTheWall() {
+    // 96671H's SL000035, driving up to a loader: the front sensor reads the loader's face from
+    // 21.6in out, its center ray 3.1in clear of the face. Along the center ray alone, the wall past
+    // the loader explains that reading best from 2.7in nearer the wall, which is where the
+    // localizer put the robot; with the beam's cone, only where the robot really was explains it
+    FieldMap map = FieldMap::centered();
+    map.addSegment({-66.51, -60.82, -66.51, -56.80});
+    map.addSegment({-70.25, -60.82, -66.51, -60.82});
+    map.addSegment({-70.25, -56.80, -66.51, -56.80});
+    const std::vector<DistanceSensorMount> front{
+        {.forwardIn = 0.59, .rightIn = 3.99, .facingDeg = 0}};
+    const double heading = 270;
+    const double trueX = -44.27;
+    const double trueY = -57.66;
+    const SensorRay ray = sensorRay(trueX, trueY, heading, front[0]);
+    const DistanceReading reading{
+        .distanceIn = map.castBeamIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY, 15), .valid = true};
+    // how well one particle at a spot explains the reading, as a fraction of a perfect fit
+    const auto fitAt = [&](double x, double y, double coneHalfAngleDeg) {
+        ParticleFilterConfig config{.particleCount = 1};
+        config.beam.coneHalfAngleDeg = coneHalfAngleDeg;
+        ParticleFilter filter(map, front, config);
+        filter.reset(x, y, 0.0);
+        assert(filter.weigh(heading, std::span(&reading, 1)));
+        return filter.recoveryFit().latest;
+    };
+    expectNear(fitAt(trueX, trueY, 15), 1.0, 1e-3, "where it was, with the cone");
+    expectBelow(fitAt(-47.01, -57.16, 15), 0.2, "where the localizer put it, with the cone");
+    expectBelow(fitAt(trueX, trueY, 0), 0.2, "where it was, along the center ray alone");
+    assert(fitAt(-47.01, -57.16, 0) > 0.5);
 }
 
 void testSampleParticlesFollowsTheWeights() {
@@ -505,6 +539,7 @@ int main() {
     testBlockedSensorDoesNotDragTheEstimate();
     testRecoveryAfterABump();
     testWeighMatchesTheExactModel();
+    testConeTellsTheLoaderFromTheWall();
     testSampleParticlesFollowsTheWeights();
     testRecoveryFitReportsTheLatestFit();
     testGoldenRun();

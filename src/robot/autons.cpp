@@ -128,10 +128,11 @@ void wallResetTest() {
     resetBack();
 }
 
-// The lift's own motors, every one in config.hpp's kLiftMotors, driven
-// directly (the driver macros' lift loop only runs from opcontrol, so the two
-// never command them at once). Its position is the macros' too: motor
-// degrees, zeroed on the bottom switch, so start it with the lift down.
+// The lift's own motors, every one in config.hpp's kLiftMotors, on open loop
+// volts rather than its levels: through the lift's task (setVolts()), not
+// straight to the motors, which that task would fight. Its position is the
+// macros' too: motor degrees, zeroed on the bottom switch, so start it with
+// the lift down.
 // TODO: 1000 motor degrees of travel was the test chassis's lift; check this
 // one's before running it, or the up stroke drives into the top hard stop
 // and never ends.
@@ -141,25 +142,87 @@ void liftTesting() {
         // + is up for every lift motor (see config.hpp). With no reading
         // (every motor unplugged), both waits end at once: NaN compares
         // false.
-        lift.motors().move(127);
+        lift.setVolts(12.0);
         while (lift.position() < 1000) {
             pros::delay(2);
         }
         // Down no harder than the macros ever drive it (kLiftMaxDownVolts).
-        lift.motors().move_voltage(
-            -static_cast<std::int32_t>(lift.config().downVoltsLimit() * 1000.0));
+        lift.setVolts(-lift.config().downVoltsLimit());
         while (lift.position() > 15 && !macros::liftAtBottom()) {
             pros::delay(2);
         }
-        lift.motors().move(0);
+        lift.stop();
         pros::delay(6000);
     }
+}
+
+// The lift from autonomous: up to ALLIANCE's L3 while driving 24in out, a
+// score the way R2 does it (dip, open the claw, back off), then down to the
+// bottom on the way home. Start with a pin in the claw and the lift down.
+// Needs about 30in clear ahead; no goal needed, it scores on thin air.
+void liftExample() {
+    setPose(0, 0, 0);
+    macros::setLiftLevel(macros::Goal::alliance, 3); // start it up, without waiting...
+    drive(24);                                       // ...while driving out
+    macros::waitForLift(1500);                       // up before the dip
+    macros::setLiftDeg(macros::liftScoreDeg());      // dip, as R2 does...
+    macros::waitForLift(1000);
+    macros::setClawClosed(false); // ...and let go
+    drive(-6);                    // off the goal before lowering, as R2 waits to
+    macros::setLiftLevel(macros::Goal::alliance, 0); // down...
+    drive(-18);                                      // ...on the way home
+}
+
+// Blue side: starts with its back against the wall, facing +x. Rams the wall
+// toggles twice, scores the payload on the goal to its right, then backs off,
+// turns, and picks up the second pin.
+//
+// The localizer stays off until the end. From this spot it reads the wall
+// behind about 3in long, and expects the side sensors to see the loaders they
+// read past, so it moved the pose 3in off the wall and 5in down the field
+// before the first ram (SL000040). The rams' point was then behind the wall:
+// each pushed it for its whole 3s timeout, sliding along it, and every point
+// after was off too. Turned back on at the goal, it moved the pose 7in down
+// the field at once (SL000042): the back-off turned around and drove into
+// the goal, and the drive to the second pin ran into it too.
+void triplePin() {
+    setPose(-60.6, -5, 90);
+    setMcl(false);
+    macros::setLiftLevel(macros::Goal::alliance, 1);
+    // Out and back on the drive encoders, which the wall can't confuse: back
+    // 4in further than it went out, so it hits hard, and the timeout ends the
+    // push once it's pinned (it reaches the wall in about 0.5s).
+    for (int i = 0; i < 2; i++) {
+        drive(10, {.chain = true, .exitError = 1});
+        drive(-14, {.timeoutMs = 750});
+    }
+    // pinned where it started: x is the wall's again, whatever the hits did
+    const sapphirelib::odom::Pose here = pose();
+    setPose(-60.6, here.yIn, here.headingDeg);
+    moveToPoint(-54.5, -11, {.chain = true});
+    moveToPose(-48, -21.5, 172, {.timeoutMs = 1000}); // up onto the goal, pressing on it
+    macros::setLiftDeg(macros::liftScoreDeg());
+    macros::waitForLift(1000);
+    macros::setClawClosed(false);
+
+    // The second pin. Straight back off the goal along the claw, so it
+    // doesn't drag the pin, and only then lower the lift, as R2 waits to.
+    // Then turn away from the goal, and drive up to the pin slowly with
+    // autoClaw on, which shuts the claw on it as its sensor sees it.
+    drive(-9);
+    macros::setLiftLevel(macros::Goal::alliance, 0);
+    turnTo(105);
+    moveToPose(-27.5, -20, 133);
+    waitUntilTraveled(25);
+    macros::setAutoClaw(true);
+    waitForMotion();
 }
 
 } // namespace
 
 void robot::registerAutons(sapphirelib::gui::AutonSelectorPage& selector) {
     selector.addRoutine("Do Nothing", &doNothing);
+    selector.addRoutine("Triple Pin", &triplePin);
     selector.addRoutine("Tuning Test", &tuningTest);
     selector.addRoutine("Odom Test", &odomTest);
     selector.addRoutine("Async Example", &asyncExample);
@@ -167,4 +230,5 @@ void robot::registerAutons(sapphirelib::gui::AutonSelectorPage& selector) {
     selector.addRoutine("Trajectory Example", &trajectoryExample);
     selector.addRoutine("Wall Reset Test", &wallResetTest);
     selector.addRoutine("Lift Testing", &liftTesting);
+    selector.addRoutine("Lift Example", &liftExample);
 }

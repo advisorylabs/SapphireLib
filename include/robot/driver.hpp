@@ -25,24 +25,22 @@ inline constexpr std::uint32_t kDriverLoopMs = 20;
 sapphirelib::input::Controller& controller();
 
 /// One tick of driving from the sticks, and the controller screen's line 1
-/// (the drive mode). opcontrol() skips it while a GUI routine is driving the
-/// chassis (see screenBusy()), so the two never fight over the motors.
+/// (the drive mode). opcontrol() skips it while the auto cycle (A, see
+/// autocycle.hpp) or a GUI routine (see screenBusy()) is driving the chassis,
+/// so the two never fight over the motors.
 ///
 /// Holonomic split arcade, robot-centric: left stick Y drives forward and
 /// back, left stick X strafes, right stick X turns.
 ///   - B inverts: front and back swap, so forward and strafe flip and turning
 ///     stays the same. Stays on until pressed again, restarts included.
-///   - DOWN toggles orbit mode: the robot circles a pivot that starts 12in
-///     straight behind its tracking center, keeping its back to it. Right
-///     stick X goes around the pivot; left stick Y moves toward or away from
-///     it, and the radius is held wherever it's let go. Measured on both
-///     tracking wheels and the IMU, never the localizer, whose corrections
-///     drift during driver control. Ends on any restart (autonomous, a
-///     disable).
+///   - The higher the lift, the slower the drive: no wheel gets more than
+///     macros::driveMaxVolts(), 12V with the lift down and 7V at its full
+///     height, and 5.75V while clawSpeed is on (DOWN, see macros.hpp). Past
+///     that, more stick goes no faster.
 ///   - In practice mode (setPracticeMode()), any drive stick past
-///     kPracticeMaxThrottlePct (config.hpp) cuts the drive motors' power, in
-///     orbit mode too, with a short rumble as it cuts. Power comes back once
-///     every drive stick is under it again.
+///     kPracticeMaxThrottlePct (config.hpp) cuts the drive motors' power,
+///     with a short rumble as it cuts. Power comes back once every drive
+///     stick is under it again.
 void drive(sapphirelib::input::Controller& controller);
 
 /// Turns practice mode on or off, from any task (the Home page's Practice
@@ -58,8 +56,10 @@ bool practiceMode();
 ///   - X+UP (pressed together, either order) runs the autonomous routine
 ///     picked on the brain screen, but only with no competition switch or
 ///     field connected, so it can't fire during a real match, and not while a
-///     GUI routine is driving the chassis. It brakes the lift first
-///     (macros::stop()), and blocks until the routine ends.
+///     GUI routine is driving the chassis. It ends the auto cycle and brakes
+///     the lift first (macros::stop()), and blocks until the routine ends.
+///
+/// A alone, the auto cycle, is autocycle::update()'s (robot/autocycle.hpp).
 void shortcuts(sapphirelib::input::Controller& controller);
 
 } // namespace robot
