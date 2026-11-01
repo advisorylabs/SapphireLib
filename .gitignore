@@ -34,3 +34,7 @@ tools/sim/dist/
 
 # PROS CLI state written to a literal "~" folder when HOME was not expanded
 /~/
+
+# Claude Code local permissions (machine-specific paths)
+.claude/settings.json
+.claude/settings.local.json
