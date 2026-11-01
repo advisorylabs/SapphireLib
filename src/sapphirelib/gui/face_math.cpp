@@ -78,6 +78,12 @@ constexpr double kBowtieDropPx = 92.0;
 // start another
 constexpr std::uint32_t kBowtieSpinMs = kWinkMs;
 
+// a look all the way to one side moves the eyes, their brows and the mouth this far, and gets
+// there from straight ahead over this long. Far enough to read as a look, near enough that wide
+// surprised eyes stay on the screen
+constexpr double kGazeShiftPx = 36.0;
+constexpr double kGazeEaseMs = 150.0;
+
 // frames further apart than this ease as if they weren't, so a stalled frame never jumps a mood
 // all the way
 constexpr std::uint32_t kMaxStepMs = 100;
@@ -107,11 +113,12 @@ void FaceAnimator::reset(std::uint32_t nowMs) {
     squint_ = 0.0;
     surprise_ = 0.0;
     spin_ = 0.0;
+    gaze_ = 0.0;
     doubleBlinkNext_ = false;
     waitForNextBlink(nowMs);
 }
 
-FaceShape FaceAnimator::update(std::uint32_t nowMs, bool squinting, bool bumped) {
+FaceShape FaceAnimator::update(std::uint32_t nowMs, bool squinting, bool bumped, double gaze) {
     const double stepMs = std::min(elapsedMs(lastMs_, nowMs), kMaxStepMs);
     lastMs_ = nowMs;
 
@@ -123,6 +130,9 @@ FaceShape FaceAnimator::update(std::uint32_t nowMs, bool squinting, bool bumped)
     surprise_ = approach(surprise_, surprised_ ? 1.0 : 0.0,
                          stepMs / (surprised_ ? kSurpriseRiseMs : kSurpriseFallMs));
     squint_ = approach(squint_, squinting ? 1.0 : 0.0, stepMs / kSquintEaseMs);
+    // a NaN would otherwise stick, and take the eyes off the screen with it
+    const double gazeTarget = std::isfinite(gaze) ? std::clamp(gaze, -1.0, 1.0) : 0.0;
+    gaze_ = approach(gaze_, gazeTarget, stepMs / kGazeEaseMs);
 
     if (winking_ && elapsedMs(winkStartMs_, nowMs) >= kWinkMs) winking_ = false;
     if (spinning_ && elapsedMs(spinStartMs_, nowMs) >= kBowtieSpinMs) spinning_ = false;
@@ -170,6 +180,8 @@ double FaceAnimator::surprise() const { return surprise_; }
 
 double FaceAnimator::bowtieTurn() const { return spin_; }
 
+double FaceAnimator::gaze() const { return gaze_; }
+
 double FaceAnimator::blinkAt(std::uint32_t nowMs) const {
     if (!blinking_) return 0.0;
     const double t = elapsedMs(blinkStartMs_, nowMs);
@@ -213,6 +225,8 @@ FaceShape FaceAnimator::shape() const {
     const double scale = std::min(widthPx_ / kLayoutWidthPx, heightPx_ / kLayoutHeightPx);
     const double middleX = widthPx_ / 2.0;
     const double eyeY = heightPx_ / 2.0 + kEyeDropPx * scale;
+    // the eyes, brows and mouth look over together; the bowtie stays in the middle
+    const double lookX = middleX + kGazeShiftPx * scale * gaze_;
 
     // a surprise beats a squint, so a surprised squint is just surprised
     const double surprise = surprise_;
@@ -230,7 +244,7 @@ FaceShape FaceAnimator::shape() const {
     for (int side = 0; side < 2; ++side) {
         // -1 the left eye, +1 the right: outward is this way
         const double outward = side == 0 ? -1.0 : 1.0;
-        const double eyeX = middleX + outward * kEyeSpacingPx * scale;
+        const double eyeX = lookX + outward * kEyeSpacingPx * scale;
         // the winking eye is as shut as the more shut of its blink and its wink
         const double wink = side == kWinkEye ? wink_ : 0.0;
         const double eyeHeightPx =
@@ -251,7 +265,7 @@ FaceShape FaceAnimator::shape() const {
                       .innerY = px(sideBrowY + halfDy),
                       .thicknessPx = std::max<std::int32_t>(1, px(kBrowThicknessPx * scale))};
     }
-    face.mouth = MouthShape{.centerX = px(middleX),
+    face.mouth = MouthShape{.centerX = px(lookX),
                             .centerY = px(eyeY + kMouthDropPx * scale),
                             .sizePx = px(kSurpriseMouthPx * scale * surprise)};
 

@@ -11,6 +11,7 @@
  *       -o face_math_test && ./face_math_test
  */
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -399,6 +400,80 @@ void testNoBlinkWhileWinking() {
     CHECK(blinked);
 }
 
+void testGaze() {
+    FaceAnimator face(480, 272);
+    std::uint32_t now = 0;
+    const FaceShape ahead = run(face, now, 200, false);
+    // one frame in, partway: not snapped over
+    now += kFrameMs;
+    const FaceShape first = face.update(now, false, false, 1.0);
+    CHECK(face.gaze() > 0.0 && face.gaze() < 0.5);
+    CHECK(first.eyes[0].centerX > ahead.eyes[0].centerX);
+    // all the way to the screen's right: eyes, brows and mouth over together, the same
+    // shapes, still on the screen; the bowtie stays in the middle
+    FaceShape right = first;
+    while (now < 600) {
+        now += kFrameMs;
+        right = face.update(now, false, false, 1.0);
+    }
+    CHECK(face.gaze() == 1.0);
+    const std::int32_t shiftPx = right.eyes[0].centerX - ahead.eyes[0].centerX;
+    CHECK(shiftPx >= 30 && shiftPx <= 40);
+    for (int side = 0; side < 2; ++side) {
+        CHECK(right.eyes[side].centerX - ahead.eyes[side].centerX == shiftPx);
+        CHECK(right.eyes[side].centerY == ahead.eyes[side].centerY);
+        CHECK(right.eyes[side].widthPx == ahead.eyes[side].widthPx);
+        CHECK(right.eyes[side].heightPx == ahead.eyes[side].heightPx);
+        CHECK(right.brows[side].innerX - ahead.brows[side].innerX == shiftPx);
+        CHECK(right.brows[side].outerX - ahead.brows[side].outerX == shiftPx);
+        CHECK(right.brows[side].innerY == ahead.brows[side].innerY);
+    }
+    CHECK(right.mouth.centerX - ahead.mouth.centerX == shiftPx);
+    CHECK(right.bowtie == ahead.bowtie);
+    // back to straight ahead once let go
+    const FaceShape back = run(face, now, 1200, false);
+    CHECK(face.gaze() == 0.0);
+    CHECK(back == ahead);
+    // the other way mirrors it, and past the end clamps
+    FaceShape left = back;
+    while (now < 1800) {
+        now += kFrameMs;
+        left = face.update(now, false, false, -5.0);
+    }
+    CHECK(face.gaze() == -1.0);
+    CHECK(left.eyes[1].centerX - ahead.eyes[1].centerX == -shiftPx);
+    // surprised and looking all the way over, the wide eyes and their brows stay on the screen
+    // and the mouth between them
+    FaceShape wide = face.update(now, false, true, -1.0);
+    while (now < 2200) {
+        now += kFrameMs;
+        wide = face.update(now, false, false, -1.0);
+    }
+    CHECK(face.surprise() == 1.0);
+    CHECK(wide.eyes[0].centerX - wide.eyes[0].widthPx / 2 > 0);
+    CHECK(wide.brows[0].outerX - wide.brows[0].thicknessPx > 0);
+    CHECK(wide.mouth.centerX - wide.mouth.sizePx / 2 >
+          wide.eyes[0].centerX + wide.eyes[0].widthPx / 2);
+    CHECK(wide.mouth.centerX + wide.mouth.sizePx / 2 <
+          wide.eyes[1].centerX - wide.eyes[1].widthPx / 2);
+    // and the other side too
+    FaceShape wideRight = wide;
+    for (std::uint32_t until = now + 400; now < until;) {
+        now += kFrameMs;
+        wideRight = face.update(now, false, false, 1.0);
+    }
+    CHECK(face.surprise() == 1.0 && face.gaze() == 1.0);
+    CHECK(wideRight.eyes[1].centerX + wideRight.eyes[1].widthPx / 2 < 480);
+    CHECK(wideRight.brows[1].outerX + wideRight.brows[1].thicknessPx < 480);
+    // not a number looks straight ahead, rather than sticking
+    run(face, now, now + 400, false);
+    for (std::uint32_t until = now + 400; now < until;) {
+        now += kFrameMs;
+        face.update(now, false, false, std::nan(""));
+    }
+    CHECK(face.gaze() == 0.0);
+}
+
 void testSameSeedSameFace() {
     FaceAnimator a(480, 272, 42);
     FaceAnimator b(480, 272, 42);
@@ -459,6 +534,7 @@ int main() {
     testWinkDuringAWinkHoldsItShut();
     testWinkOverAMood();
     testNoBlinkWhileWinking();
+    testGaze();
     testSameSeedSameFace();
     testScalesToTheScreen();
     testClockWrap();

@@ -180,7 +180,8 @@ void FaceScreen::tick() {
         }
     }
     const bool squinting = config_.squinting && config_.squinting();
-    draw(animator_.update(now, squinting, bumped));
+    const double gaze = config_.gaze ? config_.gaze() : 0.0;
+    draw(animator_.update(now, squinting, bumped, gaze));
 }
 
 void FaceScreen::draw(const FaceShape& face) {

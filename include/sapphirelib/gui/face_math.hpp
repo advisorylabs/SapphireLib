@@ -98,12 +98,13 @@ struct FaceShape {
 /**
  * @brief The face's moods and timing: open eyes that blink every few seconds (now and then
  * twice), a squint, a surprised look (and an open mouth) after a bump, and a wink when asked for
- * one, the bowtie under the face spinning a full turn with it
+ * one, the bowtie under the face spinning a full turn with it. The eyes look side to side as
+ * asked, their brows and the mouth going with them while the bowtie stays put
  *
  * Pure: no LVGL, no clock, no sensors. Each frame, pass the time and what's going on, and draw the
- * FaceShape that comes back. Moods ease in and out over a few frames instead of snapping. A
- * surprise beats a squint, and no blink starts while surprised or winking. A wink shows over any
- * mood
+ * FaceShape that comes back. Moods and looks ease in and out over a few frames instead of
+ * snapping. A surprise beats a squint, and no blink starts while surprised or winking. A wink
+ * shows over any mood, and a look over all of it
  *
  * @note not thread-safe
  *
@@ -113,7 +114,7 @@ struct FaceShape {
  * face.reset(now);
  * // every frame
  * if (scored) face.startWink(now);
- * const sapphirelib::gui::FaceShape shape = face.update(now, liftRising, bumpedThisFrame);
+ * const sapphirelib::gui::FaceShape shape = face.update(now, liftRising, bumpedThisFrame, strafe);
  * @endcode
  */
 class FaceAnimator {
@@ -129,7 +130,8 @@ public:
     FaceAnimator(std::int32_t widthPx, std::int32_t heightPx, std::uint32_t seed = 1);
 
     /**
-     * @brief Start over: eyes open, no squint or surprise, the next blink a few seconds away
+     * @brief Start over: eyes open and looking straight ahead, no squint or surprise, the next
+     * blink a few seconds away
      *
      * @param nowMs the current time, in milliseconds
      */
@@ -142,9 +144,12 @@ public:
      * @param squinting squint while this is true
      * @param bumped true on the frame something bumped the robot: the face looks surprised for a
      * moment, and another bump meanwhile keeps it surprised
+     * @param gaze where to look, -1 (all the way to the screen's left) to 1 (all the way to its
+     * right), 0 straight ahead by default. Clamped to that range, and anything not finite is
+     * straight ahead. The eyes ease over rather than jump
      * @return FaceShape the face to draw
      */
-    FaceShape update(std::uint32_t nowMs, bool squinting, bool bumped);
+    FaceShape update(std::uint32_t nowMs, bool squinting, bool bumped, double gaze = 0.0);
 
     /**
      * @brief Wink: the eye on the screen's right shuts for about half a second and opens again,
@@ -186,6 +191,12 @@ public:
      */
     double bowtieTurn() const;
 
+    /**
+     * @brief Where the eyes have eased over to, -1 (all the way to the screen's left) to 1 (all
+     * the way to its right)
+     */
+    double gaze() const;
+
 private:
     double blinkAt(std::uint32_t nowMs) const;
     double winkAt(std::uint32_t nowMs) const;
@@ -223,6 +234,7 @@ private:
     double squint_ = 0.0;
     double surprise_ = 0.0;
     double spin_ = 0.0;
+    double gaze_ = 0.0;
 };
 
 } // namespace sapphirelib::gui

@@ -10,6 +10,7 @@
 
 #include "robot/screen.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -119,15 +120,36 @@ private:
     double degPerS_ = 0.0;
 };
 
+// The face's eyes follow the drive's strafe: not at all under
+// kGazeDeadbandVolts, so a motion's small sideways corrections don't twitch
+// them, and all the way over from kGazeFullVolts.
+constexpr double kGazeDeadbandVolts = 1.0;
+constexpr double kGazeFullVolts = 6.0;
+// Positive strafe is the robot's right, which is the screen's right with the
+// brain facing the back of the robot (toward the driver). Make this -1.0 if
+// the brain faces the front, so the eyes still look the way the robot goes.
+constexpr double kGazeSign = 1.0;
+
+/// Where the face looks, -1 (the screen's left) to 1 (its right), from the
+/// strafe volts last commanded: driver control and autonomous alike.
+double strafeGaze() {
+    const double volts = kGazeSign * drivetrain().appliedAxisVolts().strafe;
+    const double over = std::abs(volts) - kGazeDeadbandVolts;
+    if (over <= 0.0) return 0.0;
+    return std::copysign(std::min(1.0, over / (kGazeFullVolts - kGazeDeadbandVolts)), volts);
+}
+
 /// The face (see FaceScreen): up on its own through autonomous and driver
 /// control under competition control, or from the Home page's Face button,
 /// and down at a tap. It squints while the lift climbs, winks as each score
-/// (R2) opens the claw, and looks surprised when the IMU feels a bump.
+/// (R2) opens the claw, looks surprised when the IMU feels a bump, and looks
+/// the way the robot strafes.
 FaceScreen& face() {
     static LiftRiseWatch lift;
     static FaceScreen instance({
         .squinting = [] { return lift.rising(); },
         .winks = [] { return macros::scoreCount(); },
+        .gaze = &strafeGaze,
         // TODO: tune BumpConfig::thresholdG (0.8g) if hits go unnoticed or
         // the robot's own driving looks surprised: the log's face,bump
         // events have each counted bump's size.

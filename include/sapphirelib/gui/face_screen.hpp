@@ -16,8 +16,9 @@ namespace sapphirelib::gui {
  * nothing else
  *
  * The eyes blink every few seconds, squint while squinting() says so (a lift on its way up, say),
- * go wide with the brows raised when the IMU feels a bump (see sensors::BumpDetector), and wink
- * each time winks() goes up (a count of scores, say), the bowtie spinning a full turn. It
+ * go wide with the brows raised when the IMU feels a bump (see sensors::BumpDetector), wink
+ * each time winks() goes up (a count of scores, say), the bowtie spinning a full turn, and look
+ * side to side as gaze() says (which way the robot is strafing, say). It
  * covers everything, the Gui's header and tabs included, and comes up on its own for a match:
  * autonomous and driver control under competition control, not while disabled, so the auton
  * selector is there before the match. show() puts it up any other time
@@ -32,6 +33,7 @@ namespace sapphirelib::gui {
  * static sapphirelib::gui::FaceScreen face({
  *     .squinting = [] { return liftRising(); },
  *     .winks = [] { return scoreCount(); },
+ *     .gaze = [] { return drivetrain().appliedAxisVolts().strafe / 12.0; },
  *     .imu = &drivetrain().imu(),
  * });
  * face.start();
@@ -57,6 +59,13 @@ public:
          * winks
          */
         std::function<std::uint32_t()> winks;
+
+        /**
+         * where the eyes look, -1 (all the way to the screen's left) to 1 (all the way to its
+         * right), 0 straight ahead. Clamped to that range; the eyes ease over rather than jump.
+         * Polled every frame on the GUI's task, so keep it quick. Empty looks straight ahead
+         */
+        std::function<double()> gaze;
 
         /** watched for bumps, which make the face look surprised. nullptr for none */
         sensors::Imu* imu = nullptr;
