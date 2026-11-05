@@ -1,7 +1,7 @@
 /**
  * \file macros.cpp
  *
- * Driver macros for the lift, the claw, and the extender, see macros.hpp for
+ * Driver macros for the lift, the claw, and the side piston, see macros.hpp for
  * the controls. Everything meant to be tuned is in the constants at the top;
  * the ports are in config.hpp.
  *
@@ -35,6 +35,7 @@
 #include "pros/rtos.hpp"
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
+#include "robot/leds.hpp"
 #include "sapphirelib/auton/auton.hpp"
 #include "sapphirelib/mechanism/piston.hpp"
 #include "sapphirelib/mechanism/position_mechanism.hpp"
@@ -65,7 +66,7 @@ using sapphirelib::tuning::GravityKind;
 using sapphirelib::tuning::MechanismCharacterizationConfig;
 
 // --- Claw and autoClaw ---
-// autoClaw only works while clawSpeed is on (DOWN, see kClawSpeedVolts), so
+// autoClaw only works while clawSpeed is on (R1+R2, see kClawSpeedVolts), so
 // it's off again once a grab turns clawSpeed off.
 // Where autoClaw grabs: it closes the claw the first time the claw's distance
 // sensor reads this or closer, at any speed. It's also what counts as a pin
@@ -79,6 +80,10 @@ constexpr std::int32_t kPieceDetectMm = 125;
 // the open claw doesn't count as it gone. A claw that had already been empty
 // this long when it opened can close again at once.
 constexpr std::uint32_t kAutoClawClearMs = 400;
+// The furthest setAutoClaw() can be told to grab at: about the claw sensor's
+// range. It reads 9999 when it sees nothing, so anything that far would close
+// the claw on an empty reading.
+constexpr std::int32_t kMaxGrabMm = 2000;
 
 // --- Scoring ---
 // Once a score opens the claw, the lift holds where it dipped to until the
@@ -92,11 +97,17 @@ constexpr double kScoreBackOffIn = 3.0;
 // A score dips this many motor degrees further than halfway to the level
 // below, on every goal and level, but never past the level below itself.
 constexpr double kScoreExtraDipDeg = 30.0;
+// A score opens the claw as soon as the lift reaches its dip (within
+// kLiftToleranceDeg), or this long after R2's press, whichever comes first, so
+// a lift slow to settle doesn't hold the pin. Counted from the press itself, so
+// R2's wait for R1 (kRPairWindowMs) comes out of it. The lift carries on down
+// to the dip after the claw opens.
+constexpr std::uint32_t kScoreReleaseMs = 100;
 // At the bottom level, the lift holds this many motor degrees whenever the
 // claw is closed, and goes down to the bottom whenever it's open: a grab
-// (autoClaw or R1) lifts it here, opening the claw sends it back down, and
-// coming down to the bottom with the claw closed (the preload at driver
-// control's start included) stops here. Other levels ignore the claw.
+// (autoClaw, R1, or autonomous's on the preload, see grabPreload())
+// lifts it here, opening the claw sends it back down, and coming down to the
+// bottom with the claw closed stops here. Other levels ignore the claw.
 constexpr double kBottomClosedLiftDeg = 75.0;
 // A grab waits this long after the claw closes before lifting, so the jaws
 // are shut on the pin before it leaves the floor. Only the claw closing
@@ -109,6 +120,15 @@ constexpr std::uint32_t kGrabLiftDelayMs = 65;
 // period for as long as it's held.
 constexpr std::uint32_t kLevelRepeatDelayMs = 300;
 constexpr std::uint32_t kLevelRepeatPeriodMs = 150;
+// R1 and R2 pressed together toggle clawSpeed, and autoClaw with it. Two
+// thumbs pressed "together" land a tick or two apart, so each of them on its
+// own waits this long after its press (or until it's let go, if sooner)
+// before it acts: the other going down meanwhile makes it the pair instead,
+// and neither acts alone. The second going down while the first is still held
+// is the pair however late it comes, but past this the first has already
+// acted (R1 flipped the claw, or R2 started a score). 0 acts at once, so only
+// the second of the two is ever used up by the pair.
+constexpr std::uint32_t kRPairWindowMs = 80;
 
 // --- Lift ---
 // Position loop on the lift motors' encoders, in volts per motor degree:
@@ -161,10 +181,9 @@ constexpr double kLiftSlowVolts = 4.0;
 constexpr std::uint32_t kLiftSeekWaitMs = 2000;
 constexpr double kLiftSeekBelowDeg = 100.0;
 constexpr std::uint32_t kLiftSeekTimeoutMs = 1000;
-// How close the lift must get before a score's dip moves on to opening the
-// claw, and how long the dip waits for that before moving on anyway.
+// How close the lift must get to count as there: a score's dip opening the
+// claw early (kScoreReleaseMs), waitForLift(), and the lift down at the bottom.
 constexpr double kLiftToleranceDeg = 15.0;
-constexpr std::uint32_t kLiftDescendTimeoutMs = 1000;
 // Debug mode: what L1 and L2 put on the lift motors while held. L2's is
 // capped at kLiftMaxDownVolts.
 constexpr double kLiftDebugVolts = 12.0;
@@ -183,17 +202,17 @@ constexpr double kDriveFullVolts = 12.0;
 constexpr double kDriveTopVolts = 7.0;
 constexpr double kDriveTopLiftDeg = 1520.0;
 
-// --- clawSpeed (DOWN) ---
+// --- clawSpeed (R1+R2) ---
 // While clawSpeed is on, no drive wheel gets more than this many volts,
 // and less if the lift's height says so (kDriveTopVolts), and autoClaw can
-// close the claw (it can't with clawSpeed off). DOWN turns it on
+// close the claw (it can't with clawSpeed off). R1+R2 turns it on
 // and off, and the claw closing with the lift down at the bottom (autoClaw or
 // R1) turns it off kClawSpeedOffDelayMs later, so the robot drives off with
 // the pin at full speed. The claw opening again before then keeps it on.
 constexpr double kClawSpeedVolts = 5.0;
 constexpr std::uint32_t kClawSpeedOffDelayMs = 350;
 // The controller rumbles as clawSpeed turns on (one long buzz) and off (two
-// short ones), by DOWN or by a grab, since nothing on its screen shows it.
+// short ones), by R1+R2 or by a grab, since nothing on its screen shows it.
 constexpr const char* kClawSpeedOnRumble = "-";
 constexpr const char* kClawSpeedOffRumble = "..";
 // setAutoClaw(), autonomous's clawSpeed, caps the drive at the same
@@ -243,13 +262,17 @@ PresetLadder ladder({
 });
 constexpr int kBottomLevel = 0; // on the bottom switch, where autoClaw picks up pins
 
-// Extended is closed: the claw starts closed, on a preload. Its valve is
-// plumbed so the port's low state closes it, hence extendedIsLow: without it,
-// the claw started open, R1 and R2 were backward, and autoClaw opened the
-// claw on a pin instead of closing it. If the air lines are ever swapped,
-// make this false again.
-Piston claw(ports::kClawPiston, /*extendedAtStart=*/true, /*extendedIsLow=*/true);
-Piston extender(ports::kExtenderPiston, /*extendedAtStart=*/false);
+// Extended is closed. The claw starts open, so the preload goes in with the
+// program running, and autonomous closes it (grabPreload()). Its valve is
+// plumbed so the port's high state closes it, so the port's low state, where
+// the brain leaves it until the program sets it, is open too: the brain can
+// drop what this sends from here, before initialize(), and resendPistons()
+// sends it again anyway. The air lines were the other way round once, with
+// extendedIsLow true; if they're ever swapped back, R1 and R2 go backward and
+// autoClaw opens the claw on a pin instead of closing it, so make it true
+// again.
+Piston claw(ports::kClawPiston, /*extendedAtStart=*/false);
+Piston sidePiston(ports::kSidePiston, /*extendedAtStart=*/false);
 pros::Distance clawSensor(ports::kClawDistance);
 pros::adi::DigitalIn bottomSwitch(ports::kLiftBottomSwitch);
 
@@ -301,16 +324,25 @@ double liftPositionDeg() {
 // 1 and up each lift motor in turn, A first.
 constexpr int kReadoutCount = 1 + static_cast<int>(ports::kLiftMotors.size());
 
+// A press of R1 or R2 waiting out kRPairWindowMs: which, and since when.
+struct WaitingPress {
+    Button button;
+    std::uint32_t sinceMs;
+};
+
 struct State {
     // The claw: closed holds a pin. R1 flips it, a score opens it, and
-    // autoClaw closes it.
-    bool clawClosed = true;
-    bool extended = false; // the extender, Y's alone
+    // autoClaw closes it. Open from the start, until autonomous closes it on
+    // the preload (grabPreload()) or the driver does.
+    bool clawClosed = false;
+    bool sideOut = false;   // the side piston, Y's alone
     bool clawSpeed = false; // the drive capped at kClawSpeedVolts, see there
     // When a grab at the bottom closed the claw with clawSpeed on, which ends
     // it kClawSpeedOffDelayMs later. Dropped if the claw opens first, or
-    // DOWN gets there first.
+    // R1+R2 gets there first.
     std::optional<std::uint32_t> clawSpeedGrabMs;
+    // R1 or R2 pressed on its own, not yet acted on (kRPairWindowMs).
+    std::optional<WaitingPress> rWaiting;
     // Whether autoClaw may close the claw: false from the moment the claw
     // opens on a pin until the sensor has seen the claw empty for
     // kAutoClawClearMs, so opening the claw to drop a pin doesn't snap it
@@ -328,6 +360,8 @@ struct State {
     // The bottom switch has zeroed the lift's encoders for this press (see
     // zeroAtBottom()).
     bool zeroedThisPress = false;
+    // When R2 was pressed for the running score, for kScoreReleaseMs.
+    std::uint32_t scorePressMs = 0;
     // The vertical tracking wheel's reading as the running score opened the
     // claw, for kScoreBackOffIn.
     double releaseWheelIn = 0.0;
@@ -360,8 +394,9 @@ TimedFlag clawLoaded;
 std::atomic<std::uint32_t> scoresReleased{0};
 
 // The score: dip kScoreExtraDipDeg past halfway to the level below, open the
-// claw, hold there until the robot has backed kScoreBackOffIn off the goal,
-// then down to the bottom.
+// claw once the lift gets there or kScoreReleaseMs after R2's press, hold
+// there until the robot has backed kScoreBackOffIn off the goal, then down to
+// the bottom.
 // What each step *does* stays level-triggered below (claw, lift target); the
 // sequence only says which step it is and when to move on.
 enum class Phase { scoreDescend, scoreRelease };
@@ -369,15 +404,26 @@ enum class Phase { scoreDescend, scoreRelease };
 bool liftArrived();
 bool backedOff();
 
+std::uint32_t msSinceScorePress() {
+    return sapphirelib::elapsedMs(state.scorePressMs, sapphirelib::millis());
+}
+
+/// The dip's done: the lift is there, or it has had kScoreReleaseMs from R2's
+/// press and the claw opens anyway.
+bool releaseDue() { return liftArrived() || msSinceScorePress() >= kScoreReleaseMs; }
+
 void beginRelease() {
     state.releaseWheelIn = verticalWheel().getDistanceIn();
     scoresReleased.fetch_add(1);
+    sapphirelib::telemetry::event("macro", "score_release,ms=%u,arrived=%d",
+                                  static_cast<unsigned>(msSinceScorePress()),
+                                  liftArrived() ? 1 : 0);
 }
 
 // No timeout on the release: the lift waits for the robot to back off however
 // long that takes, and L2 is the way out (see update()).
 const std::array<Sequence<Phase>::Step, 2> kScoreSteps{{
-    {.id = Phase::scoreDescend, .until = liftArrived, .timeoutMs = kLiftDescendTimeoutMs},
+    {.id = Phase::scoreDescend, .until = releaseDue},
     {.id = Phase::scoreRelease, .until = backedOff, .onEnter = beginRelease},
 }};
 const Sequence<Phase>::Program kScore{.steps = kScoreSteps,
@@ -404,6 +450,9 @@ struct AutonClaw {
     // When it closed the claw on a pin, which ends it kClawSpeedOffDelayMs
     // later. Dropped if the claw opens first.
     std::optional<std::uint32_t> grabMs;
+    // Where it grabs: the claw closes the first time the sensor reads this or
+    // closer. kPieceDetectMm unless setAutoClaw()'s latest call said otherwise.
+    std::int32_t grabMm = kPieceDetectMm;
 };
 
 AutonClaw autonClaw;
@@ -524,16 +573,19 @@ bool liftDown() {
 /// Whether autoClaw would close the claw on this reading, whichever mode turns
 /// it on (clawSpeed or setAutoClaw()): the claw is open and armed, the lift is
 /// down (liftDown()) and meant to be there, and the reading has a pin at
-/// kPieceDetectMm or closer. On the first such reading, since any wait only
-/// makes it later.
-bool grabReady(std::int32_t pieceMm) {
+/// grabMm or closer (driver control's is kPieceDetectMm, setAutoClaw()'s its
+/// own). On the first such reading, since any wait only makes it later. Only
+/// the grab goes by grabMm: arming still goes by kPieceDetectMm (clawLoaded).
+bool grabReady(std::int32_t pieceMm, std::int32_t grabMm) {
     return !state.clawClosed && state.autoClawArmed && ladder.level() == kBottomLevel &&
-           liftDown() && pieceInClaw(pieceMm);
+           liftDown() && pieceMm <= grabMm;
 }
 
 /// autoClaw in driver control (see macros.hpp): clawSpeed is on, and
-/// grabReady().
-bool autoClawWants(std::int32_t pieceMm) { return state.clawSpeed && grabReady(pieceMm); }
+/// grabReady() at kPieceDetectMm.
+bool autoClawWants(std::int32_t pieceMm) {
+    return state.clawSpeed && grabReady(pieceMm, kPieceDetectMm);
+}
 
 /// Turns setAutoClaw()'s mode off, and the speed limit with it. With
 /// autonClawMutex() held.
@@ -542,6 +594,7 @@ void endAutonClaw(const char* why) {
     autonClaw.on = false;
     autonClaw.grabMs.reset();
     sapphirelib::auton::setSpeedLimit(kDriveFullVolts);
+    leds::showAutoClaw(false);
     sapphirelib::telemetry::event("macro", "auto_claw,on=0,%s", why);
 }
 
@@ -558,11 +611,13 @@ void autonClawStep(std::uint32_t now) {
     const std::int32_t pieceMm = clawSensor.get_distance();
     clawLoaded.set(pieceInClaw(pieceMm), now);
     if (clawLoaded.falseFor(kAutoClawClearMs, now)) state.autoClawArmed = true;
-    if (!autonClaw.grabMs && grabReady(pieceMm)) {
+    if (!autonClaw.grabMs && grabReady(pieceMm, autonClaw.grabMm)) {
         state.clawClosed = true;
         claw.set(true, now);
         autonClaw.grabMs = now;
-        sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d", static_cast<int>(pieceMm));
+        sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d,grab_mm=%d",
+                                      static_cast<int>(pieceMm),
+                                      static_cast<int>(autonClaw.grabMm));
     }
     if (autonClaw.grabMs && sapphirelib::elapsedMs(*autonClaw.grabMs, now) >= kClawSpeedOffDelayMs) {
         endAutonClaw("grabbed");
@@ -598,6 +653,18 @@ void sendLift(double deg) {
     lift.setTarget(deg);
 }
 
+/// LiftGauge (leds.hpp): it follows the lift's level, and shows for a second
+/// whenever the level is now higher than `levelDegBefore` (its height before
+/// whatever just changed it), or `steppedDown` says L2 just stepped it down.
+/// Up by height rather than by level, so RIGHT onto a taller level of the next
+/// goal counts too, and its L1-to-L2 doesn't when that's no taller. Down only
+/// by L2, so a score's finish, which sends the lift to the bottom, doesn't
+/// show an empty gauge after every score.
+void updateLiftGauge(double levelDegBefore, bool steppedDown = false) {
+    leds::setLiftGauge(ladder.level(), ladder.maxLevel());
+    if (steppedDown || ladder.levelPosition() > levelDegBefore) leds::showLiftGauge();
+}
+
 /// L1: straight to the remembered level (state.nextLevel) while it's above the
 /// lift's, otherwise up one.
 void levelUp() {
@@ -606,6 +673,47 @@ void levelUp() {
     } else {
         ladder.up();
     }
+}
+
+/// What R1 and R2 do this tick: one of them on its own, once its wait
+/// (kRPairWindowMs) is over, or both, on the tick the second of them goes
+/// down while the first is held.
+enum class RPress { none, r1, r2, both };
+
+/// RPress, and when its button went down: for R1 or R2 on its own, the press
+/// that waited out kRPairWindowMs (kScoreReleaseMs counts from it).
+struct RAction {
+    RPress press = RPress::none;
+    std::uint32_t pressMs = 0;
+};
+
+RAction takeWaitingR() {
+    const WaitingPress waiting = *state.rWaiting;
+    state.rWaiting.reset();
+    return {waiting.button == Button::r1 ? RPress::r1 : RPress::r2, waiting.sinceMs};
+}
+
+RAction readRButtons(const Controller& controller, std::uint32_t now) {
+    // Pressed in the same tick counts too.
+    if (controller.combo(Button::r1, Button::r2)) {
+        // The first's press, if it was still waiting, goes to the pair.
+        state.rWaiting.reset();
+        return {RPress::both, now};
+    }
+    // Not the pair, so at most one of them.
+    const bool r1 = controller.pressed(Button::r1);
+    const bool r2 = controller.pressed(Button::r2);
+    RAction press;
+    // One still waiting as the other goes down was let go this tick (held,
+    // it'd be the pair): it acts now, and the new one waits its turn.
+    if (state.rWaiting && (r1 || r2)) press = takeWaitingR();
+    if (r1 || r2) state.rWaiting = WaitingPress{r1 ? Button::r1 : Button::r2, now};
+    if (press.press == RPress::none && state.rWaiting &&
+        (!controller.held(state.rWaiting->button) ||
+         sapphirelib::elapsedMs(state.rWaiting->sinceMs, now) >= kRPairWindowMs)) {
+        press = takeWaitingR();
+    }
+    return press;
 }
 
 void setClawSpeed(Controller& controller, bool on) {
@@ -620,8 +728,9 @@ void showStatus(Controller& controller, bool atBottom) {
     if (state.debug) {
         // No level to show: the lift is L1/L2's. Each piston, to check it
         // moves the way the line says.
-        screen.setLine(0, "DBG %s EX:%s", state.clawClosed ? "SHUT" : "OPEN",
-                       state.extended ? "OUT" : "IN");
+        // "DBG SHUT SD:OUT" just fits the 15 columns.
+        screen.setLine(0, "DBG %s SD:%s", state.clawClosed ? "SHUT" : "OPEN",
+                       state.sideOut ? "OUT" : "IN");
     } else if (state.nextLevel && *state.nextLevel > ladder.level()) {
         // Where L1 jumps to (levelUp()), in the goal's own level numbers:
         // "ALLIANCE BTM>L6" just fits the 15 columns.
@@ -698,6 +807,11 @@ void update(Controller& controller) {
         // A search for the switch cut short by a disable starts its clock
         // again, rather than counting the pause toward its wait and timeout.
         state.atZeroSinceMs.reset();
+        // So is an R1 or R2 press still waiting on the other (kRPairWindowMs).
+        state.rWaiting.reset();
+        // The valves as the macros have them, in case the brain dropped or
+        // reset what the ports were last sent (see resendPistons()).
+        resendPistons();
     }
 
     // One reading of each sensor for the whole tick.
@@ -711,6 +825,9 @@ void update(Controller& controller) {
     // Armed here, ahead of autoClaw below, so the tick the claw has been
     // empty long enough is one it can close on.
     if (clawLoaded.falseFor(kAutoClawClearMs, now)) state.autoClawArmed = true;
+    // The lift's level as the tick starts, for LiftGauge (below): RIGHT, L1
+    // and L2 change it from here on.
+    const double levelDegBefore = ladder.levelPosition();
 
     // controller.update() sampled every button once for this tick, and edges
     // come from comparing samples, so reading (or not reading) a button
@@ -724,7 +841,8 @@ void update(Controller& controller) {
         // memory.
         ladder.nextTable();
         forgetNextLevel();
-        // TODO: LED library's mode-change call goes here.
+        // The new goal's color, for a second (leds.hpp).
+        leds::showGoal(static_cast<int>(ladder.tableIndex()));
     }
 
     // L1 and L2 pressed together, in either order, forget the lift's memory
@@ -734,17 +852,20 @@ void update(Controller& controller) {
     if (levelReset) {
         forgetNextLevel();
         state.levelButtonsLocked = true;
+        leds::showMemoryReset();
     }
     if (!controller.held(Button::l1) && !controller.held(Button::l2)) {
         state.levelButtonsLocked = false;
         state.levelBeforePress.reset();
     }
 
-    // The extender is Y's alone: in every mode, and through a score.
-    if (controller.pressed(Button::y)) state.extended = !state.extended;
-    // So is clawSpeed DOWN's, though a grab at the bottom also ends it
-    // (below).
-    if (controller.pressed(Button::down)) setClawSpeed(controller, !state.clawSpeed);
+    // The side piston is Y's alone: in every mode, and through a score.
+    if (controller.pressed(Button::y)) state.sideOut = !state.sideOut;
+    // R1 and R2 this tick, on their own or as the pair (kRPairWindowMs). The
+    // pair is clawSpeed's toggle, autoClaw with it, in every mode and through
+    // a score too, though a grab at the bottom also ends it (below).
+    const auto [rPress, rPressMs] = readRButtons(controller, now);
+    if (rPress == RPress::both) setClawSpeed(controller, !state.clawSpeed);
 
     // Debug mode switched on or off (from the Home page): each mode starts
     // from a clean slate, no score carried across.
@@ -763,6 +884,9 @@ void update(Controller& controller) {
     }
 
     const bool wasClosed = state.clawClosed;
+    // L2 stepped the lift down a level this tick, for LiftGauge (below). Not
+    // L2 lowering a score early, nor L2 at the bottom, which has no step.
+    bool l2SteppedDown = false;
 
     // One branch per tick, in priority order. Debug mode first, since it
     // leaves out everything that moves the lift. Then scoring: once started,
@@ -770,7 +894,7 @@ void update(Controller& controller) {
     if (state.debug) {
         // No levels, no score, no autoClaw: the claw is R1's, and the lift is
         // L1 and L2's alone (below).
-        if (controller.pressed(Button::r1)) state.clawClosed = !state.clawClosed;
+        if (rPress == RPress::r1) state.clawClosed = !state.clawClosed;
     } else if (sequence.running(kScore)) {
         // R1 and L1 wait for it to finish. It opens the claw itself (below),
         // and its onFinish sends the lift to the bottom once the robot has
@@ -785,11 +909,12 @@ void update(Controller& controller) {
         } else {
             sequence.update(now);
         }
-    } else if (controller.pressed(Button::r2) && state.clawClosed) {
+    } else if (rPress == RPress::r2 && state.clawClosed) {
         rememberNextLevel();
+        state.scorePressMs = rPressMs;
         sequence.start(kScore, now);
     } else {
-        if (controller.pressed(Button::r1)) {
+        if (rPress == RPress::r1) {
             state.clawClosed = !state.clawClosed;
         } else if (autoClawWants(pieceMm)) {
             state.clawClosed = true;
@@ -813,7 +938,9 @@ void update(Controller& controller) {
                 levelUp();
             }
             if (controller.repeated(Button::l2, kLevelRepeatDelayMs, kLevelRepeatPeriodMs)) {
+                const int levelBefore = ladder.level();
                 ladder.down();
+                l2SteppedDown = ladder.level() < levelBefore;
             }
         }
     }
@@ -841,7 +968,7 @@ void update(Controller& controller) {
     }
 
     claw.set(state.clawClosed, now);
-    extender.set(state.extended, now);
+    sidePiston.set(state.sideOut, now);
 
     // What the lift should do this tick. Its own task (startLift()) does it.
     if (state.debug) {
@@ -863,12 +990,22 @@ void update(Controller& controller) {
     }
     showStatus(controller, atBottom);
 
+    // The LEDs, from where this tick left things (leds.hpp). autoClaw is
+    // clawSpeed's here, and off in debug mode; setAutoClaw()'s mode ended at
+    // the top of the tick. R2 at the bottom drops the pin, not a score.
+    leds::showAutoClaw(state.clawSpeed && !state.debug);
+    leds::showScoring(sequence.running(kScore) && ladder.level() != kBottomLevel);
+    // The lift sent up this tick, by any means, or stepped down by L2; not in
+    // debug mode, where it ignores its levels. Under AutoClaw and Scoring,
+    // which hide it.
+    if (!state.debug) updateLiftGauge(levelDegBefore, l2SteppedDown);
+
     if (mechLog != nullptr) {
         // What every mechanism was told this tick, for the analyzer's replay
         // (the lift's own rows are in "lift"/"lift.act"). get_distance()
         // reads PROS_ERR unplugged, which is logged as a gap.
         const std::optional<Phase> phase = sequence.current();
-        mechLog->record({claw.extended() ? 1.0 : 0.0, extender.extended() ? 1.0 : 0.0,
+        mechLog->record({claw.extended() ? 1.0 : 0.0, sidePiston.extended() ? 1.0 : 0.0,
                          pieceMm == PROS_ERR ? std::numeric_limits<double>::quiet_NaN()
                                              : static_cast<double>(pieceMm),
                          static_cast<double>(ladder.level()), static_cast<double>(ladder.tableIndex()),
@@ -903,8 +1040,9 @@ void attachTelemetry(sapphirelib::telemetry::Logger& logger) {
     lift.setStepListener([channel = &act](const PositionStep& step) {
         channel->record({step.target, step.position, step.volts, static_cast<double>(step.law)});
     });
-    // The claw, extender and lift state machine, every opcontrol tick: the
-    // claw piston (1 closed) and the extender (1 out), the claw's distance
+    // The claw, side piston and lift state machine, every opcontrol tick: the
+    // claw piston (1 closed) and the side piston (1 out; still "extender" in
+    // the logs, which the analyzer and older logs go by), the claw's distance
     // reading (mm), the lift's level (0 the bottom; its entry in the goal's
     // table, so MEDIUM's L2 logs 1) and goal (0 ALLIANCE, 1 MEDIUM, 2
     // CENTER), the running score step (-1 none; else Phase's order:
@@ -940,12 +1078,34 @@ void setClawClosed(bool closed) {
 
 bool clawClosed() { return state.clawClosed; }
 
-void setAutoClaw(bool on) {
+void resendPistons() {
+    // setAutoClaw()'s task moves the claw too.
+    std::lock_guard<pros::Mutex> lock(autonClawMutex());
+    claw.resend();
+    sidePiston.resend();
+    sapphirelib::telemetry::event("macro", "pistons_resent,claw=%d,side=%d",
+                                  claw.extended() ? 1 : 0, sidePiston.extended() ? 1 : 0);
+}
+
+void grabPreload() {
+    setClawClosed(true);
+    // As driver control's grab does: the jaws shut on the pin before it
+    // leaves the floor, then up to where driver control holds it too.
+    if (ladder.level() != kBottomLevel) return;
+    sapphirelib::delayMs(kGrabLiftDelayMs);
+    sendLift(kBottomClosedLiftDeg);
+    sapphirelib::telemetry::event("macro", "preload_grab,auton");
+}
+
+void setAutoClaw(bool on, std::optional<std::int32_t> grabMm) {
     std::lock_guard<pros::Mutex> lock(autonClawMutex());
     if (!on) {
         endAutonClaw("off");
         return;
     }
+    // Ahead of the return below, so a call while it's already on moves where
+    // it grabs, and one without a distance puts it back to kPieceDetectMm.
+    autonClaw.grabMm = std::min(grabMm.value_or(kPieceDetectMm), kMaxGrabMm);
     if (autonClawTask == nullptr) {
         autonClawTask = std::make_unique<pros::Task>(
             [] {
@@ -962,11 +1122,15 @@ void setAutoClaw(bool on) {
     }
     // Under this routine's mode, if it was already on under another's.
     autonClaw.startStatus = pros::competition::get_status();
+    // Ahead of the return, so a mode left on through disabled()'s Idle shows
+    // again when the next routine asks for it.
+    leds::showAutoClaw(true);
     if (autonClaw.on) return;
     autonClaw.on = true;
     autonClaw.grabMs.reset();
     sapphirelib::auton::setSpeedLimit(kClawSpeedVolts);
-    sapphirelib::telemetry::event("macro", "auto_claw,on=1");
+    sapphirelib::telemetry::event("macro", "auto_claw,on=1,grab_mm=%d",
+                                  static_cast<int>(autonClaw.grabMm));
 }
 
 bool autoClaw() {
@@ -975,14 +1139,16 @@ bool autoClaw() {
 }
 
 void setExtended(bool out) {
-    state.extended = out;
-    extender.set(out, sapphirelib::millis());
+    state.sideOut = out;
+    sidePiston.set(out, sapphirelib::millis());
+    // "extender" as the "mech" channel's column is, see attachTelemetry().
     sapphirelib::telemetry::event("macro", "extender,out=%d", out ? 1 : 0);
 }
 
-bool extended() { return state.extended; }
+bool extended() { return state.sideOut; }
 
 void setLiftLevel(Goal goal, int level) {
+    const double levelDegBefore = ladder.levelPosition();
     const auto table = static_cast<std::size_t>(goal);
     if (table != ladder.tableIndex()) {
         ladder.selectTable(table);
@@ -995,6 +1161,7 @@ void setLiftLevel(Goal goal, int level) {
                              level, ladder.levelNumber());
     }
     sendLift(ladder.levelPosition());
+    updateLiftGauge(levelDegBefore);
     // As "mech" logs them: the goal's index and its table's entry.
     sapphirelib::telemetry::event("macro", "lift_level,mode=%d,level=%d", static_cast<int>(table),
                                   ladder.level());

@@ -41,7 +41,7 @@ constexpr std::uint8_t kImu = 4;
 constexpr std::int8_t kVerticalTracking = -6;
 constexpr std::int8_t kHorizontalTracking = 3;
 
-// --- Lift, claw, and extender (macros.cpp) ---
+// --- Lift, claw, and side piston (macros.cpp) ---
 // The lift's motors, all driven together, as many as the lift has: add or
 // remove one here and the lift, the Diagnostics page, the telemetry and the
 // controller's motor readouts (LEFT) all follow. They're lettered A, B, C...
@@ -65,10 +65,10 @@ constexpr char kLiftBottomSwitch = 'A';
 // autons pick their branch by it.
 constexpr std::uint8_t kClawDistance = 15;
 // The two pistons, on 3-wire ports (not smart ports). R1 opens and closes the
-// claw, a score opens it, and autoClaw closes it; Y pushes the extender out
+// claw, a score opens it, and autoClaw closes it; Y pushes the side piston out
 // and pulls it back in (see macros.hpp).
 constexpr char kClawPiston = 'B';
-constexpr char kExtenderPiston = 'H';
+constexpr char kSidePiston = 'H';
 
 // --- Localization distance sensors (devices.cpp) ---
 // One per side, for Monte Carlo localization. The team calls them by

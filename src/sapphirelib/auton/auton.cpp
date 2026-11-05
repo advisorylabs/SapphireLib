@@ -128,6 +128,12 @@ chassis::ExitConditions exitFor(const Options& options, double error, double cha
     return exit;
 }
 
+// Options::reverse as a tank's direction. A holonomic drive holds its heading and slides any way,
+// so it has none
+motion::DriveDirection directionFor(const Options& options) {
+    return options.reverse ? motion::DriveDirection::reverse : motion::DriveDirection::automatic;
+}
+
 // --- followTrajectory()'s plans ---
 
 bool sameAxis(const MotorFeedforward& a, const MotorFeedforward& b) {
@@ -336,8 +342,10 @@ motion::MotionResult turnToPoint(double xIn, double yIn, Options options) {
 motion::MotionResult moveToPoint(double xIn, double yIn, Options options) {
     if (auto skip = begin("moveToPoint")) return *skip;
     const chassis::ExitConditions exit = exitFor(options, kExitIn, kChainExitIn);
-    return onChassis(
-        [&](auto& drivetrain) { return drivetrain.moveToPoint(xIn, yIn, *odometry, exit); });
+    if (tank != nullptr) {
+        return tank->moveToPoint(xIn, yIn, *odometry, exit, directionFor(options));
+    }
+    return holonomic->moveToPoint(xIn, yIn, *odometry, exit);
 }
 
 motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg, Options options) {
@@ -349,9 +357,10 @@ motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg, Optio
     if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
     exit.maxVolts = limitedVolts(options.maxVolts);
     exit.chain = options.chain;
-    return onChassis([&](auto& drivetrain) {
-        return drivetrain.moveToPose(xIn, yIn, headingDeg, *odometry, exit);
-    });
+    if (tank != nullptr) {
+        return tank->moveToPose(xIn, yIn, headingDeg, *odometry, exit, directionFor(options));
+    }
+    return holonomic->moveToPose(xIn, yIn, headingDeg, *odometry, exit);
 }
 
 motion::MotionResult strafe(double inches, Options options) {

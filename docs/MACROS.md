@@ -236,6 +236,11 @@ const bool clampReady = clamp.extendedFor(400, now); // it's had 400ms to close
 `extendedAtStart` and `extendedIsLow` (for a valve plumbed the other way round) are constructor
 arguments. Only drive the piston through the class, or its time-in-state goes wrong.
 
+A piston built at namespace scope sends its starting state before `initialize()`, and the brain
+can drop it: the valve then goes to the port's low state once the 3-wire ports come up, whatever
+`extendedAtStart` said. `resend()` sets the port up again and sends the state the piston is in, so
+call it at the end of `initialize()` and at each enable.
+
 ### Roller
 
 ```cpp

@@ -35,7 +35,7 @@ sapphirelib::input::Controller& controller();
 ///     stays the same. Stays on until pressed again, restarts included.
 ///   - The higher the lift, the slower the drive: no wheel gets more than
 ///     macros::driveMaxVolts(), 12V with the lift down and 7V at its full
-///     height, and 5.75V while clawSpeed is on (DOWN, see macros.hpp). Past
+///     height, and 5.75V while clawSpeed is on (R1+R2, see macros.hpp). Past
 ///     that, more stick goes no faster.
 ///   - In practice mode (setPracticeMode()), any drive stick past
 ///     kPracticeMaxThrottlePct (config.hpp) cuts the drive motors' power,
@@ -58,6 +58,11 @@ bool practiceMode();
 ///     field connected, so it can't fire during a real match, and not while a
 ///     GUI routine is driving the chassis. It ends the auto cycle and brakes
 ///     the lift first (macros::stop()), and blocks until the routine ends.
+///   - The LEDs (leds.hpp), anywhere, matches included: X on its own turns
+///     every LED off or back on, UP on its own the white strobe, and DOWN
+///     plays the showcase (again to stop it). X and UP act as they're let go,
+///     and not at all if the other went down while they were held, so X+UP
+///     never touches the LEDs.
 ///
 /// A alone, the auto cycle, is autocycle::update()'s (robot/autocycle.hpp).
 void shortcuts(sapphirelib::input::Controller& controller);

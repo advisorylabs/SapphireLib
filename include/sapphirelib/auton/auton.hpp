@@ -108,9 +108,19 @@ odom::Pose pose();
  * moveToPoint(0, 48, {.timeoutMs = 1500});       // give up sooner
  * moveToPoint(0, 24, {.chain = true});           // keep moving into the next motion...
  * moveToPoint(24, 48);                           // ...which ends stopped
+ * moveToPoint(0, 0, {.reverse = true});          // back up to it (tank)
  * @endcode
  */
 struct Options {
+    /**
+     * drive there backward: moveToPoint() turns its back to the point and backs up to it, and
+     * moveToPose() backs in, still ending facing the heading. False, the default, goes whichever
+     * way needs less turning. Tank only: a holonomic drive holds its heading and slides any way,
+     * so it already backs up to a point behind it, and ignores this. drive() and the turns ignore
+     * it too (drive() goes backward for negative inches)
+     */
+    bool reverse = false;
+
     /** give up after this long, in milliseconds. 0, the default, uses the motion's own (3s, 4s
      * for moveToPose()) */
     std::uint32_t timeoutMs = 0;
@@ -194,7 +204,7 @@ motion::MotionResult turnToPoint(double xIn, double yIn, Options options = {});
 
 /**
  * @brief Drive to a point on the field. A holonomic drive holds its heading on the way; a tank
- * drive steers to face the point
+ * drive steers to face the point, or to face its back at it with Options::reverse
  *
  * @param xIn the point's x, in inches
  * @param yIn the point's y, in inches
@@ -204,7 +214,8 @@ motion::MotionResult turnToPoint(double xIn, double yIn, Options options = {});
 motion::MotionResult moveToPoint(double xIn, double yIn, Options options = {});
 
 /**
- * @brief Drive to a point on the field and end facing a heading
+ * @brief Drive to a point on the field and end facing a heading. A tank drive backs in with
+ * Options::reverse, still ending facing the heading
  *
  * @param xIn the point's x, in inches
  * @param yIn the point's y, in inches

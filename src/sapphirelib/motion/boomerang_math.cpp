@@ -32,6 +32,18 @@ double turnToward(double direction, const odom::Pose& pose, double xIn, double y
 
 } // namespace
 
+const char* driveDirectionName(DriveDirection direction) {
+    switch (direction) {
+    case DriveDirection::forward:
+        return "forward";
+    case DriveDirection::reverse:
+        return "reverse";
+    case DriveDirection::automatic:
+        break;
+    }
+    return "automatic";
+}
+
 SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg) {
     double headingError = wrapDegrees180(targetBearingDeg - currentHeadingDeg);
     double direction = 1.0;
@@ -42,9 +54,24 @@ SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg) {
     return SteeringError{headingError, direction};
 }
 
+SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg,
+                          DriveDirection direction) {
+    switch (direction) {
+    case DriveDirection::forward:
+        return SteeringError{wrapDegrees180(targetBearingDeg - currentHeadingDeg), 1.0};
+    case DriveDirection::reverse:
+        // the back is the front turned round
+        return SteeringError{wrapDegrees180(targetBearingDeg + 180.0 - currentHeadingDeg), -1.0};
+    case DriveDirection::automatic:
+        break;
+    }
+    return steerToward(targetBearingDeg, currentHeadingDeg);
+}
+
 BoomerangStep boomerangStep(const odom::Pose& pose, double targetXIn, double targetYIn,
                             double targetHeadingDeg, double leadPct, double settleRadiusIn,
-                            double turnRadiusIn, const BoomerangStep& previous) {
+                            double turnRadiusIn, const BoomerangStep& previous,
+                            DriveDirection direction) {
     BoomerangStep step;
     step.started = true;
     const double dxIn = targetXIn - pose.xIn;
@@ -53,10 +80,15 @@ BoomerangStep boomerangStep(const odom::Pose& pose, double targetXIn, double tar
     const double offsetIn = step.distanceIn * leadPct;
 
     // forward or backing in, chosen once, from whichever points the robot more nearly at its
-    // carrot now (forward on a tie, within a degree). Chosen afresh every tick, a robot whose
-    // carrot swings past 90 degrees flips to backing in and arrives facing the wrong way
+    // carrot now (forward on a tie, within a degree), unless the caller forced one. Chosen afresh
+    // every tick, a robot whose carrot swings past 90 degrees flips to backing in and arrives
+    // facing the wrong way
     if (previous.started) {
         step.direction = previous.direction;
+    } else if (direction == DriveDirection::forward) {
+        step.direction = 1.0;
+    } else if (direction == DriveDirection::reverse) {
+        step.direction = -1.0;
     } else {
         double xIn = 0.0;
         double yIn = 0.0;

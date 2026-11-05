@@ -67,6 +67,17 @@ public:
     bool toggle(std::uint32_t nowMs);
 
     /**
+     * @brief Set the port up as an output again, and send the valve the state the piston is in
+     *
+     * A piston built at namespace scope sets its port up from its constructor, before
+     * initialize(), and the brain may not take it: the valve can then sit at the port's low state,
+     * whatever `extendedAtStart` said, while extended() says otherwise. Call this once the program
+     * is running, and at each enable, so the valve matches. The piston doesn't move as far as the
+     * class knows, so its time in state keeps counting
+     */
+    void resend();
+
+    /**
      * @brief Whether the piston is extended
      */
     bool extended() const;
@@ -93,6 +104,9 @@ private:
     pros::adi::Pneumatics pneumatics_;
     // the piston's state and when it last changed. Only ever changes together with pneumatics_
     TimedFlag state_;
+    // where pneumatics_ is, for resend(): INTERNAL_ADI_PORT for the brain's own ports
+    std::uint8_t smartPort_;
+    std::uint8_t adiPort_;
 };
 
 } // namespace sapphirelib::mechanism

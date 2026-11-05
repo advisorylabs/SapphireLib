@@ -18,7 +18,13 @@ namespace sapphirelib::chassis {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kDegToRad = kPi / 180.0;
 constexpr std::uint32_t kLoopDelayMs = 10;
+
+// how close moveToPoint()'s forced direction gives way to the shorter one, in inches: right by the
+// point the bearing to it is noise, and an overshoot would otherwise turn the robot round to come
+// back
+constexpr double kFreeSteerRadiusIn = 3.0;
 
 constexpr const char* kNoOdometry = "no odometry - call setOdometry() first, or pass one";
 
@@ -218,23 +224,28 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
 
 motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn,
                                                  const odom::Odometry& odometry,
-                                                 ExitConditions exit) {
+                                                 ExitConditions exit,
+                                                 motion::DriveDirection direction) {
     // no hold_deg, unlike the holonomic drivetrain: a tank drive steers to face the point
     telemetry::event("motion",
-                     "start,moveToPoint,x=%.3f,y=%.3f,threshold=%.3f,settle_ms=%u,timeout_ms=%u",
+                     "start,moveToPoint,x=%.3f,y=%.3f,threshold=%.3f,settle_ms=%u,timeout_ms=%u,"
+                     "direction=%s",
                      xIn, yIn, exit.errorThreshold, static_cast<unsigned>(exit.settleTimeMs),
-                     static_cast<unsigned>(exit.timeoutMs));
-    return finishMotion("moveToPoint", approachPoint(xIn, yIn, odometry, exit, CompetitionWatch()));
+                     static_cast<unsigned>(exit.timeoutMs), motion::driveDirectionName(direction));
+    return finishMotion("moveToPoint",
+                        approachPoint(xIn, yIn, odometry, exit, direction, CompetitionWatch()));
 }
 
-motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn, ExitConditions exit) {
+motion::MotionResult TankDrivetrain::moveToPoint(double xIn, double yIn, ExitConditions exit,
+                                                 motion::DriveDirection direction) {
     if (odometry_ == nullptr) return abortMotion("moveToPoint", kNoOdometry);
-    return moveToPoint(xIn, yIn, *odometry_, exit);
+    return moveToPoint(xIn, yIn, *odometry_, exit, direction);
 }
 
 motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
                                                    const odom::Odometry& odometry,
                                                    ExitConditions exit,
+                                                   motion::DriveDirection direction,
                                                    const CompetitionWatch& watch) {
     drivePID_.reset();
     turnPID_.reset();
@@ -242,6 +253,9 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
+    // whether a forced direction has given way to the shorter one (see kFreeSteerRadiusIn).
+    // Latched until a bump takes it twice as far out, so it doesn't flap at the edge
+    bool freeSteering = false;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -250,8 +264,23 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
         const double distanceIn = std::hypot(dxIn, dyIn);
         const double targetBearingDeg = std::atan2(dxIn, dyIn) / kPi * 180.0;
 
-        const motion::SteeringError steer = motion::steerToward(targetBearingDeg, pose.headingDeg);
-        const double forwardOutput = steer.direction * drivePID_.update(distanceIn, 0.0);
+        if (direction != motion::DriveDirection::automatic) {
+            const bool nowFree = freeSteering ? distanceIn <= 2.0 * kFreeSteerRadiusIn
+                                              : distanceIn <= kFreeSteerRadiusIn;
+            // the turn error can jump to something new: no derivative kick from the jump
+            if (nowFree != freeSteering) turnPID_.reset();
+            freeSteering = nowFree;
+        }
+        const bool forced = direction != motion::DriveDirection::automatic && !freeSteering;
+        const motion::SteeringError steer = motion::steerToward(
+            targetBearingDeg, pose.headingDeg,
+            forced ? direction : motion::DriveDirection::automatic);
+        // forced, a point well off to the side turns before it drives, rather than arcing away
+        // from it: none of the drive at 90 degrees off and past
+        const double driveScale =
+            forced ? std::max(0.0, std::cos(steer.headingErrorDeg * kDegToRad)) : 1.0;
+        const double forwardOutput =
+            steer.direction * driveScale * drivePID_.update(distanceIn, 0.0);
         const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
 
         const SideVolts sides =
@@ -277,13 +306,14 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
 
 motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
                                                 const odom::Odometry& odometry,
-                                                motion::PoseExitConditions exit) {
+                                                motion::PoseExitConditions exit,
+                                                motion::DriveDirection direction) {
     telemetry::event("motion",
                      "start,moveToPose,x=%.3f,y=%.3f,heading_deg=%.3f,pos_threshold=%.3f,"
-                     "heading_threshold=%.3f,settle_ms=%u,timeout_ms=%u",
+                     "heading_threshold=%.3f,settle_ms=%u,timeout_ms=%u,direction=%s",
                      xIn, yIn, headingDeg, exit.positionErrorThresholdIn,
                      exit.headingErrorThresholdDeg, static_cast<unsigned>(exit.settleTimeMs),
-                     static_cast<unsigned>(exit.timeoutMs));
+                     static_cast<unsigned>(exit.timeoutMs), motion::driveDirectionName(direction));
 
     const CompetitionWatch watch;
     drivePID_.reset();
@@ -303,7 +333,7 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
         const odom::Pose pose = odometry.getPose();
         const motion::BoomerangStep next =
             motion::boomerangStep(pose, xIn, yIn, headingDeg, exit.boomerangLeadPct,
-                                  exit.settleRadiusIn, turnRadiusIn, step);
+                                  exit.settleRadiusIn, turnRadiusIn, step, direction);
         // the turn error jumps to something new: no derivative kick from the jump
         if (next.settling != step.settling || next.turning != step.turning) turnPID_.reset();
         step = next;
@@ -339,9 +369,10 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
 }
 
 motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double headingDeg,
-                                                motion::PoseExitConditions exit) {
+                                                motion::PoseExitConditions exit,
+                                                motion::DriveDirection direction) {
     if (odometry_ == nullptr) return abortMotion("moveToPose", kNoOdometry);
-    return moveToPose(xIn, yIn, headingDeg, *odometry_, exit);
+    return moveToPose(xIn, yIn, headingDeg, *odometry_, exit, direction);
 }
 
 motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
@@ -406,7 +437,8 @@ motion::MotionResult TankDrivetrain::followPath(const motion::Path& path,
     }
 
     motion::MotionResult result =
-        approachPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit, watch);
+        approachPoint(finalPoint.xIn, finalPoint.yIn, odometry, config.finalExit,
+                      motion::DriveDirection::automatic, watch);
     // the final approach decides how the path ended, but the time covers the whole path
     result.elapsedMs = pros::millis() - startMs;
     return finishMotion("followPath", result);

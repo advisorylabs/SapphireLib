@@ -28,6 +28,7 @@ using sapphirelib::PID;
 using sapphirelib::wrapDegrees180;
 using sapphirelib::motion::BoomerangStep;
 using sapphirelib::motion::boomerangStep;
+using sapphirelib::motion::DriveDirection;
 using sapphirelib::motion::ExitReason;
 using sapphirelib::motion::ExitTracker;
 using sapphirelib::motion::SteeringError;
@@ -110,6 +111,59 @@ void testItPicksADirectionAndKeepsIt() {
     assert(step.direction == -1.0);
     expectNear(std::fabs(step.turnErrorDeg), 180.0, 1e-9, "backing toward it means turning round");
     expectNear(step.driveScale, 0.0, 1e-12, "and not driving until it has");
+}
+
+void testForcedSteerToward() {
+    // forward turns the front at it however far round, instead of backing up
+    SteeringError s = steerToward(30.0, 0.0, DriveDirection::forward);
+    expectNear(s.headingErrorDeg, 30.0, 1e-12, "forward, ahead: turn");
+    assert(s.direction == 1.0);
+    s = steerToward(170.0, 0.0, DriveDirection::forward);
+    expectNear(s.headingErrorDeg, 170.0, 1e-12, "forward, behind: turn round");
+    assert(s.direction == 1.0);
+
+    // reverse turns the back at it
+    s = steerToward(170.0, 0.0, DriveDirection::reverse);
+    expectNear(s.headingErrorDeg, -10.0, 1e-12, "reverse, behind: back straight up");
+    assert(s.direction == -1.0);
+    s = steerToward(30.0, 0.0, DriveDirection::reverse);
+    expectNear(s.headingErrorDeg, -150.0, 1e-12, "reverse, ahead: turn the back round to it");
+    assert(s.direction == -1.0);
+    s = steerToward(-100.0, 350.0, DriveDirection::reverse);
+    expectNear(s.headingErrorDeg, 90.0, 1e-12, "reverse, across 0");
+    assert(s.direction == -1.0);
+
+    // automatic is the plain one
+    const SteeringError plain = steerToward(-101.0, 350.0);
+    s = steerToward(-101.0, 350.0, DriveDirection::automatic);
+    expectNear(s.headingErrorDeg, plain.headingErrorDeg, 1e-12, "automatic: same turn");
+    assert(s.direction == plain.direction);
+}
+
+void testAForcedDirectionSkipsThePick() {
+    // straight ahead, which it would drive forward into: forced to back in, the carrot goes in
+    // front of the target, and the robot turns round before it drives
+    BoomerangStep step =
+        boomerangStep(Pose{}, 0.0, 30.0, 0.0, 0.6, 3.0, 0.5, {}, DriveDirection::reverse);
+    assert(step.direction == -1.0);
+    expectNear(std::fabs(step.turnErrorDeg), 180.0, 1e-9, "reverse, ahead: turn the back round");
+    expectNear(step.driveScale, 0.0, 1e-12, "and not driving until it has");
+
+    // straight behind, which it would back into: forced forward, it turns round to drive in
+    step = boomerangStep(Pose{}, 0.0, -30.0, 0.0, 0.6, 3.0, 0.5, {}, DriveDirection::forward);
+    assert(step.direction == 1.0);
+    expectNear(std::fabs(step.turnErrorDeg), 180.0, 1e-9, "forward, behind: turn round");
+
+    // where the pick agrees, forcing it changes nothing
+    const BoomerangStep picked = boomerangStep(Pose{}, 0.0, -30.0, 0.0, 0.6, 3.0, 0.5, {});
+    step = boomerangStep(Pose{}, 0.0, -30.0, 0.0, 0.6, 3.0, 0.5, {}, DriveDirection::reverse);
+    assert(step.direction == picked.direction);
+    expectNear(step.turnErrorDeg, picked.turnErrorDeg, 1e-12, "reverse, behind: as picked");
+
+    // only the first tick is forced: after that the direction is the last tick's
+    BoomerangStep previous = step;
+    step = boomerangStep(Pose{}, 0.0, -30.0, 0.0, 0.6, 3.0, 0.5, previous, DriveDirection::forward);
+    assert(step.direction == -1.0);
 }
 
 void testSettlingGetsOnThePointThenTurns() {
@@ -324,6 +378,8 @@ void testItSettlesOnTheFinalHeading() {
 int main() {
     testSteerToward();
     testItPicksADirectionAndKeepsIt();
+    testForcedSteerToward();
+    testAForcedDirectionSkipsThePick();
     testSettlingGetsOnThePointThenTurns();
     testItSettlesOnTheFinalHeading();
     std::puts("boomerang_math_test: all assertions passed");

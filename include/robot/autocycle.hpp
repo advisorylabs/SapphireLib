@@ -25,7 +25,7 @@
  * Steps 2 and 4 are chained: the robot keeps moving from one point to the
  * next, and only stops at the goal and the loader.
  *
- * The lift, claw and extender buttons work the whole time, as in driver
+ * The lift, claw and side piston buttons work the whole time, as in driver
  * control. Any drive stick ends the cycle that same tick, and the sticks
  * drive on from there; so does A again. So does anything that stops driver
  * control (a disable, autonomous), a GUI routine taking the chassis, or X+UP.

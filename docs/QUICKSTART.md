@@ -87,10 +87,15 @@ moveToPoint(0, 48, {.timeoutMs = 1500});     // give up sooner
 turnTo(90, {.exitError = 1});                // stop within 1 degree, not 2
 moveToPoint(0, 24, {.chain = true});         // keep moving into the next motion...
 moveToPoint(24, 48);                         // ...which ends stopped
+moveToPoint(0, 0, {.reverse = true});        // back up to it (tank)
 ```
+
+Options go in the order of the table below: `{.reverse = true, .timeoutMs = 1000}` works, but
+`{.timeoutMs = 1000, .reverse = true}` doesn't compile.
 
 | Option | Default | What it does |
 | --- | --- | --- |
+| `reverse` | `false` | Tank only. `moveToPoint()` turns its back to the point and backs up to it; `moveToPose()` backs in and still ends facing the heading. By default a tank goes whichever way needs less turning. A holonomic drive holds its heading and slides any way, so it ignores this |
 | `timeoutMs` | 3000 (4000 for `moveToPose()`) | Give up after this long, so a stuck robot can't freeze the routine |
 | `maxVolts` | 12 | Top motor voltage. Lower is gentler. The whole output scales down, so the robot still heads the same way |
 | `chain` | `false` | End as soon as it's close, without settling, and leave the motors running: the next motion starts at speed. Faster, a little less exact |
@@ -125,7 +130,7 @@ against them with the waits:
 ```cpp
 runAsync([] { moveToPoint(0, 48); });
 waitUntilTraveled(12);          // 12 in into the move...
-macros::setExtended(true);      // ...push the extender out
+macros::setExtended(true);      // ...push the side piston out
 waitUntilNear(0, 48, 6);        // 6 in from the end...
 macros::setExtended(false);     // ...pull it back in
 waitForMotion();                // until it's done
@@ -242,7 +247,7 @@ During autonomous the driver macros aren't running, so move things directly:
 | Call | Does |
 | --- | --- |
 | `macros::setClawClosed(true / false)` | close or open the claw |
-| `macros::setExtended(true / false)` | push the extender out or pull it in |
+| `macros::setExtended(true / false)` | push the side piston out or pull it in |
 | `macros::setLiftLevel(macros::Goal::alliance, 3)` | send the lift to a goal's level (`alliance`, `medium`, `center`), numbered as the controller shows them, 0 the bottom; returns at once |
 | `macros::setLiftDeg(deg)` | send the lift to any height, in motor degrees up from the bottom switch; returns at once |
 | `macros::liftScoreDeg()` | where R2's score dips to from the level `setLiftLevel()` last picked, for `setLiftDeg()` |

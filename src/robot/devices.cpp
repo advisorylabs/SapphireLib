@@ -265,7 +265,7 @@ void initDevices() {
     sapphirelib::auton::use(chassis, odometry(), &localizer(),
                             {.wallReset = {.cornerMarginIn = 18.0, .maxJumpIn = 8.0}});
 
-    // Lift/claw/extender driver macros, see macros.hpp. Zeroes the lift's
+    // Lift/claw/side piston driver macros, see macros.hpp. Zeroes the lift's
     // encoders here, and driver control zeroes them again on every press of
     // the bottom switch.
     macros::initialize();

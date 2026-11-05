@@ -70,17 +70,17 @@ Yours to finish first. Everything here is a constant at the top of
 | Constant | Now | What it is |
 |---|---|---|
 | `kLiftMotors` (`config.hpp`) | 14, -13, -10 | the lift's motors, all driven together; add or remove one and everything that drives, checks, logs or shows them follows |
-| `kLiftBottomSwitch`, `kClawPiston`, `kExtenderPiston` (`config.hpp`) | 'A', 'B', 'H' | the 3-wire ports: the lift's bottom switch, the claw and the extender |
+| `kLiftBottomSwitch`, `kClawPiston`, `kSidePiston` (`config.hpp`) | 'A', 'B', 'H' | the 3-wire ports: the lift's bottom switch, the claw and the side piston |
 | `ladder` | placeholders | each goal's level heights, in motor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift rests on its switch and autoClaw picks up pins, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has. Names show on the controller, 8 characters at most |
 | `kPieceDetectMm` | 65 | where autoClaw grabs: it closes the claw the first time the claw's distance sensor reads this or closer, at any speed. Also what counts as a pin in the claw, for re-arming autoClaw and for the Branch autons |
 | `kAutoClawClearMs` | 400 | once the claw opens on a pin, how long the sensor must see the claw empty before autoClaw can close it again. Raise it if the claw snaps shut on a pin it was just opened to drop |
 | `kScoreBackOffIn` | 3 | once a score opens the claw, how far the robot must back off the goal, by the vertical tracking wheel, before the lift lowers to the bottom (L2 lowers it sooner). Needs the wheel's sign right: driving forward must raise it |
 | `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
-| `kLiftToleranceDeg` | 15 | how close the lift must get before a score's dip moves on to opening the claw |
-| `kLiftDescendTimeoutMs` | 1000 | how long a score's dip waits for the lift before opening the claw anyway |
+| `kLiftToleranceDeg` | 15 | how close the lift must get to count as there: a score's dip opens the claw as soon as it is |
+| `kScoreReleaseMs` | 100 | the latest a score opens the claw, counted from R2's press, whether or not the lift has reached its dip yet (it carries on down after) |
 | `kLiftMaxDownVolts` | 9 | the most the lift is ever driven down with, 75% of full power: its loop, the seat, debug mode's L2, Auto-Tune's ramps and the Lift Testing auton all stop here. Up is still full power |
 | `kLiftDebugVolts` | 12 | debug mode: the volts L1 and L2 put on the lift motors while held (L2's capped at `kLiftMaxDownVolts`) |
-| `kClawSpeedVolts` | 5.75 | clawSpeed (DOWN): the most any drive wheel gets while it's on. autoClaw only works while clawSpeed is on |
+| `kClawSpeedVolts` | 5.75 | clawSpeed (R1+R2): the most any drive wheel gets while it's on. autoClaw only works while clawSpeed is on |
 | `kClawSpeedOffDelayMs` | 350 | how long after the claw closes with the lift at the bottom clawSpeed turns itself off. The claw opening again first keeps it on |
 
 - [ ] **Debug mode** (Home page, **Debug**) for the checks below: L1 and L2 drive the lift motors
@@ -96,8 +96,8 @@ Yours to finish first. Everything here is a constant at the top of
 - [ ] **The bottom switch.** The third line's label reads `BTM` instead of `LIFT` while the switch is
   pressed. Press it by hand, then lower the lift onto it with L2: `BTM` should come on as it lands,
   and the reading go to 0. Unplug it: the label should stay `LIFT`.
-- [ ] **Pistons.** Still in debug mode, R1 flips the claw and Y the extender, one press each. The
-  controller's top line shows both, `DBG SHUT EX:IN`. The claw should start closed, and each should
+- [ ] **Pistons.** Still in debug mode, R1 flips the claw and Y the side piston, one press each. The
+  controller's top line shows both, `DBG SHUT SD:IN`. The claw should start closed, and each should
   move the way the line says; one that's backward has its valve plumbed the other way: swap its air
   lines, or give its `Piston` in `macros.cpp` `extendedIsLow = true`.
 - [ ] **Encoder sign.** Nothing to set: the encoders are the motors' own, so a port's sign reverses
@@ -116,8 +116,8 @@ Yours to finish first. Everything here is a constant at the top of
 - [ ] **`kPieceDetectMm`.** Start log, sit a pin in the claw, take it out, a few times. In the
   analyzer's **Charts**, the `mech` channel's `piece_mm` shows both readings; pick a value between.
 - [ ] **autoClaw.** Out of debug mode, lift at the bottom, R1 to open the claw with no pin in it, and
-  DOWN to turn clawSpeed on (autoClaw is off without it), then push a pin in: it closes. R1 to open it
-  again on that pin: it stays open until you take the pin out and put one back. Then DOWN again, since
+  R1+R2 together to turn clawSpeed on (autoClaw is off without it), then push a pin in: it closes. R1 to open it
+  again on that pin: it stays open until you take the pin out and put one back. Then R1+R2 again, since
   the grab turned clawSpeed off.
 - [ ] **autoClaw at speed.** With clawSpeed on, drive onto pins as you would in a match, filming in
   slow motion.

@@ -8,6 +8,7 @@
 #include "sapphirelib/chassis/drivetrain_config.hpp"
 #include "sapphirelib/chassis/motor_group.hpp"
 #include "sapphirelib/control/pid.hpp"
+#include "sapphirelib/motion/boomerang_math.hpp"
 #include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
@@ -158,17 +159,23 @@ public:
     /**
      * @brief Drive to a point on the field
      *
-     * Turns toward the point while driving, and reverses instead of spinning around when the
-     * point is more than 90 degrees behind. Doesn't control the final heading; see moveToPose()
+     * Turns toward the point while driving. By default it backs up instead of spinning around
+     * when the point is more than 90 degrees behind; a forward or reverse direction turns that
+     * end toward the point however far round it is, turning before it drives, and gives way to
+     * the shorter one within a few inches so an overshoot backs (or creeps) onto the point
+     * instead of turning around. Doesn't control the final heading; see moveToPose()
      *
      * @param xIn target x, in inches
      * @param yIn target y, in inches
      * @param odometry where to read the pose from
      * @param exit when the motion ends. errorThreshold is the distance to the point, in inches
+     * @param direction which end leads. Whichever needs less turning by default
      * @return motion::MotionResult how the motion ended
      */
-    motion::MotionResult moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
-                                     ExitConditions exit = ExitConditions{1.0});
+    motion::MotionResult
+    moveToPoint(double xIn, double yIn, const odom::Odometry& odometry,
+                ExitConditions exit = ExitConditions{1.0},
+                motion::DriveDirection direction = motion::DriveDirection::automatic);
 
     /**
      * @brief Drive to a point on the field, using the odometry from setOdometry()
@@ -176,16 +183,20 @@ public:
      * @param xIn target x, in inches
      * @param yIn target y, in inches
      * @param exit when the motion ends. errorThreshold is the distance to the point, in inches
+     * @param direction which end leads. Whichever needs less turning by default
      * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
      *
      * @b Example
      * @code {.cpp}
      * // drive to (24, 24), and stop the routine if it didn't get there
      * if (!drivetrain().moveToPoint(24, 24).settled()) return;
+     * // back up to (0, 0), even if it's ahead
+     * drivetrain().moveToPoint(0, 0, {1.0}, sapphirelib::motion::DriveDirection::reverse);
      * @endcode
      */
-    motion::MotionResult moveToPoint(double xIn, double yIn,
-                                     ExitConditions exit = ExitConditions{1.0});
+    motion::MotionResult
+    moveToPoint(double xIn, double yIn, ExitConditions exit = ExitConditions{1.0},
+                motion::DriveDirection direction = motion::DriveDirection::automatic);
 
     /**
      * @brief Drive to a pose on the field with the boomerang controller
@@ -193,20 +204,22 @@ public:
      * Aims at a carrot point behind the target along its heading (see
      * motion::PoseExitConditions::boomerangLeadPct), so the chassis curves into the final heading
      * instead of turning in place most of the way. Whether it drives forward or backs in is picked
-     * once, at the start. Within exit.settleRadiusIn it settles: it heads for the point itself,
-     * then turns in place to the final heading, which the exit also requires. See
-     * motion::boomerangStep()
+     * once, at the start, unless direction says which. Backing in, it still ends facing
+     * headingDeg. Within exit.settleRadiusIn it settles: it heads for the point itself, then turns
+     * in place to the final heading, which the exit also requires. See motion::boomerangStep()
      *
      * @param xIn target x, in inches
      * @param yIn target y, in inches
      * @param headingDeg target heading, in degrees
      * @param odometry where to read the pose from
      * @param exit when the motion ends
+     * @param direction drive in forward or back in. Whichever needs less turning by default
      * @return motion::MotionResult how the motion ended. finalError is the distance to the point
      */
-    motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg,
-                                    const odom::Odometry& odometry,
-                                    motion::PoseExitConditions exit = {});
+    motion::MotionResult
+    moveToPose(double xIn, double yIn, double headingDeg, const odom::Odometry& odometry,
+               motion::PoseExitConditions exit = {},
+               motion::DriveDirection direction = motion::DriveDirection::automatic);
 
     /**
      * @brief Drive to a pose on the field, using the odometry from setOdometry()
@@ -215,16 +228,20 @@ public:
      * @param yIn target y, in inches
      * @param headingDeg target heading, in degrees
      * @param exit when the motion ends
+     * @param direction drive in forward or back in. Whichever needs less turning by default
      * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
      *
      * @b Example
      * @code {.cpp}
      * // curve into (24, 48) facing 90 degrees, with a tighter curve than the default
      * drivetrain().moveToPose(24, 48, 90, {.boomerangLeadPct = 0.4});
+     * // back into (0, -24), ending facing 0
+     * drivetrain().moveToPose(0, -24, 0, {}, sapphirelib::motion::DriveDirection::reverse);
      * @endcode
      */
-    motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg,
-                                    motion::PoseExitConditions exit = {});
+    motion::MotionResult
+    moveToPose(double xIn, double yIn, double headingDeg, motion::PoseExitConditions exit = {},
+               motion::DriveDirection direction = motion::DriveDirection::automatic);
 
     /**
      * @brief Follow a path with pure pursuit
@@ -311,7 +328,8 @@ private:
     // moveToPoint()'s loop. Logs no events of its own, so followPath()'s final approach shows up
     // as part of the path
     motion::MotionResult approachPoint(double xIn, double yIn, const odom::Odometry& odometry,
-                                       ExitConditions exit, const CompetitionWatch& watch);
+                                       ExitConditions exit, motion::DriveDirection direction,
+                                       const CompetitionWatch& watch);
 };
 
 } // namespace sapphirelib::chassis

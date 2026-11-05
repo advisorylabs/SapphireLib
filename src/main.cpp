@@ -3,8 +3,8 @@
  *
  * PROS's competition callbacks, and nothing else: each one hands off to the
  * robot program in src/robot/ (ports in include/robot/config.hpp, devices,
- * screen, autons, tuning, telemetry, driver control, the lift/claw/extender
- * macros, and the auto cycle).
+ * screen, autons, tuning, telemetry, driver control, the lift/claw/side piston
+ * macros, the auto cycle, and the LEDs).
  *
  * Team 96671H: Hitmen
  */
@@ -13,6 +13,7 @@
 #include "robot/autocycle.hpp"
 #include "robot/devices.hpp"
 #include "robot/driver.hpp"
+#include "robot/leds.hpp"
 #include "robot/macros.hpp"
 #include "robot/screen.hpp"
 #include "robot/telemetry.hpp"
@@ -50,6 +51,15 @@ void initialize() {
     // Pages need the devices (and the Home page the logger); also starts the
     // screen refreshing.
     robot::buildScreen();
+
+    // Every LED strand on Idle; the macros switch the modes from here on.
+    robot::leds::start();
+
+    // The pistons were built before initialize(), and the brain can drop the
+    // states they sent then: a valve would go to its port's low state once
+    // the LEDs have set their 3-wire ports up, just above. So their states
+    // again, now.
+    robot::macros::resendPistons();
     SAPPHIRELIB_LOG_INFO("init", "initialize() complete");
 }
 
@@ -62,6 +72,9 @@ void disabled() {
     // VEXos ignores motor commands while disabled anyway; this makes sure
     // nothing picks up where it left off at the next enable.
     robot::macros::stop();
+    // Nothing's scoring or grabbing while disabled; a score cut short is
+    // dropped at the next enable anyway.
+    robot::leds::showIdle();
     // LEFT and RIGHT pick the auton until the robot is enabled.
     robot::pickAutonWithController();
 }
@@ -91,7 +104,14 @@ void competition_initialize() {
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() { robot::runSelectedAuton(); }
+void autonomous() {
+    // The claw starts open: autonomous closes it on the preload and lifts it,
+    // ahead of the routine. Driver control's start leaves the claw alone.
+    // The valves are resent first, as at every enable (resendPistons()).
+    robot::macros::resendPistons();
+    robot::macros::grabPreload();
+    robot::runSelectedAuton();
+}
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -116,7 +136,7 @@ void opcontrol() {
         // the driver asked for next to what the robot did.
         robot::logDriver(controller);
 
-        // Claw, lift, and extender buttons (R1/R2/L1/L2/Y/DOWN/RIGHT/LEFT). Runs
+        // Claw, lift, and side piston buttons (R1/R2/L1/L2/Y/RIGHT/LEFT). Runs
         // ahead of the busy checks below, so they keep working during a GUI
         // routine and the auto cycle.
         robot::macros::update(controller);
@@ -132,8 +152,9 @@ void opcontrol() {
         // own, see robot::screenBusy().
         if (!cycling && !robot::screenBusy()) robot::drive(controller);
 
-        // X+UP runs the selected auton, off the field only. Every tick, busy
-        // or not, see shortcuts().
+        // X+UP runs the selected auton, off the field only; X, UP and DOWN
+        // on their own work the LEDs. Every tick, busy or not, see
+        // shortcuts().
         robot::shortcuts(controller);
 
         // The macros set the controller screen's lines 0 and 2 and drive()

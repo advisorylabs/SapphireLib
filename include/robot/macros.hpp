@@ -1,29 +1,35 @@
 /**
  * \file robot/macros.hpp
  *
- * Driver macros for the lift, the claw, and the extender, built on
+ * Driver macros for the lift, the claw, and the side piston, built on
  * SapphireLib's input/, mechanism/, and util/ primitives. Robot-specific, so
  * it sits outside include/sapphirelib and is kept out of the library archive
  * (see EXCLUDE_SRC_FROM_LIB in the Makefile).
  *
- * The robot starts with the claw closed on a preload, the extender in, and
- * the lift at the bottom. Scoring beats every other macro, and once a score
- * has started nothing interrupts it, but for L2 while it waits on the robot
- * to back off (see L2).
+ * The robot starts with the claw open, the side piston in, and the lift at the
+ * bottom, and autonomous's start closes the claw on the preload (see Bottom
+ * lift). Scoring beats every other macro, and once
+ * a score has started nothing interrupts it, but for L2 while it waits on the
+ * robot to back off (see L2).
  *
  * Controls:
  *   R1         Open or close the claw. Ignored during a score, which opens it
  *              itself. At the bottom, closing it lifts the lift to 75
  *              degrees, and opening it lowers it back (see Bottom lift).
+ *              Acts 80ms after the press, or as it's let go if sooner, in
+ *              case R2 follows (see R1+R2); so does R2.
  *   R2         Score, only with the claw closed: dips 30 degrees past halfway
- *              to the level below (never past that level) and opens the claw,
- *              then holds the lift there until the vertical tracking wheel
- *              has seen the robot back 3in off the goal, and only then lowers
- *              it to the bottom. At the bottom there's no level below to dip
+ *              to the level below (never past that level) and opens the claw
+ *              as soon as the lift gets there, or 100ms after the press
+ *              (kScoreReleaseMs) if it hasn't yet, the lift carrying on down
+ *              meanwhile. Then holds the lift there until the vertical
+ *              tracking wheel has seen the robot back 3in off the goal, and
+ *              only then lowers it to the bottom. At the bottom there's no level below to dip
  *              to, so it just opens the claw, and the lift comes back down
- *              from 75 degrees. The face winks as each score opens the claw.
- *              A score above the bottom also sets the lift's memory (see Lift
- *              memory).
+ *              from 75 degrees. The face winks as each score opens the claw,
+ *              and the LEDs show Scoring while one above the bottom runs
+ *              (leds.hpp). A score above the bottom also sets the lift's
+ *              memory (see Lift memory).
  *   L1         Up a level, or straight to the lift's memory if it's higher
  *              (see Lift memory). Hold to keep stepping up. Only ALLIANCE has
  *              an L1: on MEDIUM and CENTER, the first level up from the
@@ -33,22 +39,28 @@
  *              the lift to the bottom now instead.
  *   L1+L2      Pressed together: forget the lift's memory. The lift stays
  *              where it was (a step the first of the two took is undone),
- *              and neither moves it again until both are let go.
- *   Y          Push the extender out, or pull it back in. Works at any time,
- *              a score included.
- *   DOWN       Turn clawSpeed on or off (see clawSpeed), a toggle: press once
- *              for on, again for off. The controller rumbles long for on and
- *              short-short for off. Works at any time, a score and debug mode
- *              included.
+ *              and neither moves it again until both are let go. The LEDs
+ *              flash purple for half a second (MemoryReset, leds.hpp).
+ *   R1+R2      Pressed together, in either order: turn autoClaw on or off
+ *              (clawSpeed, see there), a toggle: press both once for on,
+ *              again for off. Neither does its own job. The controller
+ *              rumbles long for on and short-short for off. Works at any
+ *              time, a score and debug mode included. The second pressed
+ *              within 80ms of the first is clean; pressed later while the
+ *              first is still held, it still toggles autoClaw, but the first
+ *              has already acted on its own.
+ *   Y          Push the side piston out, or pull it back in. Works at any
+ *              time, a score included.
  *   RIGHT      Cycle goal (ALLIANCE, MEDIUM, CENTER), each with its own
  *              level heights and level count. The lift keeps its level (its
  *              L number), moving to the new goal's height for it: from
  *              ALLIANCE's L1 to the others' L2, and from a level higher than
  *              the new goal has to its top one. Forgets the lift's memory.
+ *              The LEDs show the new goal's color for a second (leds.hpp).
  *   LEFT       Cycle the controller's bottom line: lift position and target,
  *              then each lift motor's volts, current, and temperature.
  *
- * autoClaw: only while clawSpeed is on (DOWN). With the claw open and the
+ * autoClaw: only while clawSpeed is on (R1+R2). With the claw open and the
  * lift down at its bottom level, the claw closes on a pin by itself, the
  * first time its distance sensor reads one at kPieceDetectMm (macros.cpp) or
  * closer, however fast the robot is going. Once the claw opens on a pin (R1,
@@ -61,19 +73,24 @@
  * whenever the claw is closed, and all the way down whenever it's open. So a
  * grab (autoClaw or R1) lifts it to 75, opening the claw (R1, or R2's score)
  * sends it back down, and the lift coming down to the bottom with the claw
- * closed stops at 75. A grab waits 100ms after the claw closes before it
- * lifts, so the jaws are shut before the pin leaves the floor. Driver control
- * starts with the claw closed on the preload, so the lift rises to 75 right
- * away. At any other level the claw doesn't move the lift.
+ * closed stops at 75. A grab waits 65ms after the claw closes before it
+ * lifts, so the jaws are shut before the pin leaves the floor. The claw
+ * starts open, so the preload goes in with the program running, and each
+ * start of autonomous is a grab on it: the claw closes and the lift rises to
+ * 75 (grabPreload(), ahead of the routine). Driver control's start leaves the
+ * claw as it is, open if autonomous never ran, so a match's driver control
+ * carries on from wherever autonomous left it. At any other level the claw
+ * doesn't move the lift.
  *
  * clawSpeed: while it's on, no drive wheel gets more than kClawSpeedVolts
  * (macros.cpp, see driveMaxVolts()), so the robot drives slower, and autoClaw
  * is on; the lift
  * isn't touched. It turns itself off 350ms after the claw closes (autoClaw or
  * R1) with the lift down at the bottom, so the robot drives off with the pin
- * at full speed, with the same short-short rumble as DOWN turning it off, and
- * autoClaw is off again until DOWN. If the claw opens again within those
- * 350ms, it stays on. Off at startup.
+ * at full speed, with the same short-short rumble as R1+R2 turning it off,
+ * and autoClaw is off again until R1+R2. If the claw opens again within those
+ * 350ms, it stays on. Off at startup. The LEDs show AutoClaw while it's on,
+ * outside debug mode (leds.hpp), and so does setAutoClaw()'s mode.
  *
  * Lift memory: R2 scoring at a level remembers the level above it (scoring at
  * L5 remembers L6; at the goal's top level, the top level itself). From then
@@ -101,12 +118,12 @@
  * debug mode puts the lift back on its level, so expect it to move.
  *
  * Autonomous: update() only runs in driver control, so routines move the
- * claw and the extender with setClawClosed() and setExtended(), and the lift
+ * claw and the side piston with setClawClosed() and setExtended(), and the lift
  * with setLiftLevel() and setLiftDeg(), and setAutoClaw() is clawSpeed and
  * autoClaw's toggle. The lift runs its PID loop on a task
  * of its own (startLift()), so a routine can send it up and drive on while
  * it climbs, then waitForLift() before scoring. Driver control carries on
- * with the claw, the extender, and the lift's goal and level wherever
+ * with the claw, the side piston, and the lift's goal and level wherever
  * autonomous left them. Only driver control creeps onto the bottom switch
  * and zeroes the encoders there: in autonomous the lift comes down to the
  * bottom on its loop alone, to where the encoders put it.
@@ -125,6 +142,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "sapphirelib/input/controller.hpp"
 #include "sapphirelib/mechanism/position_mechanism.hpp"
@@ -142,7 +160,7 @@ namespace robot::macros {
 void initialize();
 
 /// Call every opcontrol() loop tick, right after controller.update(). Reads
-/// the controller and drives the lift, the claw and the extender, and sets
+/// the controller and drives the lift, the claw and the side piston, and sets
 /// the controller screen's lines 0 and 2; opcontrol() flushes the screen once
 /// at the end of the tick.
 void update(sapphirelib::input::Controller& controller);
@@ -177,7 +195,7 @@ void setDebug(bool on);
 /// from any task.
 bool debug();
 
-// --- The claw and the extender, for autonomous ---
+// --- The claw and the side piston, for autonomous ---
 //
 // Each moves its piston now, since update() isn't running to: for autonomous
 // routines, and for anything else that runs while it isn't (X+UP's routines).
@@ -193,7 +211,28 @@ void setClawClosed(bool closed);
 /// Whether the claw is closed, or about to be: what it was last told.
 bool clawClosed();
 
-/// autoClaw for autonomous, a toggle like DOWN's clawSpeed, so a routine
+/// Sets the claw's and side piston's ports up again and sends each valve the
+/// state the macros have it in. The pistons are built before initialize(),
+/// and the brain can drop what they send then: a valve whose starting state
+/// is the port's high one would go to its low one once the 3-wire ports come
+/// up (the LEDs' setup, at the end of initialize()), while the macros still
+/// think otherwise. Both start low today (the claw open, the side piston in),
+/// so this is insurance. main.cpp calls this at the end of initialize() and as
+/// autonomous starts, and update() on driver control's first tick after any
+/// gap. Safe from any task.
+void resendPistons();
+
+/// The claw starts open, and each start of autonomous closes it on the
+/// preload: main.cpp's autonomous() calls this ahead of the routine. Closes
+/// the claw, waits kGrabLiftDelayMs (65ms) for the jaws to shut, and sends
+/// the lift up to the bottom level's 75 degrees, as a grab does in driver
+/// control; the routine's first setLiftLevel() or setLiftDeg() takes over
+/// from there. Above the bottom level it only closes the claw. Driver
+/// control's start doesn't grab, so the claw stays open there until R1 or
+/// autoClaw closes it. Blocks for those 65ms, so autonomous only.
+void grabPreload();
+
+/// autoClaw for autonomous, a toggle like R1+R2's clawSpeed, so a routine
 /// drives up to a pin without timing setClawClosed(). While it's on, every
 /// motion from the next one on runs at no more than clawSpeed's volts
 /// (kClawSpeedVolts in macros.cpp, through auton::setSpeedLimit()), and the
@@ -203,6 +242,14 @@ bool clawClosed();
 /// sensor, so it grabs in the middle of a motion. The lift stays down after
 /// a grab (driver control's 75 degrees is update()'s): raise it with
 /// setLiftLevel().
+///
+/// grabMm, if given, is where it grabs: the claw closes the first time the
+/// sensor reads that many millimetres or closer, instead of at autoClaw's
+/// kPieceDetectMm (macros.cpp). Further out grabs sooner, closer in later.
+/// Capped at 2000, the sensor's range. Only the grab moves: what re-arms it
+/// after the claw opens on a pin is still kPieceDetectMm. Each call sets it,
+/// so a call while it's on moves it, and one without it goes back to
+/// kPieceDetectMm. Ignored by setAutoClaw(false).
 ///
 /// It turns itself off kClawSpeedOffDelayMs after the grab, as clawSpeed
 /// does, so the motions after it are full speed again; the claw opening
@@ -214,22 +261,24 @@ bool clawClosed();
 ///   macros::setAutoClaw(true);                        // slow, and grab it
 ///   moveToPose(-27.5, -20, 133);                      // up to the pin
 ///   if (!macros::clawClosed()) return;                // missed it: stop
-void setAutoClaw(bool on);
+///
+///   macros::setAutoClaw(true, 90);                    // the same, at 90mm
+void setAutoClaw(bool on, std::optional<std::int32_t> grabMm = std::nullopt);
 
 /// Whether setAutoClaw()'s mode is on. Safe from any task.
 bool autoClaw();
 
-/// Pushes the extender out (true) or pulls it in (false).
+/// Pushes the side piston out (true) or pulls it in (false), as Y does.
 void setExtended(bool out);
 
-/// Whether the extender is out, or about to be: what it was last told.
+/// Whether the side piston is out, or about to be: what it was last told.
 bool extended();
 
 // --- The lift, for autonomous ---
 //
 // Each returns at once while the lift's task (startLift()) drives it, so the
 // routine can drive on meanwhile; waitForLift() waits for it to get there.
-// Like the claw and the extender: call them from the task running the
+// Like the claw and the side piston: call them from the task running the
 // routine, never while update() runs on another task, which would override
 // them on its next tick anyway.
 //
@@ -252,6 +301,8 @@ enum class Goal : std::uint8_t { alliance, medium, center };
 /// goal and level, as if R1, L1, L2 and RIGHT had picked them. At the
 /// bottom, the lift goes all the way down whether the claw is closed or not
 /// (driver control then lifts it to 75 degrees if it is, see Bottom lift).
+/// Sending it up shows the LEDs' LiftGauge for a second (leds.hpp), as L1
+/// does in driver control.
 void setLiftLevel(Goal goal, int level);
 
 /// Sends the lift to `deg` motor degrees up from the bottom switch, for a
@@ -289,7 +340,7 @@ bool liftAtBottom();
 /// with it at the bottom, falling in a straight line to 7V at its full height
 /// (1520 motor degrees, MEDIUM's top level), and 7V above that. 12V with no
 /// lift reading. Never more than kClawSpeedVolts (macros.cpp) while clawSpeed
-/// is on (DOWN). Reads the
+/// is on (R1+R2). Reads the
 /// lift's motors, so it's current; driver.cpp's drive() calls it every tick,
 /// on the same task as update().
 double driveMaxVolts();

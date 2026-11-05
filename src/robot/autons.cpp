@@ -63,14 +63,14 @@ void odomTest() {
     turnToPoint(0, 24); // face where it started out
 }
 
-// Background motions: the extender goes out 12in into a drive and comes
+// Background motions: the side piston goes out 12in into a drive and comes
 // back in near the end, while the robot keeps driving. Then a turn around
 // that has to go right, and home. Needs about 3ft clear ahead.
 void asyncExample() {
     setPose(0, 0, 0);
     runAsync([] { moveToPoint(0, 36); });
     waitUntilTraveled(12);      // 12in into the move...
-    macros::setExtended(true);  // ...push the extender out
+    macros::setExtended(true);  // ...push the side piston out
     waitUntilNear(0, 36, 6);    // 6in from the end...
     macros::setExtended(false); // ...pull it back in
     waitForMotion();
@@ -89,8 +89,8 @@ void pathExample() {
 
 // A trajectory as the simulator's Paths tab writes one (Copy C++), with
 // things done at its points without slowing down: out 24in with the
-// extender going out as it passes point 1, a stop at point 2 where the claw
-// opens and the extender comes back in, then straight back to the start
+// side piston going out as it passes point 1, a stop at point 2 where the claw
+// opens and the side piston comes back in, then straight back to the start
 // (point 3), where the claw closes again. A point the plan never reaches
 // (held up until the motion timed out) ends the routine there, so the claw
 // never opens short of where it should. Needs about 30in clear ahead.
@@ -186,6 +186,8 @@ void liftExample() {
 // the field at once (SL000042): the back-off turned around and drove into
 // the goal, and the drive to the second pin ran into it too.
 void triplePin() {
+    macros::setClawClosed(true);
+    macros::setExtended(true);
     setPose(-60.6, -5, 90);
     setMcl(false);
     macros::setLiftLevel(macros::Goal::alliance, 1);
@@ -193,29 +195,45 @@ void triplePin() {
     // 4in further than it went out, so it hits hard, and the timeout ends the
     // push once it's pinned (it reaches the wall in about 0.5s).
     for (int i = 0; i < 2; i++) {
-        drive(10, {.chain = true, .exitError = 1});
-        drive(-14, {.timeoutMs = 750});
+        drive(10, {.chain = true, .exitError = 5});
+        drive(-14, {.timeoutMs = 600});
     }
     // pinned where it started: x is the wall's again, whatever the hits did
     const sapphirelib::odom::Pose here = pose();
     setPose(-60.6, here.yIn, here.headingDeg);
-    moveToPoint(-54.5, -11, {.chain = true});
-    moveToPose(-48, -21.5, 172, {.timeoutMs = 1000}); // up onto the goal, pressing on it
+    moveToPose(-54.5, -11, 135, {.chain = true});
+    moveToPoint(-50, -21.5, {.timeoutMs = 1000}); // up onto the goal, pressing on it
+    macros::setLiftDeg(macros::liftScoreDeg());
+    macros::waitForLift(1000);
+    pros::delay(250);
+    macros::setClawClosed(false);
+    pros::delay(250);
+    moveToPoint(-50, -5, {.timeoutMs = 1000});
+    macros::setLiftLevel(macros::Goal::alliance, 0);
+    turnTo(105);
+    moveToPoint(-35.5, -10.8, {.timeoutMs = 1000});
+    macros::setAutoClaw(true, 75);
+    moveToPose(-22, -17.5, 133, {.timeoutMs = 1750});
+    macros::setLiftLevel(macros::Goal::alliance, 2);
+    turnTo(255);
+    moveToPoint(-47, -18, {.timeoutMs = 750});
+    macros::setLiftDeg(macros::liftScoreDeg());
+    macros::waitForLift(1000);
+    macros::setClawClosed(false);
+    drive(-12, {.timeoutMs = 1500});
+    macros::setLiftLevel(macros::Goal::alliance, 0);
+    turnToPoint(-43, -45);
+    drive(15, {.chain = true});
+    macros::setAutoClaw(true, 65);
+    moveToPoint(-43, -45, {.timeoutMs = 2000}); 
+    macros::setLiftLevel(macros::Goal::alliance, 3);
+    turnTo(0);
+    moveToPoint(-43, -24, {.timeoutMs = 1500});
     macros::setLiftDeg(macros::liftScoreDeg());
     macros::waitForLift(1000);
     macros::setClawClosed(false);
 
-    // The second pin. Straight back off the goal along the claw, so it
-    // doesn't drag the pin, and only then lower the lift, as R2 waits to.
-    // Then turn away from the goal, and drive up to the pin slowly with
-    // autoClaw on, which shuts the claw on it as its sensor sees it.
-    drive(-9);
-    macros::setLiftLevel(macros::Goal::alliance, 0);
-    turnTo(105);
-    moveToPose(-27.5, -20, 133);
-    waitUntilTraveled(25);
-    macros::setAutoClaw(true);
-    waitForMotion();
+
 }
 
 } // namespace

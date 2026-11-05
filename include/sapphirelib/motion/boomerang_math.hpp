@@ -1,8 +1,30 @@
 #pragma once
 
+#include <cstdint>
+
 #include "sapphirelib/odom/pose.hpp"
 
 namespace sapphirelib::motion {
+
+/**
+ * @brief Whether a tank drive's moveToPoint() or moveToPose() drives there forward or backs in
+ */
+enum class DriveDirection : std::uint8_t {
+    /**
+     * whichever needs less turning. What every motion does by default: moveToPoint() backs up to a
+     * point more than 90 degrees behind, and moveToPose() picks once, at the start
+     */
+    automatic,
+    /** front first, turning around first if the target is behind */
+    forward,
+    /** back first, turning around first if the target is ahead */
+    reverse,
+};
+
+/**
+ * @brief Get a DriveDirection's name, for logs: "automatic", "forward" or "reverse"
+ */
+const char* driveDirectionName(DriveDirection direction);
 
 /**
  * @brief Which way a tank drive turns and drives to head for a bearing
@@ -25,6 +47,18 @@ struct SteeringError {
 SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg);
 
 /**
+ * @brief Steer a tank drive toward a bearing one way: the front (forward) or the back (reverse)
+ * points at it, however far round that is. automatic is steerToward() above
+ *
+ * @param targetBearingDeg the bearing to head for, in degrees, clockwise from +y
+ * @param currentHeadingDeg the robot's heading, in degrees
+ * @param direction which end leads
+ * @return SteeringError the turn, -180 to 180, and the direction
+ */
+SteeringError steerToward(double targetBearingDeg, double currentHeadingDeg,
+                          DriveDirection direction);
+
+/**
  * @brief What one tick of TankDrivetrain::moveToPose() closes, and how
  *
  * The motion drives direction * driveScale * (the drive PID's output on driveErrorIn), and turns
@@ -38,7 +72,10 @@ struct BoomerangStep {
      * distance left along the way the robot faces once settling
      */
     double driveErrorIn = 0.0;
-    /** +1 finishing forward, -1 backing in. Chosen on the first tick, kept to the end */
+    /**
+     * +1 finishing forward, -1 backing in. Chosen on the first tick (or forced, see
+     * boomerangStep()), kept to the end
+     */
     double direction = 1.0;
     /**
      * how much of the drive PID's output to use: the cosine of the turn while steering, so a
@@ -65,8 +102,9 @@ struct BoomerangStep {
  * end, which slides onto the target as the robot closes in, so it curves into the final heading.
  * On the first tick it picks whether to finish forward or back in, whichever points it more nearly
  * at its carrot, and keeps it: re-picked every tick, a carrot swinging past 90 degrees flips the
- * robot to backing in and it arrives facing the wrong way. Backing in, the carrot goes in front of
- * the target instead, so the robot still ends facing the final heading.
+ * robot to backing in and it arrives facing the wrong way. A forced direction skips the choice.
+ * Backing in, the carrot goes in front of the target instead, so the robot still ends facing the
+ * final heading.
  *
  * Within settleRadiusIn the carrot is on top of the target and the bearing to it is noise (a tenth
  * of an inch to the side is a big angle), and a tank can't move sideways anyway: it settles,
@@ -80,12 +118,16 @@ struct BoomerangStep {
  * @param leadPct the carrot's distance behind the target, as a fraction of the distance left
  * @param settleRadiusIn how close it settles, in inches. 0 never settles: it then steers at the
  * carrot to the end, and nothing turns it to the final heading
+ * @param turnRadiusIn how close, settling, it stops heading for the point and turns in place to
+ * the final heading, in inches
  * @param previous the last tick's step: the direction, and whether it was settling.
  * Default-constructed for the first tick
+ * @param direction forward or reverse to finish that way; automatic (the default) picks
  * @return BoomerangStep the errors for the drive and turn PIDs
  */
 BoomerangStep boomerangStep(const odom::Pose& pose, double targetXIn, double targetYIn,
                             double targetHeadingDeg, double leadPct, double settleRadiusIn,
-                            double turnRadiusIn, const BoomerangStep& previous);
+                            double turnRadiusIn, const BoomerangStep& previous,
+                            DriveDirection direction = DriveDirection::automatic);
 
 } // namespace sapphirelib::motion
