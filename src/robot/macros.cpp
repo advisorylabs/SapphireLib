@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,7 @@
 #include "pros/rtos.hpp"
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
+#include "robot/driver.hpp"
 #include "robot/leds.hpp"
 #include "sapphirelib/auton/auton.hpp"
 #include "sapphirelib/mechanism/piston.hpp"
@@ -68,12 +70,45 @@ using sapphirelib::tuning::MechanismCharacterizationConfig;
 // --- Claw and autoClaw ---
 // autoClaw only works while clawSpeed is on (R1+R2, see kClawSpeedVolts), so
 // it's off again once a grab turns clawSpeed off.
-// Where autoClaw grabs: it closes the claw the first time the claw's distance
-// sensor reads this or closer, at any speed. It's also what counts as a pin
-// in the claw, for re-arming autoClaw (kAutoClawClearMs) and for pinInClaw()
-// (the Branch autons), so keep it between what the sensor reads with a pin
-// loaded and without one.
+// What counts as a pin in the claw: re-arming autoClaw (kAutoClawClearMs) and
+// pinInClaw() (the Branch autons). Keep it between what the sensor reads with
+// a pin loaded and without one. Where autoClaw grabs is kGrabMm's.
 constexpr std::int32_t kPieceDetectMm = 125;
+// Where autoClaw grabs, as the claw's distance sensor reads it: where the Pin
+// should be the moment the jaws shut on it. Measured standing still: hold a
+// Pin where the jaws grip it best and read the controller's CLAW readout
+// (LEFT). Driving onto a Pin, the claw fires early enough to shut there.
+//
+// Between the sensor measuring and the jaws shut, the Pin keeps coming:
+// kClawLeadMs is that time, the sensor's latency plus the valve and the
+// piston. On top of it, the reading may have stood a while since the sensor
+// measured (its age), and the program only looks once a tick: half a tick
+// for when the reading arrived since the last look, half for where between
+// two looks the Pin crosses. So autoClaw fires once the reading, less what
+// the robot covers in all that time (odometry's speed toward the claw times
+// kClawLeadMs, the tick and the age), is at kGrabMm or closer
+// (autoClawAim()). Standing still that's just the reading at kGrabMm; at
+// 28in/s (5V of drive) in driver control it fires at about kGrabMm + 68mm.
+// One lead for every speed, since the lags are times and the distance they
+// cost grows with speed. tools/sim/claw.html simulates it, and
+// docs/NEW_CHASSIS.md's "autoClaw at speed" measures both numbers.
+//
+// The defaults fire at about 125mm at 28in/s, where kPieceDetectMm alone used
+// to, and on 60mm standing still. kClawLeadMs is the simulator's sensor
+// latency (15ms) and piston (60ms). TODO: measure kGrabMm, then tune
+// kClawLeadMs at speed.
+constexpr std::int32_t kGrabMm = 60;
+constexpr double kClawLeadMs = 75.0;
+// Never fires on a reading further out than this, however fast the robot
+// goes, so driving at a wall or a goal with the claw open doesn't close it
+// half a field away. 250mm covers kGrabMm plus the lead at full speed.
+constexpr std::int32_t kGrabMaxMm = 250;
+// The most a reading counts as aged (see autoClawAim()). It ages while the
+// sensor reads the same number, which is either no new measurement yet (a
+// sample period is about 33ms) or the same distance measured again, standing
+// still; past a sample period and a tick it's the latter, and aging it
+// further would fire on a Pin that isn't coming.
+constexpr std::uint32_t kClawReadingMaxAgeMs = 50;
 // Once the claw opens on a pin, autoClaw waits for the sensor to have seen
 // the claw empty (nothing at kPieceDetectMm or closer) for this long before
 // it can close again, so one reading that misses the pin still sitting in
@@ -320,9 +355,11 @@ double liftPositionDeg() {
     return count % 2 == 1 ? readings[middle] : (readings[middle - 1] + readings[middle]) / 2.0;
 }
 
-// What LEFT cycles the controller's bottom line through: 0 is the lift, and
-// 1 and up each lift motor in turn, A first.
-constexpr int kReadoutCount = 1 + static_cast<int>(ports::kLiftMotors.size());
+// What LEFT cycles the controller's bottom line through: the lift, the claw's
+// sensor (kClawReadout), then each lift motor in turn, A first.
+constexpr int kClawReadout = 1;
+constexpr int kFirstMotorReadout = 2;
+constexpr int kReadoutCount = kFirstMotorReadout + static_cast<int>(ports::kLiftMotors.size());
 
 // A press of R1 or R2 waiting out kRPairWindowMs: which, and since when.
 struct WaitingPress {
@@ -378,6 +415,9 @@ struct State {
     bool levelButtonsLocked = false;
     bool debug = false; // the debug mode update() is running, see debugMode
     int readout = 0;    // see kReadoutCount
+    // How fast the robot drove onto the Pin at autoClaw's last grab, in in/s,
+    // for the CLAW readout. Driver control's and autonomous's grabs alike.
+    std::optional<double> lastGrabInPerS;
 };
 
 State state;
@@ -450,9 +490,10 @@ struct AutonClaw {
     // When it closed the claw on a pin, which ends it kClawSpeedOffDelayMs
     // later. Dropped if the claw opens first.
     std::optional<std::uint32_t> grabMs;
-    // Where it grabs: the claw closes the first time the sensor reads this or
-    // closer. kPieceDetectMm unless setAutoClaw()'s latest call said otherwise.
-    std::int32_t grabMm = kPieceDetectMm;
+    // Where setAutoClaw()'s latest call said to grab: the claw closes the
+    // first time the sensor reads this or closer, at any speed. None, and it
+    // grabs on the lead as driver control does (kGrabMm).
+    std::optional<std::int32_t> grabMm;
 };
 
 AutonClaw autonClaw;
@@ -472,6 +513,85 @@ bool pieceInClaw(std::int32_t distanceMm) {
     // get_distance() reads 9999 when it sees nothing and PROS_ERR (INT32_MAX)
     // when unplugged, so neither counts as a pin.
     return distanceMm <= kPieceDetectMm;
+}
+
+// The claw sensor's last reading and when it changed, for autoClawAim()'s
+// age: a new number means the sensor measured again. readClawSensor() keeps
+// it, from update() in driver control and from setAutoClaw()'s task in
+// autonomous, never both at once: update() ends that mode before it reads.
+struct ClawReading {
+    std::int32_t mm = -1; // none yet
+    std::uint32_t changedMs = 0;
+};
+
+ClawReading clawReading;
+
+std::int32_t readClawSensor(std::uint32_t now) {
+    const std::int32_t mm = clawSensor.get_distance();
+    if (mm != clawReading.mm) {
+        clawReading.mm = mm;
+        clawReading.changedMs = now;
+    }
+    return mm;
+}
+
+/// How fast the robot is driving its claw onto whatever is in front of it, in
+/// mm per ms (the same number as m/s): odometry's velocity along the way the
+/// robot faces, the claw being on its front. 0 backing away or sliding
+/// sideways, and with odometry's wheels unplugged, so autoClaw then grabs at
+/// kGrabMm as if standing still.
+double clawApproachMmPerMs() {
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    const sapphirelib::odom::Odometry::Snapshot snapshot = odometry().snapshot();
+    // Heading 0 faces +y and 90 faces +x (see Pose). The raw pose, since the
+    // velocity is the raw pose's.
+    const double headingRad = snapshot.rawPose.headingDeg * kDegToRad;
+    const double inPerS = snapshot.rawVelocity.xInPerS * std::sin(headingRad) +
+                          snapshot.rawVelocity.yInPerS * std::cos(headingRad);
+    return std::max(0.0, inPerS * 25.4 / 1000.0);
+}
+
+/// Where autoClaw expects the Pin to be when the jaws shut, if it fires now on
+/// this reading, and whether that's at kGrabMm or closer (see kGrabMm).
+struct ClawAim {
+    std::int32_t readingMm = 0;
+    std::uint32_t ageMs = 0;      // how long the reading has stood unchanged
+    double approachMmPerMs = 0.0; // clawApproachMmPerMs()
+    double aimMm = 0.0;           // the reading, less the distance still to come
+    bool fires = false;
+};
+
+/// Call with a reading readClawSensor() just took, and how often the caller
+/// looks: kDriverLoopMs from update(), kAutonClawPollMs from setAutoClaw()'s
+/// task.
+ClawAim autoClawAim(std::int32_t readingMm, std::uint32_t now, std::uint32_t tickMs) {
+    ClawAim aim;
+    aim.readingMm = readingMm;
+    aim.ageMs = std::min(sapphirelib::elapsedMs(clawReading.changedMs, now), kClawReadingMaxAgeMs);
+    aim.approachMmPerMs = clawApproachMmPerMs();
+    const double aheadMs = kClawLeadMs + static_cast<double>(tickMs + aim.ageMs);
+    aim.aimMm = readingMm - aim.approachMmPerMs * aheadMs;
+    // 9999 (nothing seen) and PROS_ERR (unplugged) are both past kGrabMaxMm.
+    aim.fires = readingMm <= kGrabMaxMm && aim.aimMm <= kGrabMm;
+    return aim;
+}
+
+double inPerS(double mmPerMs) { return mmPerMs * 1000.0 / 25.4; }
+
+/// A grab by autoClaw, either mode's: for the CLAW readout and the log, which
+/// has everything kGrabMm and kClawLeadMs are tuned from. `fixedMm` is
+/// setAutoClaw()'s distance, when the routine gave one instead of the lead.
+void noteGrab(const ClawAim& aim, std::optional<std::int32_t> fixedMm = std::nullopt) {
+    state.lastGrabInPerS = inPerS(aim.approachMmPerMs);
+    if (fixedMm) {
+        sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d,grab_mm=%d,speed=%.1f",
+                                      static_cast<int>(aim.readingMm), static_cast<int>(*fixedMm),
+                                      *state.lastGrabInPerS);
+        return;
+    }
+    sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d,age_ms=%u,speed=%.1f,aim_mm=%.0f",
+                                  static_cast<int>(aim.readingMm), static_cast<unsigned>(aim.ageMs),
+                                  *state.lastGrabInPerS, aim.aimMm);
 }
 
 bool switchPressed() { return bottomSwitch.get_value() == 1; }
@@ -570,22 +690,18 @@ bool liftDown() {
     return lift.position() <= ladder.levelPosition(kBottomLevel) + kLiftToleranceDeg;
 }
 
-/// Whether autoClaw would close the claw on this reading, whichever mode turns
-/// it on (clawSpeed or setAutoClaw()): the claw is open and armed, the lift is
-/// down (liftDown()) and meant to be there, and the reading has a pin at
-/// grabMm or closer (driver control's is kPieceDetectMm, setAutoClaw()'s its
-/// own). On the first such reading, since any wait only makes it later. Only
-/// the grab goes by grabMm: arming still goes by kPieceDetectMm (clawLoaded).
-bool grabReady(std::int32_t pieceMm, std::int32_t grabMm) {
+/// Whether autoClaw would close the claw now, whichever mode turns it on
+/// (clawSpeed or setAutoClaw()): the claw is open and armed, the lift is down
+/// (liftDown()) and meant to be there, and the aim says fire (kGrabMm). On
+/// the first such reading, since any wait only makes it later.
+bool grabReady(const ClawAim& aim) {
     return !state.clawClosed && state.autoClawArmed && ladder.level() == kBottomLevel &&
-           liftDown() && pieceMm <= grabMm;
+           liftDown() && aim.fires;
 }
 
 /// autoClaw in driver control (see macros.hpp): clawSpeed is on, and
-/// grabReady() at kPieceDetectMm.
-bool autoClawWants(std::int32_t pieceMm) {
-    return state.clawSpeed && grabReady(pieceMm, kPieceDetectMm);
-}
+/// grabReady().
+bool autoClawWants(const ClawAim& aim) { return state.clawSpeed && grabReady(aim); }
 
 /// Turns setAutoClaw()'s mode off, and the speed limit with it. With
 /// autonClawMutex() held.
@@ -608,16 +724,18 @@ void autonClawStep(std::uint32_t now) {
         endAutonClaw("mode");
         return;
     }
-    const std::int32_t pieceMm = clawSensor.get_distance();
+    const std::int32_t pieceMm = readClawSensor(now);
     clawLoaded.set(pieceInClaw(pieceMm), now);
     if (clawLoaded.falseFor(kAutoClawClearMs, now)) state.autoClawArmed = true;
-    if (!autonClaw.grabMs && grabReady(pieceMm, autonClaw.grabMm)) {
+    ClawAim aim = autoClawAim(pieceMm, now, kAutonClawPollMs);
+    // A routine that said where to grab (setAutoClaw(true, mm)) gets just
+    // that: a fixed reading, as it was tuned with. Otherwise the lead.
+    if (autonClaw.grabMm) aim.fires = pieceMm <= *autonClaw.grabMm;
+    if (!autonClaw.grabMs && grabReady(aim)) {
         state.clawClosed = true;
         claw.set(true, now);
         autonClaw.grabMs = now;
-        sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d,grab_mm=%d",
-                                      static_cast<int>(pieceMm),
-                                      static_cast<int>(autonClaw.grabMm));
+        noteGrab(aim, autonClaw.grabMm);
     }
     if (autonClaw.grabMs && sapphirelib::elapsedMs(*autonClaw.grabMs, now) >= kClawSpeedOffDelayMs) {
         endAutonClaw("grabbed");
@@ -723,7 +841,7 @@ void setClawSpeed(Controller& controller, bool on) {
     sapphirelib::telemetry::event("macro", "claw_speed,on=%d", on ? 1 : 0);
 }
 
-void showStatus(Controller& controller, bool atBottom) {
+void showStatus(Controller& controller, bool atBottom, std::int32_t pieceMm) {
     ControllerScreen& screen = controller.screen();
     if (state.debug) {
         // No level to show: the lift is L1/L2's. Each piston, to check it
@@ -761,13 +879,33 @@ void showStatus(Controller& controller, bool atBottom) {
         } else {
             screen.setLine(2, "%s %5.0f/%4.0f", label, liftDeg, liftTargetDeg());
         }
+    } else if (state.readout == kClawReadout) {
+        // The claw's distance sensor, live, for measuring kGrabMm and
+        // kPieceDetectMm by holding a Pin in the claw, then how fast the robot
+        // drove onto the Pin at autoClaw's last grab, in in/s: "CLAW  60mm
+        // v34". "----" is nothing in range.
+        if (pieceMm == PROS_ERR) {
+            screen.setLine(2, "CLAW NO SENSOR");
+        } else {
+            char reading[8];
+            if (pieceMm > 9000) {
+                std::snprintf(reading, sizeof(reading), "----");
+            } else {
+                std::snprintf(reading, sizeof(reading), "%4d", static_cast<int>(pieceMm));
+            }
+            if (state.lastGrabInPerS) {
+                screen.setLine(2, "CLAW %smm v%2.0f", reading, std::min(*state.lastGrabInPerS, 99.0));
+            } else {
+                screen.setLine(2, "CLAW %smm", reading);
+            }
+        }
     } else {
         // One lift motor (A, then B, C... on each LEFT): the volts it's
         // actually applying, its current draw, and its temperature. A motor
         // stalled at 12V should be drawing its full 2.5A; much less than
         // that, or 55C and up (where it starts cutting its own current),
         // means it's being held back rather than out-muscled.
-        const auto i = static_cast<std::uint8_t>(state.readout - 1);
+        const auto i = static_cast<std::uint8_t>(state.readout - kFirstMotorReadout);
         screen.setLine(2, "%c %3.0fV %3.1fA %2.0fC", 'A' + i, lift.motors().get_voltage(i) / 1000.0,
                        lift.motors().get_current_draw(i) / 1000.0,
                        lift.motors().get_temperature(i));
@@ -815,7 +953,8 @@ void update(Controller& controller) {
     }
 
     // One reading of each sensor for the whole tick.
-    const std::int32_t pieceMm = clawSensor.get_distance();
+    const std::int32_t pieceMm = readClawSensor(now);
+    const ClawAim aim = autoClawAim(pieceMm, now, kDriverLoopMs);
     const bool atBottom = switchPressed();
     zeroAtBottom(atBottom);
     // Extended is closed. The piston as last tick left it, so a claw closed
@@ -916,9 +1055,9 @@ void update(Controller& controller) {
     } else {
         if (rPress == RPress::r1) {
             state.clawClosed = !state.clawClosed;
-        } else if (autoClawWants(pieceMm)) {
+        } else if (autoClawWants(aim)) {
             state.clawClosed = true;
-            sapphirelib::telemetry::event("macro", "autoclaw,piece_mm=%d", static_cast<int>(pieceMm));
+            noteGrab(aim);
         }
         if (state.levelButtonsLocked) {
             // L1+L2 rarely land on the same tick, so the first of them has
@@ -988,7 +1127,7 @@ void update(Controller& controller) {
     } else {
         lift.setTarget(liftTargetDeg());
     }
-    showStatus(controller, atBottom);
+    showStatus(controller, atBottom, pieceMm);
 
     // The LEDs, from where this tick left things (leds.hpp). autoClaw is
     // clawSpeed's here, and off in debug mode; setAutoClaw()'s mode ended at
@@ -1009,7 +1148,8 @@ void update(Controller& controller) {
                          pieceMm == PROS_ERR ? std::numeric_limits<double>::quiet_NaN()
                                              : static_cast<double>(pieceMm),
                          static_cast<double>(ladder.level()), static_cast<double>(ladder.tableIndex()),
-                         phase ? static_cast<double>(*phase) : -1.0, atBottom ? 1.0 : 0.0});
+                         phase ? static_cast<double>(*phase) : -1.0, atBottom ? 1.0 : 0.0,
+                         inPerS(aim.approachMmPerMs)});
     }
 }
 
@@ -1046,10 +1186,12 @@ void attachTelemetry(sapphirelib::telemetry::Logger& logger) {
     // reading (mm), the lift's level (0 the bottom; its entry in the goal's
     // table, so MEDIUM's L2 logs 1) and goal (0 ALLIANCE, 1 MEDIUM, 2
     // CENTER), the running score step (-1 none; else Phase's order:
-    // scoreDescend, scoreRelease), and the bottom switch (1 pressed).
-    mechLog = &logger.channel("mech",
-                              {"claw", "extender", "piece_mm", "level", "mode", "phase", "bottom"},
-                              {.capacity = 128, .decimals = 2});
+    // scoreDescend, scoreRelease), the bottom switch (1 pressed), and how fast
+    // the robot drives its claw onto what's in front of it (in/s, autoClaw's
+    // speed): with piece_mm, what autoClaw's lead is tuned from.
+    mechLog = &logger.channel(
+        "mech", {"claw", "extender", "piece_mm", "level", "mode", "phase", "bottom", "approach_ips"},
+        {.capacity = 128, .decimals = 2});
 }
 
 void setDebug(bool on) { debugMode.store(on); }
@@ -1104,8 +1246,9 @@ void setAutoClaw(bool on, std::optional<std::int32_t> grabMm) {
         return;
     }
     // Ahead of the return below, so a call while it's already on moves where
-    // it grabs, and one without a distance puts it back to kPieceDetectMm.
-    autonClaw.grabMm = std::min(grabMm.value_or(kPieceDetectMm), kMaxGrabMm);
+    // it grabs, and one without a distance puts it back on the lead.
+    autonClaw.grabMm.reset();
+    if (grabMm) autonClaw.grabMm = std::min(*grabMm, kMaxGrabMm);
     if (autonClawTask == nullptr) {
         autonClawTask = std::make_unique<pros::Task>(
             [] {
@@ -1129,8 +1272,9 @@ void setAutoClaw(bool on, std::optional<std::int32_t> grabMm) {
     autonClaw.on = true;
     autonClaw.grabMs.reset();
     sapphirelib::auton::setSpeedLimit(kClawSpeedVolts);
+    // grab_mm=0: on the lead
     sapphirelib::telemetry::event("macro", "auto_claw,on=1,grab_mm=%d",
-                                  static_cast<int>(autonClaw.grabMm));
+                                  static_cast<int>(autonClaw.grabMm.value_or(0)));
 }
 
 bool autoClaw() {

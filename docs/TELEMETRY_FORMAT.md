@@ -284,12 +284,16 @@ E,<t_us>,tune,wheel,<Vertical|Horizontal|Drive>,diameter_in=<in>
 - `face`: `gui::FaceScreen`. `bump,g=<g>` when the IMU feels a bump while the face is up (it looks
   surprised), with how far that reading jumped from the recent average: for tuning
   `BumpConfig::thresholdG`.
-- `macro`: 96671H's driver macros (`src/robot/macros.cpp`). `autoclaw,piece_mm=<mm>` when
-  autoClaw closes the claw on a pin at the bottom, with the distance reading that did it, and
-  `grab_mm=<mm>` after it when it's autonomous's `setAutoClaw()` that closed it: the distance it was
-  told to grab at (older logs also have `reach_mm` and `speed`, from when it closed further out the
-  faster the robot drove); `auto_claw,on=1,grab_mm=<mm>` when `setAutoClaw()` turns on (or is
-  called again while on), with where it will grab (older logs have no `grab_mm`), and
+- `macro`: 96671H's driver macros (`src/robot/macros.cpp`).
+  `autoclaw,piece_mm=<mm>,age_ms=<ms>,speed=<in/s>,aim_mm=<mm>` when autoClaw closes the claw on a
+  pin at the bottom on its lead: the distance reading that did it, how long that reading had stood
+  unchanged, odometry's speed toward the claw, and where autoClaw expected the pin to be as the jaws
+  shut (the reading less the speed times `kClawLeadMs`, the tick and the age: `kGrabMm` or a little
+  closer). `autoclaw,piece_mm=<mm>,grab_mm=<mm>,speed=<in/s>` instead when autonomous's
+  `setAutoClaw()` was told a fixed distance to grab at. Logs from before the lead have `piece_mm`
+  (and `grab_mm`) alone, and some older ones `reach_mm` and `speed`, from an earlier lead;
+  `auto_claw,on=1,grab_mm=<mm>` when `setAutoClaw()` turns on (or is called again while on), with
+  the fixed distance it will grab at, or 0 for the lead (older logs have no `grab_mm`), and
   `auto_claw,on=0,<why>` when it turns off (`off`, `grabbed`, `mode` or `driver`);
   `lift_zeroed,deg=<deg>` each time the bottom switch is
   pressed and zeroes the lift's encoders, with what they read just before (how far they'd drifted;
@@ -339,7 +343,7 @@ names to match on.
 | `driver` | samples | `lx,ly,rx,ry,buttons,connected` | The controller, every opcontrol tick (20 ms): sticks in −1…1, the held buttons as a bitmask (bit *i* = `input::Button` *i*: L1, L2, R1, R2, Up, Down, Left, Right, X, B, Y, A), and 1/0 for whether the controller is connected. |
 | `lift` | pid | pid columns | The lift's position PID. |
 | `lift.act` | samples | `target,pos,volts,law` | Every lift update, every 20 ms in every mode (the lift's own task; older logs only have rows from driver control): target and position in degrees (motor degrees from the lift motors' encoders, zeroed on the bottom switch; the rotation sensor's degrees in older logs; `pos` is `nan` if nothing answered), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking; `nan` while Auto-Tune has the motors), and which branch of the control law ran (`law`, below). |
-| `mech` | samples | `claw,extender,piece_mm,level,mode,phase,bottom` | The macro system, every opcontrol tick: the claw piston (1 closed) and the side piston, `extender` (1 out), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 the bottom; its entry in the goal's table, not the L number the controller shows, so medium's and center's L2 logs 1) and goal (0 alliance, 1 medium, 2 center), the running score step (−1 none; else 0 scoreDescend, 1 scoreRelease), and the lift's bottom switch (1 pressed). Some older logs end with `reach_mm`: how far out autoClaw would have closed on a pin at that tick's speed (mm). Logs from before the three-motor lift have `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed,top` instead: volts sent to the intake and roller claw, the claw piston (1 extended), the distance sensor, level (0 stowed) and goal, the sequence step (0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), whether the claw was deployed, and the top piston (1 extended; missing from logs older still). |
+| `mech` | samples | `claw,extender,piece_mm,level,mode,phase,bottom,approach_ips` | The macro system, every opcontrol tick: the claw piston (1 closed) and the side piston, `extender` (1 out), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 the bottom; its entry in the goal's table, not the L number the controller shows, so medium's and center's L2 logs 1) and goal (0 alliance, 1 medium, 2 center), the running score step (−1 none; else 0 scoreDescend, 1 scoreRelease), the lift's bottom switch (1 pressed), and how fast the robot drives its claw onto whatever is in front of it (in/s, odometry's, 0 backing away: autoClaw's speed). Logs from before autoClaw's lead end at `bottom`; some older ones end with `reach_mm`: how far out autoClaw would have closed on a pin at that tick's speed (mm). Logs from before the three-motor lift have `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed,top` instead: volts sent to the intake and roller claw, the claw piston (1 extended), the distance sensor, level (0 stowed) and goal, the sequence step (0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), whether the claw was deployed, and the top piston (1 extended; missing from logs older still). |
 | `char.fwd`, `char.strafe`, `char.turn`, `char.lift` | samples | `volts,pos` | Auto-Tune characterization runs, one row per sample the runner takes. Declared in every file; rows appear only while Auto-Tune runs. See [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows). |
 
 `mcl.state`'s `blocked` is `LocalizationStatus::blockedBy`, a sum of these bits; a reader should

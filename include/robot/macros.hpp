@@ -58,12 +58,16 @@
  *              the new goal has to its top one. Forgets the lift's memory.
  *              The LEDs show the new goal's color for a second (leds.hpp).
  *   LEFT       Cycle the controller's bottom line: lift position and target,
- *              then each lift motor's volts, current, and temperature.
+ *              the claw's sensor (CLAW: its reading, and how fast the robot
+ *              drove onto the last pin autoClaw grabbed, in in/s), then each
+ *              lift motor's volts, current, and temperature.
  *
  * autoClaw: only while clawSpeed is on (R1+R2). With the claw open and the
- * lift down at its bottom level, the claw closes on a pin by itself, the
- * first time its distance sensor reads one at kPieceDetectMm (macros.cpp) or
- * closer, however fast the robot is going. Once the claw opens on a pin (R1,
+ * lift down at its bottom level, the claw closes on a pin by itself, early
+ * enough for the jaws to shut with the pin at kGrabMm (macros.cpp) from its
+ * distance sensor: the faster the robot drives onto the pin, the further out
+ * it fires, by odometry's speed times kClawLeadMs, the time from a reading to
+ * the jaws shut (see kGrabMm). Once the claw opens on a pin (R1,
  * or a score), autoClaw waits for the sensor to see the claw empty before it
  * closes again, so opening the claw to drop a pin doesn't snap it shut on
  * the same one. Opening an empty claw leaves autoClaw ready for the next
@@ -236,20 +240,24 @@ void grabPreload();
 /// drives up to a pin without timing setClawClosed(). While it's on, every
 /// motion from the next one on runs at no more than clawSpeed's volts
 /// (kClawSpeedVolts in macros.cpp, through auton::setSpeedLimit()), and the
-/// claw closes on a pin by itself the first time its sensor sees one, as
-/// autoClaw does: the claw open and armed, and the lift sent to the bottom
-/// (setLiftLevel(goal, 0)) and down there. A task of its own watches the
-/// sensor, so it grabs in the middle of a motion. The lift stays down after
+/// claw closes on a pin by itself, firing as early as the robot's speed says
+/// it must, as autoClaw does: the claw open and armed, and the lift sent to
+/// the bottom (setLiftLevel(goal, 0)) and down there. A task of its own
+/// watches the sensor every 10ms, so it grabs in the middle of a motion. The
+/// lift stays down after
 /// a grab (driver control's 75 degrees is update()'s): raise it with
 /// setLiftLevel().
 ///
-/// grabMm, if given, is where it grabs: the claw closes the first time the
-/// sensor reads that many millimetres or closer, instead of at autoClaw's
-/// kPieceDetectMm (macros.cpp). Further out grabs sooner, closer in later.
-/// Capped at 2000, the sensor's range. Only the grab moves: what re-arms it
-/// after the claw opens on a pin is still kPieceDetectMm. Each call sets it,
-/// so a call while it's on moves it, and one without it goes back to
-/// kPieceDetectMm. Ignored by setAutoClaw(false).
+/// Without grabMm it grabs on autoClaw's lead, as driver control does: early
+/// enough at the robot's speed for the jaws to shut with the pin at kGrabMm
+/// (macros.cpp). grabMm, if given, is a fixed place to grab instead: the claw
+/// closes the first time the sensor reads that many millimetres or closer,
+/// whatever the speed, for a routine tuned at its own approach speed.
+/// Further out grabs sooner, closer in later. Capped at 2000, the sensor's
+/// range. Only the grab moves: what re-arms it after the claw opens on a pin
+/// is still kPieceDetectMm. Each call sets it, so a call while it's on moves
+/// it, and one without it goes back to the lead. Ignored by
+/// setAutoClaw(false).
 ///
 /// It turns itself off kClawSpeedOffDelayMs after the grab, as clawSpeed
 /// does, so the motions after it are full speed again; the claw opening

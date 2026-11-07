@@ -72,7 +72,10 @@ Yours to finish first. Everything here is a constant at the top of
 | `kLiftMotors` (`config.hpp`) | 14, -13, -10 | the lift's motors, all driven together; add or remove one and everything that drives, checks, logs or shows them follows |
 | `kLiftBottomSwitch`, `kClawPiston`, `kSidePiston` (`config.hpp`) | 'A', 'B', 'H' | the 3-wire ports: the lift's bottom switch, the claw and the side piston |
 | `ladder` | placeholders | each goal's level heights, in motor degrees: one table per goal (ALLIANCE, MEDIUM, CENTER; RIGHT cycles them). Entry 0 is the bottom, where the lift rests on its switch and autoClaw picks up pins, the same in every table. Each entry after it is a scoring level, one L1 press, so the count sets how many levels the goal has. Names show on the controller, 8 characters at most |
-| `kPieceDetectMm` | 65 | where autoClaw grabs: it closes the claw the first time the claw's distance sensor reads this or closer, at any speed. Also what counts as a pin in the claw, for re-arming autoClaw and for the Branch autons |
+| `kPieceDetectMm` | 65 | what counts as a pin in the claw, by its distance sensor: for re-arming autoClaw and for the Branch autons. Where autoClaw grabs is `kGrabMm`'s |
+| `kGrabMm` | 60 | where autoClaw grabs: the claw sensor's reading with the pin where the jaws should shut on it. Driving onto a pin, the claw fires early enough to shut there, by odometry's speed times `kClawLeadMs` |
+| `kClawLeadMs` | 75 | from the claw's sensor measuring to the jaws shut: the sensor's latency plus the valve and piston. The code adds the program's tick and the reading's age on top. Tuned at speed (below) |
+| `kGrabMaxMm` | 250 | the furthest-out reading autoClaw fires on, however fast the robot goes |
 | `kAutoClawClearMs` | 400 | once the claw opens on a pin, how long the sensor must see the claw empty before autoClaw can close it again. Raise it if the claw snaps shut on a pin it was just opened to drop |
 | `kScoreBackOffIn` | 3 | once a score opens the claw, how far the robot must back off the goal, by the vertical tracking wheel, before the lift lowers to the bottom (L2 lowers it sooner). Needs the wheel's sign right: driving forward must raise it |
 | `kLevelRepeatDelayMs`, `kLevelRepeatPeriodMs` | 300, 150 | L1 or L2 held: another level after the delay, then one every period |
@@ -113,17 +116,42 @@ Yours to finish first. Everything here is a constant at the top of
   lift back on its level, so expect it to move.
 - [ ] **The top of travel.** Read the encoders with the lift at its highest safe point. Step 2's
   window is set from it, and no goal's top level should be above it.
-- [ ] **`kPieceDetectMm`.** Start log, sit a pin in the claw, take it out, a few times. In the
-  analyzer's **Charts**, the `mech` channel's `piece_mm` shows both readings; pick a value between.
+- [ ] **`kPieceDetectMm`.** LEFT to the controller's `CLAW` readout, the claw sensor's live reading.
+  Sit a pin in the claw and take it out, a few times; pick a value between the two readings. (Or
+  Start log, and read both off the `mech` channel's `piece_mm` in the analyzer's **Charts**.)
 - [ ] **autoClaw.** Out of debug mode, lift at the bottom, R1 to open the claw with no pin in it, and
   R1+R2 together to turn clawSpeed on (autoClaw is off without it), then push a pin in: it closes. R1 to open it
   again on that pin: it stays open until you take the pin out and put one back. Then R1+R2 again, since
   the grab turned clawSpeed off.
-- [ ] **autoClaw at speed.** With clawSpeed on, drive onto pins as you would in a match, filming in
-  slow motion.
-  The jaws should shut just as each pin reaches the back of the claw. If the claw shoves the pin first,
-  raise `kPieceDetectMm`, so it closes further out; if the pin hits jaws that are already shut, lower
-  it. Either way, keep it between the two readings from the `kPieceDetectMm` step above.
+- [ ] **autoClaw at speed.** Between the sensor seeing a pin and the jaws shut on it, the robot keeps
+  driving: the sensor's latency, how stale its reading is, the program's tick, and the valve and
+  piston all add up to a time, and the pin covers speed times that time. A fixed trigger distance is
+  only right at one speed (shut late faster, early slower), so autoClaw fires `kClawLeadMs` (plus
+  the tick and the reading's age) of travel early, at whatever speed odometry says. Tune two numbers,
+  one standing still and one at speed, and every speed below the one you tuned at comes out right.
+  `tools/sim/claw.html` (see [TOOLS.md](TOOLS.md#claw-timing)) simulates all of it with your numbers.
+  1. **The claw's window, standing still.** LEFT to the `CLAW` readout. Hold a pin against the back
+     of the claw and note the reading; slide it out until it's just between the jaw tips and note
+     that one. `kGrabMm` is where you want the jaws to shut on it: the middle of the two, or a little
+     toward the back. Enter all three in claw.html.
+  2. **The lead, at your top speed.** Set `kClawSpeedVolts` to the speed you want to grab at (the
+     forward model makes 5V about 28in/s and 8V about 45in/s), R1+R2 for clawSpeed, and drive full
+     stick onto a pin, filming in slow motion. The `CLAW` readout's `v` is how fast that grab went
+     (in/s). In the video, see where the pin was as the jaws shut against where `kGrabMm` puts it:
+     short of it (early) or past it (late), and by how much. claw.html's **Tune the lead from a
+     grab** turns that into the next `kClawLeadMs`: each 1in early at 40in/s is 25ms too much lead.
+     A few grabs, and fast grabs shut on `kGrabMm`. Tune at the fastest speed, where each ms shows
+     most. Then one slow grab should shut there too; if slow grabs miss by the same amount as fast
+     ones, `kGrabMm` is off instead.
+     No slow motion: bracket it. Raise `kClawLeadMs` 10ms at a time until fast grabs start missing,
+     lower it until they miss again, and take the middle.
+  3. **The top speed.** claw.html's top tile says how fast 95% of grabs still catch with your
+     numbers, and the `kClawSpeedVolts` that drives there. Prove it on the robot: raise
+     `kClawSpeedVolts` 0.5V at a time, 10 grabs each, and stop at the first step that misses more
+     than one; go back a step. If claw.html's **What spreads the grabs** says the valve is most of it,
+     the next in/s is in the pneumatics (a shorter tube to the valve, a full tank), not the code.
+  Each grab logs an `autoclaw` event with the reading it fired on, its age, the speed and where it
+  aimed (TELEMETRY_FORMAT.md), and `mech` logs the speed every tick.
 
 Measure the heights again after step 2: a lift that settled short with the old gains lands on its
 target now, so what you read is where it really is.
