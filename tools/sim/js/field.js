@@ -335,6 +335,133 @@
     return true;
   }
 
+  // -- distance resets against the real field --
+
+  // where a ray from (ox, oy) along (dx, dy) first meets a segment, a circle, or the walls
+  function raySegmentIn(ox, oy, dx, dy, ax, ay, bx, by) {
+    const ex = bx - ax;
+    const ey = by - ay;
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) return Infinity;
+    const t = ((ax - ox) * ey - (ay - oy) * ex) / den;
+    const u = ((ax - ox) * dy - (ay - oy) * dx) / den;
+    return t > 1e-9 && u >= 0 && u <= 1 ? t : Infinity;
+  }
+
+  function rayCircleIn(ox, oy, dx, dy, cx, cy, r) {
+    const fx = ox - cx;
+    const fy = oy - cy;
+    const b = fx * dx + fy * dy;
+    const disc = b * b - (fx * fx + fy * fy - r * r);
+    if (disc < 0) return Infinity;
+    const t = -b - Math.sqrt(disc);
+    return t > 1e-9 ? t : Infinity;
+  }
+
+  // the wall a ray meets: how far, which, and where along it (x on the near and far walls, y on
+  // the left and right)
+  function rayWall(field, ox, oy, dx, dy) {
+    const h = field.halfIn;
+    const tx = dx > 1e-9 ? (h - ox) / dx : dx < -1e-9 ? (-h - ox) / dx : Infinity;
+    const ty = dy > 1e-9 ? (h - oy) / dy : dy < -1e-9 ? (-h - oy) / dy : Infinity;
+    const xWall = tx < ty;
+    const t = xWall ? tx : ty;
+    return {
+      t, xWall,
+      name: xWall ? (dx > 0 ? 'right wall' : 'left wall') : (dy > 0 ? 'far wall' : 'near wall'),
+      alongIn: xWall ? oy + t * dy : ox + t * dx,
+    };
+  }
+
+  /**
+   * Whether a distance reset (the auton functions' resetFront() and friends) from one sensor at
+   * `pose` would read the wall itself, on this field: { ok, axis ('x' | 'y'), wallIn, alongIn,
+   * sees, shortIn, why }.
+   *
+   * wallFix() (wall_reset.cpp) only knows the perimeter. It checks what it can: the beam no more
+   * than maxAngleDeg off square, landing cornerMarginIn clear of the corners. This checks those the
+   * same way, then what it can't: a V5 Distance Sensor reads the nearest thing anywhere in its
+   * beam's cone (BeamModel::coneHalfAngleDeg, 15 degrees either side), so a Goal, a Loader, a Cup
+   * or a standing Pin anywhere in the cone reads short of the wall, and a reading a couple of
+   * inches short passes maxJumpIn and moves the robot by that much. The Toggles count too: the
+   * Triple Pin routine's back sensor read the wall about 3in long off one (SL000040), so a cone
+   * reaching any of a Toggle's stretch of wall is skipped. Pins lying down are left out (a sensor
+   * mounted higher than one sees over it), and so is anything the map doesn't hold, other robots
+   * included.
+   *
+   * `mount` is { forwardIn, rightIn, facingDeg } (DistanceSensorMount). `options`: maxAngleDeg (30)
+   * and cornerMarginIn (0) as in WallResetConfig, coneHalfAngleDeg (15), maxRangeIn (the sensor's
+   * 2000mm), toleranceIn (how much short still counts as the wall, 0.25), and objects: the Cups
+   * and Pins on the field now (field.objects, the ones the robot has picked up taken out).
+   */
+  function wallResetCheck(field, pose, mount, options = {}) {
+    const o = Object.assign({ maxAngleDeg: 30, cornerMarginIn: 0, coneHalfAngleDeg: 15, maxRangeIn: 2000 / 25.4,
+      toleranceIn: 0.25, objects: field.objects }, options);
+    const fail = (why, extra = {}) => Object.assign({ ok: false, axis: null, why }, extra);
+    const a = pose.headingDeg * kDegToRad;
+    const sx = pose.xIn + mount.forwardIn * Math.sin(a) + mount.rightIn * Math.cos(a);
+    const sy = pose.yIn + mount.forwardIn * Math.cos(a) - mount.rightIn * Math.sin(a);
+    const facing = (pose.headingDeg + mount.facingDeg) * kDegToRad;
+    if (Math.abs(sx) >= field.halfIn || Math.abs(sy) >= field.halfIn) return fail('sensor outside the field');
+    // the center ray, as wallFix() takes it
+    const center = rayWall(field, sx, sy, Math.sin(facing), Math.cos(facing));
+    const axis = center.xWall ? 'x' : 'y';
+    const across = Math.abs(center.xWall ? Math.sin(facing) : Math.cos(facing));
+    const where = { wallIn: center.t, alongIn: center.alongIn, wall: center.name };
+    if (across < Math.cos(o.maxAngleDeg * kDegToRad)) return fail('too steep', where);
+    if (Math.abs(center.alongIn) > field.halfIn - o.cornerMarginIn) return fail('near a corner', where);
+    if (center.t > o.maxRangeIn) return fail('out of range', where);
+
+    const solids = [...field.goals, ...field.loaders].map((e) => ({ name: e.name, outline: e.outline }));
+    for (const obj of o.objects) {
+      if (obj.kind === 'cup') solids.push({ name: 'cup', circle: [obj.xIn, obj.yIn, field.cupIn / 2] });
+      if (obj.kind === 'pin') solids.push({ name: 'pin', circle: [obj.xIn, obj.yIn, field.pinIn / 2] });
+    }
+    const toggles = field.toggles.map((t) => ({ vertical: t.angleDeg === 90, xIn: t.xIn, yIn: t.yIn, half: t.lengthIn / 2 }));
+    let nearest = { t: Infinity, name: '' };
+    let onToggle = false;
+    const steps = Math.max(1, Math.ceil(o.coneHalfAngleDeg / 0.25));
+    for (let k = -steps; k <= steps; ++k) {
+      const f = facing + (k / steps) * o.coneHalfAngleDeg * kDegToRad;
+      const dx = Math.sin(f);
+      const dy = Math.cos(f);
+      const wall = rayWall(field, sx, sy, dx, dy);
+      let hit = { t: wall.t, name: wall.name };
+      for (const s of solids) {
+        let t = Infinity;
+        if (s.outline) {
+          for (let i = 0; i < s.outline.length; ++i) {
+            const p = s.outline[i];
+            const q = s.outline[(i + 1) % s.outline.length];
+            t = Math.min(t, raySegmentIn(sx, sy, dx, dy, p[0], p[1], q[0], q[1]));
+          }
+        } else {
+          t = rayCircleIn(sx, sy, dx, dy, ...s.circle);
+        }
+        if (t < hit.t) hit = { t, name: s.name };
+      }
+      if (hit.t < nearest.t) nearest = hit;
+      if (hit.t === wall.t) {
+        // the wall itself: on a Toggle's stretch of it?
+        const px = sx + wall.t * dx;
+        const py = sy + wall.t * dy;
+        for (const t of toggles) {
+          const onWall = t.vertical ? Math.abs(px - t.xIn) < 0.5 : Math.abs(py - t.yIn) < 0.5;
+          const along = t.vertical ? Math.abs(py - t.yIn) : Math.abs(px - t.xIn);
+          if (onWall && along <= t.half) onToggle = true;
+        }
+      }
+    }
+    const shortIn = center.t - nearest.t;
+    const extra = Object.assign({ sees: nearest.name, shortIn }, where);
+    if (nearest.name !== center.name && shortIn > o.toleranceIn) {
+      return fail(`its cone sees the ${nearest.name}, ${shortIn.toFixed(1)}in short of the wall`, extra);
+    }
+    if (shortIn > o.toleranceIn) return fail(`its cone reads the wall ${shortIn.toFixed(1)}in short at this angle`, extra);
+    if (onToggle) return fail('its cone reaches a Toggle', extra);
+    return Object.assign({ ok: true, axis, why: '' }, extra);
+  }
+
   /** What's at a point, in a few words, for the field's cursor readout. */
   function describe(field, xIn, yIn) {
     if (Math.abs(xIn) > field.halfIn || Math.abs(yIn) > field.halfIn) return '';
@@ -354,6 +481,7 @@
     footprintHits,
     planHits,
     startCheck,
+    wallResetCheck,
     describe,
   };
 });

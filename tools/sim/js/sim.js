@@ -51,10 +51,15 @@
       this.reset(options.start);
     }
 
-    /** A fresh world and robot program, the robot sitting at `start` and told so. */
-    reset(start = this.options.start) {
+    /**
+     * A fresh world and robot program, the robot sitting at `start` and told so. `world` is what a
+     * routine changes about the world for its run (its `world`, see runRoutine()), on top of the
+     * page's settings and without changing them.
+     */
+    reset(start = this.options.start, world = this.worldOverrides || null) {
       const o = this.options;
-      this.world = new W.World(o.world, start);
+      this.worldOverrides = world;
+      this.world = new W.World(world ? Object.assign({}, o.world, world) : o.world, start);
       this.gains = this.currentGains();
       this.robot = new R.Robot(this.world, {
         odometryConfig: { verticalOffsetIn: o.world.verticalOffsetIn, horizontalOffsetIn: o.world.horizontalOffsetIn },
@@ -114,10 +119,12 @@
     /**
      * Start an autonomous routine (from routines.js) where it expects to start.
      * A routine with a `script` (a replayed log, see tuner.js) moves the robot
-     * along it instead of simulating the chassis.
+     * along it instead of simulating the chassis. One with a `world` runs in
+     * the page's world with those settings changed: Triple Pin's the robot's
+     * own distance sensors, say. Its changes last until the next routine.
      */
     runRoutine(routine) {
-      this.reset(routine.start);
+      this.reset(routine.start, routine.world || null);
       if (routine.script) this.world.setScript(routine.script);
       this.programName = routine.name;
       this.program = routine.run(this.robot);

@@ -289,3 +289,37 @@ test('every action calls something robot/macros.hpp declares', () => {
     assert.match(header, new RegExp(`\\bvoid ${call}\\(bool \\w+\\);`), `macros.hpp declares ${call}(bool)`);
   }
 });
+
+test('Paste C++ reads every path a routine has: autons.cpp\'s, its Triple Pin legs as the simulator drives them', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { TRIPLE_PIN, TRIPLE_PIN_LEGS } = require('../js/routines.js');
+  const source = fs.readFileSync(path.join(__dirname, '../../../src/robot/autons.cpp'), 'utf8');
+  const parsed = P.parseCppAll(source);
+  assert.ok(parsed.ok, parsed.error);
+  // its TrajectoryFollowConfig isn't a path, so only these come in
+  assert.deepEqual(parsed.docs.map((d) => d.name), ['trajectory example', 'triple pin to goal', 'triple pin to second pin',
+    'triple pin second to goal', 'triple pin to third pin', 'triple pin third to goal', 'triple pin off goal']);
+  // the C++ drives what routines.js drives
+  TRIPLE_PIN_LEGS.forEach((leg, k) => {
+    assert.deepEqual(P.toSections(parsed.docs[k + 1]), P.toSections(P.fromSections(TRIPLE_PIN[leg])), leg);
+  });
+});
+
+test('a lone path pasted with other constants keeps its actions; several paths come in without', () => {
+  const doc = P.fromSections(SMALL, 'left rush');
+  P.setAction(doc, 1, 'claw', 'open');
+  const config = 'const sapphirelib::motion::TrajectoryFollowConfig kFollow{.positionErrorThresholdIn = 0.5};\n';
+  const one = P.parseCppAll(config + P.toCpp(doc));
+  assert.ok(one.ok, one.error);
+  assert.equal(one.docs.length, 1);
+  assert.equal(one.docs[0].waypoints[1].claw, 'open');
+
+  const two = P.parseCppAll(`${P.toCpp(doc)}\n${P.toCpp(P.fromSections(TOUR_CHAIN, 'tour'))}`);
+  assert.ok(two.ok, two.error);
+  assert.deepEqual(two.docs.map((d) => d.name), ['left rush', 'tour']);
+  assert.equal(two.docs[0].waypoints[1].claw, undefined);
+
+  assert.ok(!P.parseCppAll('nothing here').ok);
+  assert.match(P.parseCppAll(config).error, /expected a list of sections/);
+});

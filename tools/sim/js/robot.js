@@ -982,12 +982,25 @@
         localizer, clock);
       this.drivetrain = new Drivetrain(world, this.imu, this.odometry, gains, clock);
       this.localizerPeriodMs = 50;
+      // the robot's other tasks, each called with the time every tick after odometry and the
+      // localizer: the lift's and autoClaw's (macros.js) once a routine makes them
+      this.tasks = [];
+      // the macros (macros.js), once a routine makes them
+      this.macros = null;
+      // what the program printed on the terminal: { tMs, source, text }
+      this.events = [];
     }
 
     /** One 10ms tick of every task, after the world has advanced. */
     tick() {
       this.odometry.update();
       if (this.world.timeMs % this.localizerPeriodMs === 0) this.localizer.update();
+      for (const task of this.tasks) task(this.world.timeMs);
+    }
+
+    /** A line on the terminal, as SAPPHIRELIB_LOG_INFO() prints one. */
+    log(source, text) {
+      this.events.push({ tMs: this.world.timeMs, source, text });
     }
   }
 

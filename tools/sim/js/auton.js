@@ -146,7 +146,9 @@
       return result;
     }
 
-    function resetFacing(facingDeg) {
+    // the reset, and what auton.cpp's resetFacing() prints about it; each also goes in resets
+    const resets = [];
+    function resetFacing(facingDeg, kind) {
       const mounts = localizer.filter.sensors;
       let sensor = -1;
       let closest = kFacingToleranceDeg;
@@ -157,7 +159,13 @@
           sensor = i;
         }
       });
-      return sensor >= 0 && localizer.resetFromWall(sensor, wallReset).ok;
+      const fix = sensor >= 0 ? localizer.resetFromWall(sensor, wallReset) : { ok: false, why: 'no distance sensor faces that way' };
+      resets.push(Object.assign({ kind, tMs: robot.clock ? robot.clock() : 0 }, fix));
+      if (robot.log) {
+        robot.log('auton', fix.ok ? `${kind}: ${fix.axis} = ${fix.valueIn.toFixed(1)} (moved ${fix.shiftIn.toFixed(1)}in)`
+          : `${kind}: skipped, ${fix.why}`);
+      }
+      return fix.ok;
     }
 
     const a = {
@@ -298,10 +306,13 @@
         });
       },
 
-      resetFront: () => resetFacing(0.0),
-      resetBack: () => resetFacing(180.0),
-      resetLeft: () => resetFacing(270.0),
-      resetRight: () => resetFacing(90.0),
+      resetFront: () => resetFacing(0.0, 'resetFront'),
+      resetBack: () => resetFacing(180.0, 'resetBack'),
+      resetLeft: () => resetFacing(270.0, 'resetLeft'),
+      resetRight: () => resetFacing(90.0, 'resetRight'),
+
+      /** Every reset so far, for the page and the tests: { kind, tMs, ok, axis, valueIn, shiftIn, why }. */
+      resets: () => resets,
 
       setMcl(on) {
         localizer.setCorrectionEnabled(on);

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Claw Timing</title>
+<!--
+  SapphireLib claw timing: autoClaw's grab simulated thousands of times at
+  every speed, from the sensor's latency, the program's tick, odometry's
+  speed and the valve, to find the fastest the claw can grab and what to set
+  kGrabMm and kClawLeadMs (src/robot/macros.cpp) to. Open this file in a
+  browser: no install, no server. The model is js/clawtiming.js; how to use
+  it: docs/TOOLS.md, and docs/NEW_CHASSIS.md's "autoClaw at speed".
+  Team 96671H: Hitmen
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="css/sim.css">
+<link rel="stylesheet" href="css/claw.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1><span class="mark" aria-hidden="true"></span> Claw Timing</h1>
+    <span class="sub">autoClaw: sensor lag, speed, piston lag</span>
+  </div>
+  <div class="transport">
+    <a class="btn" href="index.html">Sapphire Sim</a>
+    <button class="btn" id="reset-btn" type="button" title="Back to the defaults: the simulator's claw">Defaults</button>
+    <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch light or dark theme" title="Theme">◐</button>
+  </div>
+</header>
+
+<main class="claw">
+  <aside class="panel settings" aria-label="Settings">
+    <header><h3>Your robot</h3><span class="hint">Measure these: docs/NEW_CHASSIS.md</span></header>
+    <form id="settings" autocomplete="off"></form>
+  </aside>
+
+  <section class="results">
+    <div class="tiles" id="tiles" aria-live="polite"></div>
+
+    <div class="panel">
+      <header>
+        <h3>Grabs caught, by speed</h3>
+        <span class="hint">Each point is 300 grabs. The line at 95% is "every time" for a match.</span>
+      </header>
+      <div class="legend" id="sweep-legend"></div>
+      <div class="chart-wrap" id="sweep-chart"></div>
+      <details class="table-toggle">
+        <summary>Table</summary>
+        <div class="table-wrap" id="sweep-table"></div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <header>
+        <h3>Where the jaws shut on the Pin</h3>
+        <span class="hint">As the claw's sensor reads it. Inside the shaded window the Pin is caught.</span>
+      </header>
+      <div class="legend" id="shut-legend"></div>
+      <div class="chart-wrap" id="shut-chart"></div>
+      <p class="hint" id="shut-note"></p>
+    </div>
+
+    <div class="panel">
+      <header>
+        <h3>One grab, ms by ms</h3>
+        <label class="inline">at <input class="num-input small" id="view-speed" type="number" min="2" max="70" step="1" value="40"> in/s</label>
+        <button class="btn" id="another-btn" type="button">Another grab</button>
+      </header>
+      <div class="legend" id="trace-legend"></div>
+      <div class="chart-wrap" id="trace-chart"></div>
+      <p class="hint" id="trace-note"></p>
+    </div>
+
+    <div class="two-up">
+      <div class="panel">
+        <header>
+          <h3>What spreads the grabs</h3>
+          <span class="hint" id="budget-speed"></span>
+        </header>
+        <div class="budget" id="budget"></div>
+        <p class="hint" id="budget-note"></p>
+      </div>
+
+      <div class="panel">
+        <header><h3>Tune the lead from a grab</h3></header>
+        <p class="hint">Film a grab in slow motion, or read the log. Read its speed off the controller's CLAW readout (LEFT).</p>
+        <div class="calc">
+          <label>Speed <span><input class="num-input" id="calc-speed" type="number" step="1" value="40"> in/s</span></label>
+          <label>The jaws shut with the Pin <span><input class="num-input" id="calc-off" type="number" step="0.1" value="0.5"> in</span></label>
+          <div class="segments" role="group" aria-label="Which way">
+            <button type="button" id="calc-early" aria-pressed="true">short of kGrabMm (early)</button>
+            <button type="button" id="calc-late" aria-pressed="false">past it (late)</button>
+          </div>
+        </div>
+        <p class="calc-result" id="calc-result"></p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <header>
+        <h3>For macros.cpp</h3>
+        <button class="btn" id="copy-btn" type="button">Copy</button>
+      </header>
+      <pre class="code" id="code"></pre>
+    </div>
+  </section>
+</main>
+
+<script src="js/clawtiming.js"></script>
+<script src="js/clawview.js"></script>
+<script>SIM.clawview.start();</script>
+</body>
+</html>

@@ -126,3 +126,56 @@ test('the world gets the Goals and Loaders as boxes', () => {
   assert.ok(near(center.maxXIn - center.minXIn, 5.61, 1e-9));
   assert.ok(boxes.every((b) => b.minXIn < b.maxXIn && b.minYIn < b.maxYIn));
 });
+
+// wallResetCheck(): config.hpp's left sensor and front one, for the cases below
+const kLeft = { forwardIn: -0.85, rightIn: -4.88, facingDeg: 270 };
+const kFront = { forwardIn: 0.59, rightIn: 3.99, facingDeg: 0 };
+const kBack = { forwardIn: -1.86, rightIn: -4.49, facingDeg: 180 };
+const kRight = { forwardIn: -0.22, rightIn: 4.82, facingDeg: 90 };
+const pinsGone = (...spots) => field.objects.filter((o) => !(o.kind === 'pin' && spots.some(([x, y]) => near(o.xIn, x, 0.5) && near(o.yIn, y, 0.5))));
+const T = field.tilePitchIn;
+
+test('a wall reset square to a clear stretch of wall reads the wall, and says which way it sets', () => {
+  // facing 270 between the two red Goals: the left sensor looks down at the near wall
+  const r = F.wallResetCheck(field, { xIn: -42.79, yIn: -47.09, headingDeg: 270 }, kLeft, { cornerMarginIn: 18 });
+  assert.ok(r.ok, r.why);
+  assert.equal(r.axis, 'y');
+  assert.equal(r.wall, 'near wall');
+  // the sensor's face is 4.88in left of the tracking center, which faces -y there
+  assert.ok(near(r.wallIn, -47.09 - 4.88 + field.halfIn, 1e-6), `${r.wallIn}`);
+  assert.ok(near(r.shortIn, 0, 1e-6));
+});
+
+test('a wall reset is skipped where its cone takes in a Goal, a Cup or a Pin', () => {
+  // on the left red Goal from the north: the right sensor's cone takes in the Cups by the left wall
+  const cup = F.wallResetCheck(field, { xIn: -47.09, yIn: -18.25, headingDeg: 180 }, kRight);
+  assert.ok(!cup.ok);
+  assert.equal(cup.sees, 'cup');
+  assert.ok(cup.shortIn > 1 && cup.shortIn < 4, `${cup.shortIn}`);
+  // and the front one sees the Goal it's on
+  assert.match(F.wallResetCheck(field, { xIn: -41.79, yIn: -23.55, headingDeg: 270 }, kFront).why, /red goal \(left\)/);
+  // a standing Pin in the cone, until it's picked up
+  const spot = { xIn: -47.09, yIn: -28.85, headingDeg: 0 };
+  assert.match(F.wallResetCheck(field, spot, kBack, { objects: pinsGone([-T, -T]) }).why, /pin/);
+  assert.ok(F.wallResetCheck(field, spot, kBack, { objects: pinsGone([-T, -T], [-2 * T, -2 * T]) }).ok);
+});
+
+test('a wall reset is skipped on a Toggle, near a corner, too steep or out of range', () => {
+  // where Triple Pin starts, its back against the left wall's Toggle
+  assert.match(F.wallResetCheck(field, { xIn: -60.6, yIn: -5, headingDeg: 90 }, kBack).why, /Toggle/);
+  // its side sensors, within the 18in auton::use() keeps clear of the corners
+  assert.equal(F.wallResetCheck(field, { xIn: -60.6, yIn: -5, headingDeg: 90 }, kRight, { cornerMarginIn: 18 }).why, 'near a corner');
+  assert.equal(F.wallResetCheck(field, { xIn: -42.79, yIn: -47.09, headingDeg: 235 }, kLeft).why, 'too steep');
+  // the near wall from the far side of the field: past the sensor's 2000mm
+  assert.equal(F.wallResetCheck(field, { xIn: -40, yIn: 30, headingDeg: 270 }, kLeft).why, 'out of range');
+});
+
+test('a wall reset off square reads the wall short across its cone', () => {
+  // 10 degrees off at 18in: the cone's nearest point on the wall is 18(1 - cos 10) closer
+  const r = F.wallResetCheck(field, { xIn: -42.79, yIn: -47.09, headingDeg: 260 }, kLeft, { toleranceIn: 0.1 });
+  assert.ok(!r.ok);
+  assert.match(r.why, /reads the wall .* short at this angle/);
+  assert.ok(near(r.shortIn, r.wallIn * (1 - Math.cos(10 * Math.PI / 180)), 0.05), `${r.shortIn}`);
+  // allowed a little more, it passes
+  assert.ok(F.wallResetCheck(field, { xIn: -42.79, yIn: -47.09, headingDeg: 260 }, kLeft, { toleranceIn: 0.5 }).ok);
+});

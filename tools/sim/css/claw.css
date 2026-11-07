@@ -1,0 +1,142 @@
+/*
+ * SapphireLib claw timing page (claw.html): the layout and the charts. Every
+ * color comes from sim.css's tokens, so both themes and the series order are
+ * the simulator's.
+ *
+ * Team 96671H: Hitmen
+ */
+
+main.claw {
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+  gap: 18px;
+  padding: 16px var(--gutter) 40px;
+  align-items: start;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.results { display: grid; gap: 16px; min-width: 0; }
+.settings { position: sticky; top: 68px; max-height: calc(100vh - 84px); overflow-y: auto; }
+@media (max-width: 900px) {
+  main.claw { grid-template-columns: minmax(0, 1fr); }
+  .settings { position: static; max-height: none; }
+}
+
+/* --- Settings ------------------------------------------------------------------------------ */
+
+#settings { display: grid; gap: 14px; }
+#settings fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+#settings legend {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 0;
+  margin-bottom: 2px;
+}
+.num-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px; align-items: center; gap: 2px 8px; font-size: 0.88rem; }
+.num-row span { color: var(--ink-2); }
+.num-row small { grid-column: 1 / -1; color: var(--muted); font-size: 0.76rem; line-height: 1.3; }
+.num-row .unit-input { display: flex; align-items: center; gap: 4px; }
+.num-row .unit-input i { font-style: normal; color: var(--muted); font-size: 0.78rem; min-width: 2.4ch; }
+.num-input {
+  width: 100%;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  text-align: right;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+.num-input.small { width: 64px; }
+.settings select.select { width: 100%; }
+
+/* --- Tiles ------------------------------------------------------------------------------ */
+
+#tiles { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.tile .value small { font-size: 0.9rem; font-weight: 500; color: var(--ink-2); }
+
+/* --- Charts ------------------------------------------------------------------------------ */
+
+.chart-wrap { position: relative; min-width: 0; }
+svg.chart { display: block; width: 100%; overflow: visible; user-select: none; }
+svg.chart text { font: 11px var(--font-data); fill: var(--muted); }
+svg.chart text.label { font: 600 12px var(--font-body); fill: var(--ink-2); }
+svg.chart text.ref { fill: var(--ink-2); }
+svg.chart .grid line { stroke: var(--grid); stroke-width: 1; }
+svg.chart .axis line, svg.chart line.axis { stroke: var(--axis); stroke-width: 1; }
+svg.chart .ref-line { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.7; }
+svg.chart .window { fill: var(--surface-3); }
+svg.chart .crosshair { stroke: var(--ink-2); stroke-width: 1; opacity: 0.5; }
+svg.chart .s1 { stroke: var(--series-1); color: var(--series-1); }
+svg.chart .s2 { stroke: var(--series-2); color: var(--series-2); }
+svg.chart .s3 { stroke: var(--series-3); color: var(--series-3); }
+svg.chart .ink { stroke: var(--ink-2); color: var(--ink-2); }
+svg.chart path.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+svg.chart path.dashed { stroke-dasharray: 5 4; }
+svg.chart path.band { stroke: none; fill: currentColor; opacity: 0.18; }
+svg.chart circle.dot { fill: currentColor; stroke: var(--surface); stroke-width: 2; }
+svg.chart circle.hollow { fill: var(--surface); stroke: currentColor; stroke-width: 2; }
+svg.chart .hit { fill: transparent; cursor: crosshair; }
+.legend { justify-content: flex-start; margin: 2px 0 4px; }
+.legend .s1 { color: var(--series-1); }
+.legend .s2 { color: var(--series-2); }
+.legend .s3 { color: var(--series-3); }
+.legend .ink { color: var(--ink-2); }
+.legend b { font-weight: 500; color: var(--ink-2); }
+
+.tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  box-shadow: 0 6px 18px rgba(14, 17, 23, 0.14);
+  white-space: nowrap;
+  color: var(--ink);
+}
+.tip b { font-weight: 600; }
+.tip .k { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 6px; background: currentColor; }
+.tip .row { color: var(--ink-2); }
+.tip .s1 { color: var(--series-1); }
+.tip .s2 { color: var(--series-2); }
+.tip .s3 { color: var(--series-3); }
+.tip .row span { color: var(--ink); font-family: var(--font-data); }
+
+.table-toggle summary { cursor: pointer; color: var(--ink-2); font-size: 0.88rem; }
+.table-toggle .table-wrap { max-height: 320px; overflow: auto; margin-top: 6px; }
+
+/* --- Budget, calculator, code ------------------------------------------------------------------------------ */
+
+.two-up { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.budget { display: grid; gap: 7px; }
+.budget .item { display: grid; grid-template-columns: 150px minmax(0, 1fr) 56px; align-items: center; gap: 8px; font-size: 0.85rem; }
+.budget .item span { color: var(--ink-2); }
+.budget .bar { height: 10px; border-radius: 0 4px 4px 0; background: var(--series-1); min-width: 2px; }
+.budget .item.total .bar { background: var(--ink-2); }
+.budget .item.window .bar { background: var(--surface-3); border: 1px dashed var(--axis); }
+.budget .item output { font-family: var(--font-data); text-align: right; color: var(--ink); }
+.budget .item.top span { color: var(--ink); font-weight: 600; }
+
+.calc { display: grid; gap: 8px; }
+.calc label { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 0.9rem; color: var(--ink-2); }
+.calc label span { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.calc .num-input { width: 80px; }
+.calc .segments button { font-size: 0.85rem; }
+.calc-result { font-size: 0.95rem; }
+.calc-result code { font-size: 0.95em; }
+
+pre.code {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}

@@ -138,8 +138,10 @@
       if (view.pathEditor) this.drawPathEditor(view.pathEditor, sim.options.world);
       if (view.target) this.drawTarget(robot.drivetrain.target, sim.options.world);
 
-      // the real robot underneath, so the particles and beams show over it
-      this.drawRobot(truth, sim.options.world, { outline: c['robot-line'], fill: c['robot-fill'], details: view.mounts });
+      // the real robot underneath, so the particles and beams show over it, with the sensors the
+      // running routine has (sim.world's settings: the page's, with a routine's changes)
+      this.drawRobot(truth, sim.world.settings, { outline: c['robot-line'], fill: c['robot-fill'], details: view.mounts });
+      if (robot.macros) this.drawMechanisms(robot.macros, truth, sim.world.settings);
 
       if (view.particles) this.drawParticles(loc.filter, view);
 
@@ -248,7 +250,7 @@
       ctx.lineWidth = 4;
       ctx.strokeRect(x0 - 2, y0 - 2, size + 4, size + 4);
       if (view.fieldElements) this.drawToggles(field);
-      if (view.objects) this.drawObjects(field);
+      if (view.objects) this.drawObjects(field, sim.robot.macros);
 
       // field elements: filled if really there, outlined if the map has them. The Goals and
       // Loaders (field: true) are drawn above as themselves, there or not
@@ -404,15 +406,31 @@
       }
     }
 
+    /** A standing Pin, seen from above: a dot in its top color. */
+    drawPinDot(field, xIn, yIn, color) {
+      const ctx = this.ctx;
+      const [x, y] = this.toPx(xIn, yIn);
+      ctx.fillStyle = this.allianceColor(color);
+      ctx.strokeStyle = this.colors['goal-edge'];
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, this.inchesPx(field.pinIn / 2, 1.5), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+
     /**
      * The Cups and Pins a Head-to-Head match starts with: Cups as rings, a standing Pin as a dot in
-     * its top color, a lying Pin as its two halves, yellow inward.
+     * its top color, a lying Pin as its two halves, yellow inward. With a routine's macros
+     * (macros.js) running, its standing Pins are drawn where they are now instead: a stack on a
+     * Goal as its top Pin with the count beside it, and the one in the claw by drawMechanisms().
      */
-    drawObjects(field) {
+    drawObjects(field, macros = null) {
       const ctx = this.ctx;
       const c = this.colors;
       const pinR = this.inchesPx(field.pinIn / 2, 1.5);
       for (const o of field.objects) {
+        if (macros && o.kind === 'pin') continue;
         const [x, y] = this.toPx(o.xIn, o.yIn);
         if (o.kind === 'cup') {
           ctx.strokeStyle = c.cup;
@@ -458,6 +476,79 @@
           ctx.restore();
         }
       }
+      if (!macros) return;
+      // each Goal's stack: its top Pin, and how many there are
+      const stacks = new Map();
+      for (const p of macros.pins()) {
+        if (p.state === 'standing') this.drawPinDot(field, p.xIn, p.yIn, p.color);
+        if (p.state !== 'scored') continue;
+        const stack = stacks.get(p.goal);
+        if (!stack || p.level > stack.top.level) stacks.set(p.goal, { top: p, count: (stack ? stack.count : 0) + 1 });
+        else stack.count++;
+      }
+      ctx.font = '600 11px system-ui, sans-serif';
+      for (const { top, count } of stacks.values()) {
+        this.drawPinDot(field, top.xIn, top.yIn, top.color);
+        if (count < 2) continue;
+        // the count on a badge just off the Goal's top right corner
+        const [x, y] = this.toPx(top.xIn, top.yIn);
+        const label = `×${count}`;
+        const off = Math.max(pinR + 2, this.inchesPx(2.6));
+        const w = ctx.measureText(label).width + 8;
+        const bx = x + off;
+        const by = y - off - 14;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(bx, by, w, 15, 4);
+        else ctx.rect(bx, by, w, 15);
+        ctx.fillStyle = c.surface;
+        ctx.fill();
+        ctx.strokeStyle = c['goal-edge'];
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = c.ink;
+        ctx.fillText(label, bx + 4, by + 11.5);
+      }
+    }
+
+    /**
+     * The routine's lift and claw (macros.js), over the robot: the Pin in the claw, the claw's jaws
+     * (shut or open) where it holds one, and the goal and level by the robot.
+     */
+    drawMechanisms(macros, truth, settings) {
+      const ctx = this.ctx;
+      const c = this.colors;
+      const st = macros.status();
+      const field = this.field;
+      const held = macros.pins().find((p) => p.state === 'held');
+      if (held) this.drawPinDot(field, held.xIn, held.yIn, held.color);
+      // the jaws: two short bars either side of where the claw holds a Pin
+      const [cx, cy] = this.toPx(st.claw.xIn, st.claw.yIn);
+      const k = this.scale;
+      const gap = (st.clawClosed ? 0.95 : 1.6) * k;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(truth.headingDeg * kDegToRad);
+      ctx.strokeStyle = st.autoClaw ? c.good : c['robot-line'];
+      ctx.lineWidth = Math.max(1.5, 0.4 * k);
+      ctx.beginPath();
+      for (const side of [-1, 1]) {
+        ctx.moveTo(side * gap, -1.0 * k);
+        ctx.lineTo(side * gap, 1.0 * k);
+      }
+      ctx.stroke();
+      ctx.restore();
+      // the level, under the robot's back corner
+      const label = st.level === 0 ? 'BTM' : `L${st.level}`;
+      const [rx, ry] = this.toPx(truth.xIn, truth.yIn);
+      const r = (Math.max(settings.robotWidthIn, settings.robotLengthIn) / 2) * k;
+      ctx.font = '600 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = c.bg || '#fff';
+      ctx.strokeText(label, rx, ry + r + 14);
+      ctx.fillStyle = c.ink;
+      ctx.fillText(label, rx, ry + r + 14);
+      ctx.textAlign = 'left';
     }
 
     drawTrails(sim) {

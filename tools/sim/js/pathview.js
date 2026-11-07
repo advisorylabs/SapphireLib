@@ -345,10 +345,10 @@
    * Reads C++ that toCpp() wrote (or hand-edited the same way): a
    * std::vector of TrajectorySection, or of TrajectoryWaypoint for a single
    * section, and the actions in the routine after it if there is one: each
-   * macros:: call after a waitUntilWaypoint() goes on that point. Returns
-   * { ok, error, doc }.
+   * macros:: call after a waitUntilWaypoint() goes on that point (unless
+   * `actions` is false). Returns { ok, error, doc }.
    */
-  function parseCpp(text) {
+  function parseCpp(text, { actions = true } = {}) {
     const source = String(text).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
     const nameMatch = source.match(/\bk([A-Za-z0-9_]+)\s*\{/);
     const start = nameMatch ? source.indexOf('{', nameMatch.index) : source.indexOf('{');
@@ -411,6 +411,7 @@
       });
       const name = nameMatch ? nameMatch[1].replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase() : 'pasted';
       const doc = fromSections(chain, name);
+      if (!actions) return { ok: true, error: '', doc };
       // what the claw and the extender do along it, if the routine was pasted too: each call
       // after a waitUntilWaypoint() happens at that point
       const calls = /\bwaitUntilWaypoint\s*\(\s*(\d+)\s*\)|\bmacros\s*::\s*(\w+)\s*\(\s*(\w+)\s*\)/g;
@@ -430,6 +431,26 @@
     } catch (error) {
       return { ok: false, error: error.message, doc: null };
     }
+  }
+
+  /**
+   * Every path in pasted C++, in order: each constant parseCpp() can read, so a routine driven in
+   * several trajectories (autons.cpp's kTriplePin... ones) comes in whole, a path each. With
+   * several, their claw and extender actions aren't read (a routine's calls don't say which path
+   * they're for); a lone path's are, as parseCpp() reads them. Other constants (a
+   * TrajectoryFollowConfig, PID gains) are passed over. Returns { ok, error, docs }.
+   */
+  function parseCppAll(text) {
+    const source = String(text).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    const found = [];
+    for (const match of source.matchAll(/\bk[A-Za-z0-9_]+\s*\{/g)) {
+      const parsed = parseCpp(source.slice(match.index), { actions: false });
+      if (parsed.ok) found.push({ at: match.index, doc: parsed.doc });
+    }
+    if (found.length > 1) return { ok: true, error: '', docs: found.map((f) => f.doc) };
+    // one path, with its actions; or none, and parseCpp() says why
+    const one = parseCpp(found.length ? source.slice(found[0].at) : text);
+    return { ok: one.ok, error: one.error, docs: one.ok ? [one.doc] : [] };
   }
 
   // --- The robot's logged models ---------------------------------------------------------------
@@ -1121,18 +1142,21 @@
       $('path-paste-row').hidden = true;
     });
     $('path-read-btn').addEventListener('click', () => {
-      const parsed = parseCpp($('path-paste').value);
+      const parsed = parseCppAll($('path-paste').value);
       if (!parsed.ok) {
         flash(`Couldn't read it: ${parsed.error}.`, true);
         return;
       }
-      state.paths.push(parsed.doc);
-      state.current = state.paths.length - 1;
+      state.current = state.paths.length;
+      state.paths.push(...parsed.docs);
       state.selected = -1;
       $('path-paste').value = '';
       $('path-paste').hidden = true;
       $('path-paste-row').hidden = true;
-      flash(`Read "${parsed.doc.name}": ${parsed.doc.waypoints.length} points in ${parsed.doc.sections.length} section(s).`);
+      const [first] = parsed.docs;
+      flash(parsed.docs.length === 1
+        ? `Read "${first.name}": ${first.waypoints.length} points in ${first.sections.length} section(s).`
+        : `Read ${parsed.docs.length} paths: ${parsed.docs.map((d) => `"${d.name}"`).join(', ')}. Pick one above.`);
       changed();
     });
 
@@ -1201,6 +1225,7 @@
     routineName,
     toCpp,
     parseCpp,
+    parseCppAll,
     loggedPlanModels,
     build,
   };

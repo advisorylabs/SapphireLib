@@ -7,7 +7,7 @@ plain HTML: double-click `index.html`, no install, works offline. Keep them insi
 
 Both have a **?** button (or press `?`) with the controls and units, and a theme button.
 
-Contents: [Units](#units) · [Simulator](#simulator) · [Analyzer](#analyzer) ·
+Contents: [Units](#units) · [Simulator](#simulator) · [Claw timing](#claw-timing) · [Analyzer](#analyzer) ·
 [Reading the localizer in a log](#reading-the-localizer-in-a-log) ·
 [Particle count](#particle-count-what-it-costs-what-it-buys) · [What gets logged](#what-gets-logged)
 
@@ -64,7 +64,10 @@ Driving stops a running routine. Hover a label or slider for what it means.
   `src/robot/autons.cpp`, `js/auton.js` being their port; [`QUICKSTART.md`](QUICKSTART.md) has the
   translation), drive it
   yourself, switch the motions between odometry + MCL and odometry alone
-  (`setCorrectionEnabled()`), Auto-Tuned or hand-set PID gains.
+  (`setCorrectionEnabled()`), Auto-Tuned or hand-set PID gains. A routine with the lift and claw
+  (`js/macros.js`, the port of `robot/macros.hpp`; **Triple Pin (paths)**) moves the field's Pins:
+  the one in the claw rides with it, a stack on a Goal shows its count, the lift's level is under
+  the robot, and the result line says what it scored at which level and what each wall reset did.
 - **Paths**: draw a `followTrajectory()` chain on the field. Click to add a point (on the path to
   insert one), drag to move, right-click or `Del` to remove, drag a point's handle to set where it
   faces (`Shift`: 15° steps). **Split** ends a section at a point; each section has its own voltage
@@ -72,7 +75,8 @@ Driving stops a running routine. Hover a label or slider for what it means.
   robot's footprint along it; under it the duration, each section's start, the peaks per axis, and
   a chart of speed and the worst wheel's volts. **Run** drives it in the simulator. **Copy C++**
   writes the chain for `autons.cpp` and a routine that drives it, timing the points' claw and
-  extender actions with `waitUntilWaypoint()`; **Paste C++** reads both back. Plans with the Robot tab's
+  extender actions with `waitUntilWaypoint()`; **Paste C++** reads both back, and a routine's
+  several paths at once (all of `autons.cpp`'s, say), a draft each. Plans with the Robot tab's
   chassis model, with the models in the TUNE.CFG open in the Tune tab, or (**Logged models**) with
   the ones an `SL*.CSV` says the robot ran (**Open log…**, or drop it there or on the Tune tab),
   which is what the robot plans with. Drafts stay in this browser. The guide: [`TRAJECTORIES.md`](TRAJECTORIES.md).
@@ -114,6 +118,36 @@ Driving stops a running routine. Hover a label or slider for what it means.
   then the points to each Goal. Fix whatever the line under the plan says it runs into, **Run** it,
   **Copy C++** into `autons.cpp` and add its routine to `registerAutons()`. **Other alliance** and
   **Other quadrant** make its twins.
+
+## Claw timing
+
+`tools/sim/claw.html` (the **Claw timing** page; open it the same way) simulates autoClaw's grab
+thousands of times at every speed from 2 to 70 in/s, to find how fast the claw can grab and what to
+set `kGrabMm`, `kClawLeadMs` and `kClawSpeedVolts` to in `src/robot/macros.cpp`. It models every
+step between a pin and the jaws shut on it: the claw sensor measuring every ~33 ms, its latency
+and noise, the program looking once a tick (20 ms in driver control, 10 in autonomous), odometry's
+speed, and the valve and piston, with how much each varies (`js/clawtiming.js`). The settings
+start as the simulator's claw, a guess; **Your robot** on the left takes your own numbers and keeps
+them in the browser. How to measure them: [`NEW_CHASSIS.md`](NEW_CHASSIS.md), "autoClaw at speed".
+
+- **The tiles**: how fast 95% of grabs still catch, for autoClaw's lead (`macros.cpp`), the lead
+  without the reading's age (commit `a66eb14`, given its best lead), and a fixed trigger
+  (`kPieceDetectMm`, before the lead), and the speed clawSpeed's volts give. A fixed trigger only
+  works in a band of speeds: early below it, late above.
+- **Grabs caught, by speed**: each rule's catch rate (300 grabs a point), with the 95% line,
+  clawSpeed's speed and full speed. **Table** has the numbers, early and late apart.
+- **Where the jaws shut**: the pin's reading as the jaws shut, against the claw's window (shaded)
+  and `kGrabMm`. The lead's average should stay level with speed: climbing, `kClawLeadMs` is too
+  long; sinking, too short (the note under it says by how much, and **Best** beside `kClawLeadMs`
+  fixes it).
+- **One grab, ms by ms**: the pin as it really was, each sensor sample, what the program read each
+  tick, and where it aimed, up to the jaws shutting. **Another grab** draws another.
+- **What spreads the grabs**: at that speed, each source's share of the scatter. The top speed is
+  where the scatter outgrows the claw's window, so the biggest bar is what to work on.
+- **Tune the lead from a grab**: the speed of a grab you filmed (the controller's `CLAW` readout
+  shows it), and how far short of or past `kGrabMm` the pin was as the jaws shut: the next
+  `kClawLeadMs`.
+- **For macros.cpp**: the constants, ready to paste.
 
 ## Analyzer
 

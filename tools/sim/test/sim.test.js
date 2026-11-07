@@ -36,7 +36,8 @@ function runRoutine(routine, tweak = () => {}, during = () => {}) {
 }
 
 test('every routine finishes within an inch, and MCL is closer on average than odometry alone', () => {
-  for (const routine of ROUTINES) {
+  // the ones that turn the localizer off themselves (Triple Pin) have their own tests below
+  for (const routine of ROUTINES.filter((r) => r.correctsWithMcl !== false)) {
     const alone = runRoutine(routine, (o) => { o.correctOdometry = false; });
     const mcl = runRoutine(routine);
     assert.ok(alone.finished && mcl.finished, `${routine.id} finished`);
@@ -374,4 +375,166 @@ test('blocked by the defender, the plan waits, and the motion still finishes', (
   assert.ok(paused > 20, `paused ${paused} ticks`);
   assert.equal(run.result.reason, 'settled');
   assert.ok(run.sim.errors().corrected < 1.0);
+});
+
+// --- Triple Pin (paths): autons.cpp's triplePinPaths() ---
+
+const F = require('../js/field.js');
+const A = require('../js/auton.js');
+const RT = require('../js/routines.js');
+
+const { TRIPLE_PIN, TRIPLE_PIN_LEGS, ROBOT_SENSOR_MOUNTS, ROBOT_WALL_RESET } = RT;
+const triplePin = ROUTINES.find((r) => r.id === 'triplePin');
+// devices.cpp's Auto-Tune axis models: the robot's own speed
+const kRobotModels = {
+  forward: { kS: 0.30, kV: 0.1698, kA: 0.0383 },
+  strafe: { kS: 2.21, kV: 0.3234, kA: 0.0838 },
+  turn: { kS: 1.10, kV: 0.0318, kA: 0.0019 },
+};
+
+// The routine with its wall resets doing nothing, to see what they buy
+function withoutResets(body) {
+  const create = A.create;
+  A.create = (robot, settings) => {
+    const a = create(robot, settings);
+    for (const k of ['resetFront', 'resetBack', 'resetLeft', 'resetRight']) a[k] = () => false;
+    return a;
+  };
+  try {
+    return body();
+  } finally {
+    A.create = create;
+  }
+}
+
+test('Triple Pin (paths) stacks its three Pins at L1, L2 and L3, inside autonomous\'s 15 s', () => {
+  for (const models of [null, kRobotModels]) {
+    const run = runRoutine(triplePin, (o) => { if (models) o.world.models = models; });
+    const label = models ? 'the robot\'s models' : 'the simulator\'s';
+    assert.ok(run.finished, label);
+    assert.ok(run.sim.world.timeMs < 15000, `${label}: done at ${run.sim.world.timeMs} ms`);
+    const scored = run.sim.robot.macros.scored();
+    assert.deepEqual(scored.map((p) => p.goal), ['red goal (left)', 'red goal (left)', 'red goal (left)'], label);
+    // each at the next level of the stack, with the lift at that level
+    assert.deepEqual(scored.map((p) => [p.level, p.liftLevel]), [[1, 1], [2, 2], [3, 3]], label);
+    // macros.js lands a Pin on a Goal within 1.25in of its middle: each well inside that
+    for (const p of scored) assert.ok(p.offIn < 1.0, `${label}: L${p.level} ${p.offIn.toFixed(2)}in off the goal's middle`);
+    // four readings of y east of the third Pin, then four rounds of x and y on it, every one taken
+    const resets = run.sim.robot.events.filter((e) => /^reset/.test(e.text));
+    const round = ['resetFront', 'resetLeft'];
+    assert.deepEqual(resets.map((e) => e.text.split(':')[0]),
+      ['resetLeft', 'resetLeft', 'resetLeft', 'resetLeft', ...round, ...round, ...round, ...round], label);
+    // a reading the sensor drops is left out of the average, but nearly all of them take
+    const took = resets.filter((e) => !/skipped/.test(e.text)).length;
+    assert.ok(took >= 10, `${label}: ${took} of 12 took: ${resets.map((e) => e.text).join('; ')}`);
+  }
+});
+
+test('Triple Pin (paths) resets only where its sensors\' cones see clean wall, on the real field', () => {
+  const field = F.override();
+  const T = field.tilePitchIn;
+  const without = (gone) => field.objects.filter((o) => !(o.kind === 'pin' && gone.some(([x, y]) => Math.hypot(o.xIn - x, o.yIn - y) < 0.5)));
+  const robot = (deg) => ROBOT_SENSOR_MOUNTS.find((m) => m.facingDeg === deg);
+  const leg = TRIPLE_PIN.toThirdPin;
+  const at = (point) => ({ xIn: point.xIn, yIn: point.yIn, headingDeg: 270 });
+  // the stop east of the third Pin (point 3) with the second Pin gone, and on the third Pin with it
+  // in the claw: an inch and 3 degrees either way of the plan, with config.hpp's sensors
+  const checks = [
+    { where: 'east of the third Pin', pose: at(leg[1].waypoints[1]), sensor: robot(270), axis: 'y', gone: [[-T, -T]] },
+    { where: 'on the third Pin', pose: at(leg[2].waypoints[0]), sensor: robot(0), axis: 'x', gone: [[-T, -T], [-2 * T, -2 * T]] },
+    { where: 'on the third Pin', pose: at(leg[2].waypoints[0]), sensor: robot(270), axis: 'y', gone: [[-T, -T], [-2 * T, -2 * T]] },
+  ];
+  for (const c of checks) {
+    for (const dx of [-1, 0, 1]) {
+      for (const dy of [-1, 0, 1]) {
+        for (const dh of [-3, 0, 3]) {
+          const pose = { xIn: c.pose.xIn + dx, yIn: c.pose.yIn + dy, headingDeg: c.pose.headingDeg + dh };
+          const r = F.wallResetCheck(field, pose, c.sensor,
+            { cornerMarginIn: ROBOT_WALL_RESET.cornerMarginIn, objects: without(c.gone), toleranceIn: dh ? 0.5 : 0.25 });
+          assert.ok(r.ok && r.axis === c.axis, `${c.where}, off by (${dx}, ${dy}, ${dh}): ${r.why}`);
+        }
+      }
+    }
+  }
+  // and where the routine's comment says it doesn't reset, it couldn't
+  const skipped = [
+    [{ xIn: -60.6, yIn: -5, headingDeg: 90 }, robot(180), /Toggle/], // back on the Toggle after the rams
+    [{ xIn: -60.6, yIn: -5, headingDeg: 90 }, robot(90), /corner/],
+    [TRIPLE_PIN.toGoal[1].waypoints[0], robot(90), /cup/], // on the goal from the north
+    [{ xIn: -41.79, yIn: -23.55, headingDeg: 270 }, robot(0), /red goal/], // on it from the east
+    [TRIPLE_PIN.toSecondPin[2].waypoints[0], robot(0), /red goal/], // the second Pin
+    [TRIPLE_PIN.toSecondPin[2].waypoints[0], robot(90), /red goal/],
+  ];
+  for (const [point, mount, why] of skipped) {
+    const pose = { xIn: point.xIn, yIn: point.yIn, headingDeg: point.headingDeg === undefined ? 180 : point.headingDeg };
+    const r = F.wallResetCheck(field, pose, mount, { cornerMarginIn: ROBOT_WALL_RESET.cornerMarginIn });
+    assert.ok(!r.ok && why.test(r.why), `(${pose.xIn}, ${pose.yIn}): ${r.why || 'ok'}`);
+  }
+});
+
+test('Triple Pin (paths): a bump on the way to the third Pin costs it the Pin, unless the resets put it back', () => {
+  const bump = (sim) => { if (sim.world.timeMs === 9500) sim.world.bump(0, 1.0); };
+  const errorAt = new Map();
+  const run = runRoutine(triplePin, () => {}, (sim) => {
+    bump(sim);
+    errorAt.set(sim.world.timeMs, sim.errors().corrected);
+  });
+  const events = run.sim.robot.events;
+  const firstReset = events.find((e) => /^resetLeft/.test(e.text));
+  const grab = events.find((e) => /autoClaw grabbed/.test(e.text) && e.tMs > firstReset.tMs);
+  // (each tick's error is taken before the tick, so the one before the reset's is the tick before)
+  assert.ok(errorAt.get(firstReset.tMs - 10) > 1.0, `before the resets ${errorAt.get(firstReset.tMs - 10)}`);
+  assert.ok(errorAt.get(grab.tMs) < 0.5, `at the grab ${errorAt.get(grab.tMs)}`);
+  assert.equal(run.sim.robot.macros.scored().length, 3);
+  // without them, the claw runs past the Pin's side and never shuts on it
+  const blind = withoutResets(() => runRoutine(triplePin, () => {}, bump));
+  assert.equal(blind.sim.robot.macros.scored().length, 2);
+});
+
+test('averaged resets: four readings land nearer than one', () => {
+  const averaged = { x: [], y: [] };
+  const single = { x: [], y: [] };
+  for (let seed = 1; seed <= 24; ++seed) {
+    for (const [out, readings] of [[averaged, 4], [single, 1]]) {
+      const options = SIM.defaultOptions();
+      options.world.seed = seed;
+      // still on the third Pin's spot, with the robot's sensors, odometry an inch off each way
+      const spot = { xIn: TRIPLE_PIN.toThirdPin[2].waypoints[0].xIn, yIn: -47.09, headingDeg: 270 };
+      const sim = new SIM.Simulation(options);
+      sim.runRoutine({ name: 'test', start: spot, world: triplePin.world, *run(robot) {
+        const a = A.create(robot, { wallReset: ROBOT_WALL_RESET });
+        a.setPose(spot.xIn + 1, spot.yIn - 1, spot.headingDeg);
+        yield* a.delay(100);
+        yield* RT.averagedResets(a, [[a.resetFront, 'x'], [a.resetLeft, 'y']], readings);
+      } });
+      while (sim.program) sim.tick();
+      const pose = sim.robot.odometry.getPose();
+      out.x.push(pose.xIn - sim.world.truth.xIn);
+      out.y.push(pose.yIn - sim.world.truth.yIn);
+    }
+  }
+  const rms = (v) => Math.sqrt(v.reduce((sum, e) => sum + e * e, 0) / v.length);
+  for (const axis of ['x', 'y']) {
+    assert.ok(rms(averaged[axis]) < 0.7 * rms(single[axis]), `${axis}: ${rms(averaged[axis])} vs one reading's ${rms(single[axis])}`);
+    assert.ok(rms(averaged[axis]) < 0.5, `${axis}: ${rms(averaged[axis])}`);
+  }
+});
+
+test('Triple Pin (paths): its legs plan, and only the goal it scores on is in the footprint\'s way', () => {
+  const field = F.override();
+  const models = W.defaultSettings().models;
+  // where it takes the goal into the front of the robot, and backs off it
+  const onGoal = [[-47.09, -18.25], [-41.79, -23.55]];
+  for (const size of [15, 16, 17]) {
+    for (const leg of TRIPLE_PIN_LEGS) {
+      const plan = T.generateTrajectory(TRIPLE_PIN[leg], models);
+      assert.ok(plan.ok, `${leg}: ${plan.error}`);
+      for (const s of plan.trajectory.samples) {
+        for (const hit of F.footprintHits(F.footprint(s, size, size), field)) {
+          const scoring = hit === 'red goal (left)' && onGoal.some(([x, y]) => Math.hypot(s.xIn - x, s.yIn - y) <= 6.6);
+          assert.ok(scoring, `${size}in, ${leg} at ${s.tS.toFixed(2)}s: ${hit}`);
+        }
+      }
+    }
+  }
 });

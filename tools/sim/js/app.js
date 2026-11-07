@@ -832,9 +832,30 @@
     sim.programResult = null;
     const box = $('routine-result');
     box.hidden = false;
-    const source = options.correctOdometry ? 'odometry + MCL' : 'odometry alone';
+    // a routine can turn the localizer off itself (setMcl(false)), whatever the Drive tab says
+    const mclOff = options.correctOdometry && !sim.robot.localizer.correctionEnabled;
+    const source = mclOff ? 'odometry alone (its setMcl(false))' : options.correctOdometry ? 'odometry + MCL' : 'odometry alone';
     box.textContent = `${r.name}, by ${source}: done at ${fmt(r.atMs / 1000, 1)} s, ${fmt(r.errors.corrected, 2)} in ` +
       `off (odometry alone ${fmt(r.errors.raw, 2)} in).`;
+    // a routine with the lift and claw (macros.js): what it scored, and how its wall resets went
+    const robot = sim.robot;
+    if (robot.macros) {
+      const scored = robot.macros.scored();
+      box.textContent += scored.length
+        ? ` Scored ${scored.length}: ${scored.map((p) => `L${p.level}${p.liftLevel !== p.level ? ` (lift at L${p.liftLevel})` : ''} ` +
+          `${fmt(p.offIn, 2)} in off`).join(', ')}.`
+        : ' Scored nothing.';
+    }
+    // its wall resets, in a line: how many took, and the most one moved the pose
+    const resets = robot.events.filter((e) => e.source === 'auton' && /^reset/.test(e.text));
+    if (resets.length) {
+      const moves = resets.map((e) => /moved (-?[\d.]+)in/.exec(e.text)).filter(Boolean).map((m) => Math.abs(Number(m[1])));
+      box.textContent += ` Wall resets: ${moves.length} of ${resets.length} took` +
+        (moves.length ? `, the most one moved the pose ${fmt(Math.max(...moves), 1)} in.` : '.');
+      box.title = resets.map((e) => `${fmt(e.tMs / 1000, 2)} s  ${e.text}`).join('\n');
+    } else {
+      box.title = '';
+    }
     if (pathview) pathview.showRunResult(box.textContent);
   }
 
