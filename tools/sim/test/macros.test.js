@@ -188,6 +188,28 @@ test('without the lead, a fixed trigger is right for one speed only: set for a s
   assert.equal(grabAt(3, setFast).held, false);
 });
 
+test('setAutoClaw(true, mm) grabs at that reading, whatever the speed, as a routine tuned at its own approach wants', () => {
+  const start = { xIn: -T, yIn: -T + 20, headingDeg: 180 };
+  const grabs = [3, 12].map((volts) => {
+    const sim = run(start, function* (a, m) {
+      m.setAutoClaw(true, 85);
+      a.setSpeedLimit(volts);
+      yield* a.delay(500);
+      a.runAsync(function* () { yield* a.drive(32); });
+      yield* a.waitUntil(() => m.clawClosed(), 3000);
+      yield* a.waitForMotion();
+    }, { preload: false });
+    return sim.robot.macros.status().lastGrab;
+  });
+  for (const g of grabs) {
+    // the first sample at 85mm or closer: within a sample period's travel of it
+    const stepMm = g.approachMmPerMs * 33 + 1;
+    assert.ok(g.readingMm <= 85 && g.readingMm > 85 - stepMm, `fired at ${g.readingMm}mm`);
+  }
+  // full speed: the lead would have fired well out past 85mm
+  assert.ok(grabs[1].approachMmPerMs * (M.kClawLeadMs + M.kAutonClawPollMs) + M.kGrabMm > 120);
+});
+
 test('autoClaw waits for the claw to have been empty: started on a Pin, it doesn\'t shut on it', () => {
   // the Pin already between the open jaws, as just after letting go of it
   const onPin = { xIn: -T, yIn: -T + M.kClawReachIn, headingDeg: 180 };

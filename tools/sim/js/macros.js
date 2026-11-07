@@ -71,6 +71,7 @@
   const kClawLeadMs = 75.0;
   const kGrabMaxMm = 250;
   const kClawReadingMaxAgeMs = 50;
+  const kMaxGrabMm = 2000;
   const kAutoClawClearMs = 400;
   const kScoreExtraDipDeg = 30.0;
   const kLiftKp = 0.1;
@@ -187,7 +188,8 @@
       jawsClosed: preload,
       extended: false,
       autoClawArmed: false,
-      autoClaw: { on: false, grabMs: null },
+      // fixedMm: setAutoClaw()'s distance, or null for the lead
+      autoClaw: { on: false, grabMs: null, fixedMm: null },
       lastClawPollMs: -kAutonClawPollMs,
       // the claw sensor's latest sample (when it measured, what it read), and readClawSensor()'s
       // last reading and when it changed
@@ -269,6 +271,8 @@
       const ageMs = Math.min(nowMs - state.clawReading.changedMs, kClawReadingMaxAgeMs);
       const approachMmPerMs = clawApproachMmPerMs();
       const r = CT.ruleFires(clawRule, mm, ageMs, approachMmPerMs);
+      // a routine that said where to grab gets just that, at any speed
+      if (state.autoClaw.fixedMm !== null) r.fires = mm <= state.autoClaw.fixedMm;
       return { readingMm: mm, ageMs, approachMmPerMs, aimMm: r.predictedMm, fires: r.fires };
     }
 
@@ -445,11 +449,14 @@
 
       clawClosed: () => state.clawClosed,
 
-      setAutoClaw(on) {
+      /** setAutoClaw(on, grabMm): grabMm, if given, a fixed reading to grab at instead of the lead. */
+      setAutoClaw(on, grabMm = null) {
         if (!on) {
           endAutoClaw('off');
           return;
         }
+        // ahead of the return, so a call while it's on moves it, and one without goes back to the lead
+        state.autoClaw.fixedMm = grabMm === null || grabMm === undefined ? null : Math.min(grabMm, kMaxGrabMm);
         if (state.autoClaw.on) return;
         state.autoClaw.on = true;
         state.autoClaw.grabMs = null;
