@@ -355,18 +355,19 @@ enum class ToggleColor : std::uint8_t { red, yellow, blue };
 // One side's toggle: its piston, out while Y or setExtended() has it out but
 // for its auto pulse, and the sensors that fire the pulse (kToggleTriggerMm).
 //
-// Extended is out. Both toggles' valves are plumbed so the port's low state
-// pushes them out, hence extendedIsLow: the air lines were swapped from the
-// other way round, where without it Y, setExtended() and the auto pulse all
-// went backward. So until the program sets the port (before initialize(), or
-// if the brain drops what the constructor sent), a toggle sits out, not in;
-// resendPistons() pulls them in. If the air lines are ever swapped back, make
-// extendedIsLow false again.
+// Extended is out. Both toggles' valves are plumbed so the port's high state
+// pushes them out (extendedIsLow false). With extendedIsLow true, as it once
+// was, everything went backward: driver control's start (main.cpp's
+// setExtended(true)) pulled both in, and Y, setExtended() and the auto pulse
+// all did the opposite of what they say. Until the program sets the port
+// (before initialize(), or if the brain drops what the constructor sent), a
+// toggle sits at the port's low state, in. If the air lines are ever swapped,
+// make extendedIsLow true.
 struct SideToggle {
     SideToggle(char sideLetter, std::uint8_t pistonPort, std::uint8_t opticalPort,
                std::uint8_t distancePort)
         : letter(sideLetter),
-          piston(pistonPort, /*extendedAtStart=*/false, /*extendedIsLow=*/true),
+          piston(pistonPort, /*extendedAtStart=*/false, /*extendedIsLow=*/false),
           optical(opticalPort), distance(distancePort) {}
 
     char letter; // 'L' or 'R', for LEFT's readout and the logs

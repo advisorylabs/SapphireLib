@@ -189,6 +189,13 @@ void liftExample() {
 // after was off too. Turned back on at the goal, it moved the pose 7in down
 // the field at once (SL000042): the back-off turned around and drove into
 // the goal, and the drive to the second pin ran into it too.
+//
+// Each run onto a pin goes until the claw shuts (untilGrabbed(), below), then
+// sends the lift up at once. Its end point is past where the pin seats, so with
+// the pin in the claw the robot can't reach it: waiting out the motion left the
+// lift down, the stack on the floor, for the whole timeout.
+void untilGrabbed();
+
 void triplePin() {
     macros::setClawClosed(true);
     macros::setExtended(true);
@@ -217,7 +224,9 @@ void triplePin() {
     turnToPoint(-37, -10);
     moveToPoint(-37, -10, {.timeoutMs = 1500});
     macros::setAutoClaw(true);
-    moveToPose(-25.5, -25.5, 133, {.timeoutMs = 1750});
+    runAsync([] { moveToPose(-25.5, -25.5, 133, {.timeoutMs = 1750}); });
+    untilGrabbed(); // ends the run as the claw shuts, rather than pushing to the timeout
+    macros::setAutoClaw(false); // full speed for the turn
     macros::setLiftLevel(macros::Goal::alliance, 2);
     turnToPoint(-56, -18);
     moveToPoint(-56, -18, {.timeoutMs = 1250});
@@ -229,7 +238,9 @@ void triplePin() {
     turnToPoint(-48, -47.5);
     drive(15, {.chain = true});
     macros::setAutoClaw(true);
-    moveToPoint(-48, -47.5, {.timeoutMs = 2000}); 
+    runAsync([] { moveToPoint(-48, -47.5, {.timeoutMs = 2000}); });
+    untilGrabbed();
+    macros::setAutoClaw(false);
     macros::setLiftLevel(macros::Goal::alliance, 3);
     turnToPoint(-44, -27);
     moveToPoint(-44, -27, {.timeoutMs = 1500});

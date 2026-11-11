@@ -1,0 +1,349 @@
+{
+ "speeds": [
+  4,
+  8,
+  12,
+  16,
+  20,
+  24,
+  28,
+  32,
+  36,
+  40,
+  44,
+  48,
+  52,
+  56,
+  60
+ ],
+ "defaults": {
+  "grabMm": 60,
+  "leadMs": 75,
+  "loopMs": 20,
+  "sensorPeriodMs": 33,
+  "sensorLatencyMs": 15
+ },
+ "rules": {
+  "Fixed trigger at 125 mm": [
+   {
+    "speed": 4,
+    "caught": 0,
+    "early": 1,
+    "late": 0,
+    "meanErrorMm": -5.7
+   },
+   {
+    "speed": 8,
+    "caught": 0.005,
+    "early": 0.995,
+    "late": 0,
+    "meanErrorMm": -18.3
+   },
+   {
+    "speed": 12,
+    "caught": 0.292,
+    "early": 0.708,
+    "late": 0,
+    "meanErrorMm": -29.9
+   },
+   {
+    "speed": 16,
+    "caught": 0.755,
+    "early": 0.245,
+    "late": 0,
+    "meanErrorMm": -39.9
+   },
+   {
+    "speed": 20,
+    "caught": 0.968,
+    "early": 0.033,
+    "late": 0,
+    "meanErrorMm": -50.2
+   },
+   {
+    "speed": 24,
+    "caught": 0.993,
+    "early": 0.007,
+    "late": 0,
+    "meanErrorMm": -61
+   },
+   {
+    "speed": 28,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": -71.7
+   },
+   {
+    "speed": 32,
+    "caught": 0.975,
+    "early": 0,
+    "late": 0.025,
+    "meanErrorMm": -82.2
+   },
+   {
+    "speed": 36,
+    "caught": 0.843,
+    "early": 0,
+    "late": 0.158,
+    "meanErrorMm": -94.2
+   },
+   {
+    "speed": 40,
+    "caught": 0.623,
+    "early": 0,
+    "late": 0.378,
+    "meanErrorMm": -101.9
+   },
+   {
+    "speed": 44,
+    "caught": 0.36,
+    "early": 0,
+    "late": 0.64,
+    "meanErrorMm": -113.1
+   },
+   {
+    "speed": 48,
+    "caught": 0.18,
+    "early": 0,
+    "late": 0.82,
+    "meanErrorMm": -123.2
+   },
+   {
+    "speed": 52,
+    "caught": 0.072,
+    "early": 0,
+    "late": 0.927,
+    "meanErrorMm": -132.7
+   },
+   {
+    "speed": 56,
+    "caught": 0.015,
+    "early": 0,
+    "late": 0.985,
+    "meanErrorMm": -142.9
+   },
+   {
+    "speed": 60,
+    "caught": 0.003,
+    "early": 0,
+    "late": 0.998,
+    "meanErrorMm": -155.7
+   }
+  ],
+  "Lead by speed": [
+   {
+    "speed": 4,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 4.8
+   },
+   {
+    "speed": 8,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 2.4
+   },
+   {
+    "speed": 12,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 0.5
+   },
+   {
+    "speed": 16,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 0.5
+   },
+   {
+    "speed": 20,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 0
+   },
+   {
+    "speed": 24,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 0.4
+   },
+   {
+    "speed": 28,
+    "caught": 0.998,
+    "early": 0.003,
+    "late": 0,
+    "meanErrorMm": -0.4
+   },
+   {
+    "speed": 32,
+    "caught": 0.993,
+    "early": 0.007,
+    "late": 0,
+    "meanErrorMm": -1.5
+   },
+   {
+    "speed": 36,
+    "caught": 0.995,
+    "early": 0.005,
+    "late": 0,
+    "meanErrorMm": -0.2
+   },
+   {
+    "speed": 40,
+    "caught": 0.99,
+    "early": 0.007,
+    "late": 0.003,
+    "meanErrorMm": -0.8
+   },
+   {
+    "speed": 44,
+    "caught": 0.985,
+    "early": 0.015,
+    "late": 0,
+    "meanErrorMm": -1.2
+   },
+   {
+    "speed": 48,
+    "caught": 0.973,
+    "early": 0.025,
+    "late": 0.003,
+    "meanErrorMm": -2.3
+   },
+   {
+    "speed": 52,
+    "caught": 0.955,
+    "early": 0.033,
+    "late": 0.013,
+    "meanErrorMm": -2.1
+   },
+   {
+    "speed": 56,
+    "caught": 0.95,
+    "early": 0.04,
+    "late": 0.01,
+    "meanErrorMm": -1.9
+   },
+   {
+    "speed": 60,
+    "caught": 0.915,
+    "early": 0.068,
+    "late": 0.018,
+    "meanErrorMm": -1.9
+   }
+  ],
+  "Lead by speed + reading age + tick": [
+   {
+    "speed": 4,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 4.8
+   },
+   {
+    "speed": 8,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 3.1
+   },
+   {
+    "speed": 12,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 2.8
+   },
+   {
+    "speed": 16,
+    "caught": 0.998,
+    "early": 0.003,
+    "late": 0,
+    "meanErrorMm": 2.4
+   },
+   {
+    "speed": 20,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 1.8
+   },
+   {
+    "speed": 24,
+    "caught": 0.998,
+    "early": 0.003,
+    "late": 0,
+    "meanErrorMm": 1.4
+   },
+   {
+    "speed": 28,
+    "caught": 1,
+    "early": 0,
+    "late": 0,
+    "meanErrorMm": 2.1
+   },
+   {
+    "speed": 32,
+    "caught": 0.995,
+    "early": 0.005,
+    "late": 0,
+    "meanErrorMm": 2.3
+   },
+   {
+    "speed": 36,
+    "caught": 0.995,
+    "early": 0.005,
+    "late": 0,
+    "meanErrorMm": 1.9
+   },
+   {
+    "speed": 40,
+    "caught": 0.995,
+    "early": 0.005,
+    "late": 0,
+    "meanErrorMm": 1.9
+   },
+   {
+    "speed": 44,
+    "caught": 0.985,
+    "early": 0.015,
+    "late": 0,
+    "meanErrorMm": 2.1
+   },
+   {
+    "speed": 48,
+    "caught": 0.978,
+    "early": 0.02,
+    "late": 0.003,
+    "meanErrorMm": 0.6
+   },
+   {
+    "speed": 52,
+    "caught": 0.985,
+    "early": 0.015,
+    "late": 0,
+    "meanErrorMm": 1.4
+   },
+   {
+    "speed": 56,
+    "caught": 0.965,
+    "early": 0.03,
+    "late": 0.005,
+    "meanErrorMm": 1.8
+   },
+   {
+    "speed": 60,
+    "caught": 0.968,
+    "early": 0.03,
+    "late": 0.003,
+    "meanErrorMm": 0.4
+   }
+  ]
+ }
+}

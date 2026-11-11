@@ -1,0 +1,275 @@
+{
+ "seeds": [
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "rows": [
+  {
+   "condition": "Normal",
+   "routine": "Field tour",
+   "odomMean": 1.06,
+   "odomEnd": 1.65,
+   "mclMean": 0.39,
+   "mclEnd": 0.28,
+   "odomMeanSeeds": [
+    1.05,
+    1.06,
+    1.05,
+    1.06,
+    1.06
+   ],
+   "mclMeanSeeds": [
+    0.38,
+    0.4,
+    0.42,
+    0.35,
+    0.42
+   ]
+  },
+  {
+   "condition": "Normal",
+   "routine": "Square laps",
+   "odomMean": 0.45,
+   "odomEnd": 0.15,
+   "mclMean": 0.22,
+   "mclEnd": 0.26,
+   "odomMeanSeeds": [
+    0.44,
+    0.45,
+    0.45,
+    0.44,
+    0.45
+   ],
+   "mclMeanSeeds": [
+    0.21,
+    0.23,
+    0.2,
+    0.21,
+    0.25
+   ]
+  },
+  {
+   "condition": "Normal",
+   "routine": "Sprints",
+   "odomMean": 1.31,
+   "odomEnd": 2.54,
+   "mclMean": 0.22,
+   "mclEnd": 0.15,
+   "odomMeanSeeds": [
+    1.32,
+    1.32,
+    1.31,
+    1.31,
+    1.31
+   ],
+   "mclMeanSeeds": [
+    0.23,
+    0.22,
+    0.23,
+    0.2,
+    0.21
+   ]
+  },
+  {
+   "condition": "Worn wheels",
+   "routine": "Field tour",
+   "odomMean": 2.48,
+   "odomEnd": 2.92,
+   "mclMean": 0.89,
+   "mclEnd": 0.76,
+   "odomMeanSeeds": [
+    2.5,
+    2.45,
+    2.46,
+    2.48,
+    2.5
+   ],
+   "mclMeanSeeds": [
+    0.85,
+    0.88,
+    0.96,
+    0.85,
+    0.9
+   ]
+  },
+  {
+   "condition": "Worn wheels",
+   "routine": "Square laps",
+   "odomMean": 1.32,
+   "odomEnd": 0.89,
+   "mclMean": 0.9,
+   "mclEnd": 1.36,
+   "odomMeanSeeds": [
+    1.32,
+    1.34,
+    1.32,
+    1.31,
+    1.34
+   ],
+   "mclMeanSeeds": [
+    0.88,
+    0.91,
+    0.88,
+    0.91,
+    0.91
+   ]
+  },
+  {
+   "condition": "Worn wheels",
+   "routine": "Sprints",
+   "odomMean": 2,
+   "odomEnd": 3.2,
+   "mclMean": 0.55,
+   "mclEnd": 0.15,
+   "odomMeanSeeds": [
+    2.01,
+    2.03,
+    2.03,
+    1.96,
+    1.98
+   ],
+   "mclMeanSeeds": [
+    0.57,
+    0.52,
+    0.57,
+    0.54,
+    0.53
+   ]
+  },
+  {
+   "condition": "6 in bump",
+   "routine": "Field tour",
+   "odomMean": 5.71,
+   "odomEnd": 8.82,
+   "mclMean": 0.68,
+   "mclEnd": 0.27,
+   "odomMeanSeeds": [
+    5.72,
+    5.71,
+    5.71,
+    5.7,
+    5.71
+   ],
+   "mclMeanSeeds": [
+    0.7,
+    0.65,
+    0.74,
+    0.61,
+    0.68
+   ]
+  },
+  {
+   "condition": "6 in bump",
+   "routine": "Square laps",
+   "odomMean": 5.51,
+   "odomEnd": 7.36,
+   "mclMean": 0.55,
+   "mclEnd": 0.22,
+   "odomMeanSeeds": [
+    5.52,
+    5.51,
+    5.51,
+    5.51,
+    5.51
+   ],
+   "mclMeanSeeds": [
+    0.53,
+    0.53,
+    0.52,
+    0.56,
+    0.62
+   ]
+  },
+  {
+   "condition": "6 in bump",
+   "routine": "Sprints",
+   "odomMean": 5.6,
+   "odomEnd": 8.38,
+   "mclMean": 0.71,
+   "mclEnd": 0.1,
+   "odomMeanSeeds": [
+    5.83,
+    5.82,
+    4.68,
+    5.84,
+    5.83
+   ],
+   "mclMeanSeeds": [
+    0.84,
+    0.73,
+    0.7,
+    0.55,
+    0.75
+   ]
+  },
+  {
+   "condition": "Defender",
+   "routine": "Field tour",
+   "odomMean": 0.99,
+   "odomEnd": 1.49,
+   "mclMean": 0.37,
+   "mclEnd": 0.19,
+   "odomMeanSeeds": [
+    0.99,
+    0.99,
+    0.98,
+    0.99,
+    0.99
+   ],
+   "mclMeanSeeds": [
+    0.36,
+    0.39,
+    0.41,
+    0.33,
+    0.38
+   ]
+  },
+  {
+   "condition": "Defender",
+   "routine": "Square laps",
+   "odomMean": 0.48,
+   "odomEnd": 0.21,
+   "mclMean": 0.26,
+   "mclEnd": 0.26,
+   "odomMeanSeeds": [
+    0.48,
+    0.48,
+    0.48,
+    0.47,
+    0.48
+   ],
+   "mclMeanSeeds": [
+    0.23,
+    0.28,
+    0.27,
+    0.24,
+    0.26
+   ]
+  },
+  {
+   "condition": "Defender",
+   "routine": "Sprints",
+   "odomMean": 1.31,
+   "odomEnd": 2.54,
+   "mclMean": 0.23,
+   "mclEnd": 0.13,
+   "odomMeanSeeds": [
+    1.32,
+    1.32,
+    1.31,
+    1.31,
+    1.31
+   ],
+   "mclMeanSeeds": [
+    0.23,
+    0.22,
+    0.26,
+    0.18,
+    0.24
+   ]
+  }
+ ]
+}

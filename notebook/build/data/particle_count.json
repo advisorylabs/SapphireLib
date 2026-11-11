@@ -1,0 +1,39 @@
+{
+ "seeds": [
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "rows": [
+  {
+   "particles": 50,
+   "mean": 1.26,
+   "end": 1.16,
+   "recoverS": 2.76,
+   "configured": 50
+  },
+  {
+   "particles": 100,
+   "mean": 1.13,
+   "end": 1.09,
+   "recoverS": 1.77,
+   "configured": 100
+  },
+  {
+   "particles": 300,
+   "mean": 1.12,
+   "end": 0.72,
+   "recoverS": 1.84,
+   "configured": 300
+  },
+  {
+   "particles": 1000,
+   "mean": 1.03,
+   "end": 0.58,
+   "recoverS": 1.43,
+   "configured": 1000
+  }
+ ]
+}

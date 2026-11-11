@@ -1,0 +1,46 @@
+﻿--- mclVsOdom
+Normal tour 1.06 0.39
+Normal laps 0.45 0.22
+Normal sprints 1.31 0.22
+Worn wheels tour 2.48 0.89
+Worn wheels laps 1.32 0.9
+Worn wheels sprints 2 0.55
+6 in bump tour 5.71 0.68
+6 in bump laps 5.51 0.55
+6 in bump sprints 5.6 0.71
+Defender tour 0.99 0.37
+Defender laps 0.48 0.26
+Defender sprints 1.31 0.23
+wrote mcl_vs_odom
+--- driftSeries
+wrote drift_series
+--- particleCount
+particles 50 {
+  particles: 50,
+  mean: 1.26,
+  end: 1.16,
+  recoverS: 2.76,
+  configured: 50
+}
+particles 100 {
+  particles: 100,
+  mean: 1.13,
+  end: 1.09,
+  recoverS: 1.77,
+  configured: 100
+}
+particles 300 {
+  particles: 300,
+  mean: 1.12,
+  end: 0.72,
+  recoverS: 1.84,
+  configured: 300
+}
+particles 1000 {
+  particles: 1000,
+  mean: 1.03,
+  end: 0.58,
+  recoverS: 1.43,
+  configured: 1000
+}
+wrote particle_count
