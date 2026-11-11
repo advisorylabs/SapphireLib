@@ -177,23 +177,6 @@ void liftExample() {
     drive(-18);                                      // ...on the way home
 }
 
-// Blue side: starts with its back against the wall, facing +x. Rams the wall
-// toggles twice, scores the payload on the goal to its right, then backs off,
-// turns, and picks up the second pin.
-//
-// The localizer stays off until the end. From this spot it reads the wall
-// behind about 3in long, and expects the side sensors to see the loaders they
-// read past, so it moved the pose 3in off the wall and 5in down the field
-// before the first ram (SL000040). The rams' point was then behind the wall:
-// each pushed it for its whole 3s timeout, sliding along it, and every point
-// after was off too. Turned back on at the goal, it moved the pose 7in down
-// the field at once (SL000042): the back-off turned around and drove into
-// the goal, and the drive to the second pin ran into it too.
-//
-// Each run onto a pin goes until the claw shuts (untilGrabbed(), below), then
-// sends the lift up at once. Its end point is past where the pin seats, so with
-// the pin in the claw the robot can't reach it: waiting out the motion left the
-// lift down, the stack on the floor, for the whole timeout.
 void untilGrabbed();
 
 void triplePin() {
@@ -202,48 +185,45 @@ void triplePin() {
     setPose(-60.6, -5, 90);
     setMcl(false);
     macros::setLiftLevel(macros::Goal::alliance, 1);
-    // Out and back on the drive encoders, which the wall can't confuse: back
-    // 4in further than it went out, so it hits hard, and the timeout ends the
-    // push once it's pinned (it reaches the wall in about 0.5s).
     for (int i = 0; i < 2; i++) {
         drive(10, {.chain = true, .exitError = 5});
         drive(-14, {.timeoutMs = 600});
     }
-    // pinned where it started: x is the wall's again, whatever the hits did
     const sapphirelib::odom::Pose here = pose();
     setPose(-60.6, here.yIn, here.headingDeg);
     moveToPose(-54.5, -11, 135, {.chain = true});
-    moveToPoint(-50, -21.5, {.timeoutMs = 1000}); // up onto the goal, pressing on it
+    moveToPoint(-50, -21.5, {.timeoutMs = 1000});
     macros::setLiftDeg(macros::liftScoreDeg());
     macros::waitForLift(1000);
-    pros::delay(250);
+    pros::delay(125);
     macros::setClawClosed(false);
-    pros::delay(250);
-    moveToPoint(-50, -5, {.timeoutMs = 1500});
+    pros::delay(125);
+    moveToPoint(-50, -5, {.timeoutMs = 1000, .chain = true});
     macros::setLiftLevel(macros::Goal::alliance, 0);
-    turnToPoint(-37, -10);
-    moveToPoint(-37, -10, {.timeoutMs = 1500});
+    turnToPoint(-32, -12.5, {.chain = true});
+    moveToPoint(-32, -12.5, {.timeoutMs = 1500, .chain = true});
+    turnToPoint(-24.5, -22.75, {.chain = true});
     macros::setAutoClaw(true);
-    runAsync([] { moveToPose(-25.5, -25.5, 133, {.timeoutMs = 1750}); });
-    untilGrabbed(); // ends the run as the claw shuts, rather than pushing to the timeout
-    macros::setAutoClaw(false); // full speed for the turn
+    runAsync([] { moveToPoint(-24.5, -22.75, {.timeoutMs = 1750, .maxVolts = 3}); });
+    untilGrabbed();
+    macros::setAutoClaw(false);
     macros::setLiftLevel(macros::Goal::alliance, 2);
-    turnToPoint(-56, -18);
-    moveToPoint(-56, -18, {.timeoutMs = 1250});
+    turnToPoint(-43, -19, {.chain = true});
+    moveToPoint(-43, -19, {.timeoutMs = 1000});
     macros::setLiftDeg(macros::liftScoreDeg());
     macros::waitForLift(1000);
     macros::setClawClosed(false);
-    drive(-12, {.timeoutMs = 1500});
+    drive(-15, {.timeoutMs = 1500, .chain = true});
     macros::setLiftLevel(macros::Goal::alliance, 0);
-    turnToPoint(-48, -47.5);
+    turnToPoint(-45.5, -47.5, {.chain = true});
     drive(15, {.chain = true});
     macros::setAutoClaw(true);
-    runAsync([] { moveToPoint(-48, -47.5, {.timeoutMs = 2000}); });
+    runAsync([] { moveToPoint(-45.5, -47.5, {.timeoutMs = 2000, .maxVolts = 3}); });
     untilGrabbed();
     macros::setAutoClaw(false);
     macros::setLiftLevel(macros::Goal::alliance, 3);
-    turnToPoint(-44, -27);
-    moveToPoint(-44, -27, {.timeoutMs = 1500});
+    turnToPoint(-43, -23, {.chain = true});
+    moveToPoint(-43, -23, {.timeoutMs = 1000});
     macros::setLiftDeg(macros::liftScoreDeg());
     macros::waitForLift(1000);
     macros::setClawClosed(false);
@@ -251,30 +231,6 @@ void triplePin() {
 
 }
 
-/// Triple Pin on points: three Pins stacked on the alliance Goal by the left wall, every drive a
-// turn to face a point and a straight drive to it, as triplePin() above drives, so every stop is a
-// number to change in triplePinPoints() below. The simulator runs the same (Drive tab, "Triple
-// Pin (points)"; tools/sim/js/routines.js's TRIPLE_PIN has these numbers: change both).
-//
-// The goal, at (-47.09, -23.55) (kGoalXIn, kGoalYIn), takes the preload at L1 from the north, the
-// Pin standing at (-23.55, -23.55) at L2 from the east, and the one at (-47.09, -47.09) at L3 from
-// the south: where the manual's Appendix A has them. ontoGoal() and ontoPin() take the goal's or
-// the Pin's spot and work out where the robot stops for it, facing it, so the routine's other
-// numbers are the stops between, where it turns: roughly the old trajectories' route. Each stop is
-// on the line the robot gets to it along (backTo() and offGoalTo() back straight along the robot's
-// heading), so moving one means moving it along that line, or the ones after it with it.
-//
-// No wall resets, and the localizer's corrections off (setMcl(false)): odometry alone carries the
-// routine from the rams at the start.
-//
-// In the simulator, with the robot's Auto-Tune models, these gains and push floors (devices.cpp),
-// and its 13.75 x 17in size, it stacks all three within 0.25in of the goal's middle, the last at
-// 13.3s, done at 13.9s; it stops within 0.5in of every stop, and touches nothing but the goal
-// coming into the aligner (1.5in clear of it otherwise).
-
-// Where a Goal and a Pin stop in the front of the robot. The front edge is kFrontIn ahead of the
-// tracking center, and the goal aligner's back kAlignerDepthIn behind that; a Goal (5.61in across
-// its flats) or a Pin (1.6in across) stops against it with its middle half its width further on.
 constexpr double kFrontIn = 8.35;
 constexpr double kAlignerDepthIn = 3.5;
 constexpr double kGoalSeatIn = kFrontIn - kAlignerDepthIn + 5.61 / 2.0; // 7.65

@@ -99,8 +99,8 @@ constexpr std::int32_t kPieceDetectMm = 125;
 // to, and on 60mm standing still. kClawLeadMs is the simulator's sensor
 // latency (15ms) and piston (60ms). TODO: measure kGrabMm, then tune
 // kClawLeadMs at speed.
-constexpr std::int32_t kGrabMm = 35;
-constexpr double kClawLeadMs = 125.0;
+constexpr std::int32_t kGrabMm = 27;
+constexpr double kClawLeadMs = 112.0;
 // Never fires on a reading further out than this, however fast the robot
 // goes, so driving at a wall or a goal with the claw open doesn't close it
 // half a field away. 250mm covers kGrabMm plus the lead at full speed.
