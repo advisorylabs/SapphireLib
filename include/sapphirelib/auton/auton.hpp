@@ -11,6 +11,7 @@
 #include "sapphirelib/localization/wall_reset.hpp"
 #include "sapphirelib/motion/exit_tracker.hpp"
 #include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/motion/target_approach.hpp"
 #include "sapphirelib/motion/trajectory_config.hpp"
 #include "sapphirelib/motion/turn_math.hpp"
 #include "sapphirelib/odom/odometry.hpp"
@@ -293,6 +294,34 @@ motion::MotionResult followTrajectory(const std::vector<motion::TrajectorySectio
  */
 bool planTrajectory(const std::vector<motion::TrajectorySection>& sections);
 
+/**
+ * @brief Drive onto a target, turning to face it, at a steady speed through it to an end a little
+ * past it. Holonomic only (see chassis::HolonomicDrivetrain::approach() and
+ * motion/target_approach.hpp)
+ *
+ * Takes over at whatever speed the robot has: put it right after a followTrajectory() handed off
+ * part way (TrajectoryFollowConfig::until), in the same runAsync(), and the robot carries straight
+ * on. refine moves the target as a sensor sees it, every tick. Held to setSpeedLimit()'s volts as
+ * it starts, like the other motions
+ *
+ * @param xIn the target's x, in inches, as best known now
+ * @param yIn the target's y, in inches
+ * @param config speeds, where it ends, and its timeout
+ * @param refine called every tick with the pose, to move the target. Empty keeps it still
+ * @return motion::MotionResult how it ended
+ *
+ * @b Example
+ * @code {.cpp}
+ * runAsync([] {
+ *     // the plan for the first third, then the camera's
+ *     followTrajectory(kToPin, {.until = [] { return distanceTo(kPin) < 20; }});
+ *     approach(kPin.xIn, kPin.yIn, {.cruiseInPerS = 18, .endShortIn = 2.65}, pinCamera);
+ * });
+ * @endcode
+ */
+motion::MotionResult approach(double xIn, double yIn, motion::ApproachConfig config = {},
+                              motion::ApproachRefiner refine = {});
+
 // --- Motions in the background ---
 
 /**
@@ -394,5 +423,13 @@ bool resetRight();
  * sensors would mistake for a wall. On by default
  */
 void setMcl(bool on);
+
+/**
+ * @brief Turn the localizer's corrections on with its particles started over around where
+ * odometry has the robot, for when odometry is the better guess at that moment (fresh off a wall
+ * reset or a goal it stopped on). setMcl(true) carries on from wherever the particles got to while
+ * corrections were off, and the readings that made them worth turning off may have misled them
+ */
+void setMclFromHere();
 
 } // namespace sapphirelib::auton

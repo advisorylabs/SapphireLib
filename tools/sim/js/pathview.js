@@ -435,10 +435,12 @@
 
   /**
    * Every path in pasted C++, in order: each constant parseCpp() can read, so a routine driven in
-   * several trajectories (autons.cpp's kTriplePin... ones) comes in whole, a path each. With
-   * several, their claw and extender actions aren't read (a routine's calls don't say which path
-   * they're for); a lone path's are, as parseCpp() reads them. Other constants (a
-   * TrajectoryFollowConfig, PID gains) are passed over. Returns { ok, error, docs }.
+   * several trajectories comes in whole, a path each. With several, their claw and extender
+   * actions aren't read (a routine's calls don't say which path they're for); a lone path's are, as
+   * parseCpp() reads them, from everything after it: in a whole file (autons.cpp) that's other
+   * routines too, and if their calls aren't a point's the path comes in without its actions, with
+   * `warning` saying why. Other constants (a TrajectoryFollowConfig, PID gains) are passed over.
+   * Returns { ok, error, docs, warning? }.
    */
   function parseCppAll(text) {
     const source = String(text).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
@@ -450,7 +452,10 @@
     if (found.length > 1) return { ok: true, error: '', docs: found.map((f) => f.doc) };
     // one path, with its actions; or none, and parseCpp() says why
     const one = parseCpp(found.length ? source.slice(found[0].at) : text);
-    return { ok: one.ok, error: one.error, docs: one.ok ? [one.doc] : [] };
+    if (one.ok || !found.length) return { ok: one.ok, error: one.error, docs: one.ok ? [one.doc] : [] };
+    // one path whose actions can't be read, the rest of a whole file (autons.cpp's other
+    // routines) after it: the path alone, saying why its actions didn't come in
+    return { ok: true, error: '', docs: [found[0].doc], warning: `its claw and extender actions weren't read: ${one.error}` };
   }
 
   // --- The robot's logged models ---------------------------------------------------------------
@@ -1155,8 +1160,10 @@
       $('path-paste-row').hidden = true;
       const [first] = parsed.docs;
       flash(parsed.docs.length === 1
-        ? `Read "${first.name}": ${first.waypoints.length} points in ${first.sections.length} section(s).`
-        : `Read ${parsed.docs.length} paths: ${parsed.docs.map((d) => `"${d.name}"`).join(', ')}. Pick one above.`);
+        ? `Read "${first.name}": ${first.waypoints.length} points in ${first.sections.length} section(s)` +
+          (parsed.warning ? `, but ${parsed.warning}.` : '.')
+        : `Read ${parsed.docs.length} paths: ${parsed.docs.map((d) => `"${d.name}"`).join(', ')}. Pick one above.`,
+        !!parsed.warning);
       changed();
     });
 

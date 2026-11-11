@@ -12,7 +12,7 @@ namespace sapphirelib::diag {
  * A check only asks the brain what's plugged into the port, so it works for devices SapphireLib
  * doesn't wrap too
  */
-enum class DeviceKind { motor, imu, rotation, distance, optical };
+enum class DeviceKind { motor, imu, rotation, distance, optical, aiVision };
 
 /**
  * @brief A device you expect on a port

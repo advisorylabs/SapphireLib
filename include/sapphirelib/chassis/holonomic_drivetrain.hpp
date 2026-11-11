@@ -16,6 +16,7 @@
 #include "sapphirelib/motion/holonomic_tracking.hpp"
 #include "sapphirelib/motion/motion_config.hpp"
 #include "sapphirelib/motion/path.hpp"
+#include "sapphirelib/motion/target_approach.hpp"
 #include "sapphirelib/motion/trajectory.hpp"
 #include "sapphirelib/motion/trajectory_config.hpp"
 #include "sapphirelib/motion/turn_math.hpp"
@@ -414,6 +415,38 @@ public:
      */
     motion::MotionResult followTrajectory(const motion::Trajectory& trajectory,
                                           motion::TrajectoryFollowConfig config = {});
+
+    /**
+     * @brief Drive onto a target, turning to face it, at a steady speed through it to an end a
+     * little past it (see motion/target_approach.hpp)
+     *
+     * Takes over at the speed the robot already has: a trajectory handed off by
+     * TrajectoryFollowConfig::until carries straight on into it. Every tick, refine (if given) may
+     * move the target, a camera that sees it, say. Forward is the forward axis model's
+     * feedforward plus trackingForwardPID() on how far the robot lags its speed reference; turn is
+     * trackingTurnPID() on the heading error to the target. It never strafes
+     *
+     * @note needs the forward axis model (setAxisModels()). Like every motion, it ends
+     * (interrupted) if the competition mode changes under it
+     *
+     * @param target where the target is, as best known now
+     * @param odometry where to read the pose and velocity from
+     * @param config speeds, where it ends, and its timeout
+     * @param refine called every tick with the pose, to move the target. Empty keeps it still
+     * @return motion::MotionResult how the motion ended. finalError is the distance to the end.
+     * Aborted without the forward model
+     */
+    motion::MotionResult approach(motion::FieldPoint target, const odom::Odometry& odometry,
+                                  motion::ApproachConfig config = {},
+                                  motion::ApproachRefiner refine = {});
+
+    /**
+     * @brief approach(), using the odometry from setOdometry()
+     *
+     * @return motion::MotionResult how the motion ended. Aborted if no odometry was set
+     */
+    motion::MotionResult approach(motion::FieldPoint target, motion::ApproachConfig config = {},
+                                  motion::ApproachRefiner refine = {});
 
     /**
      * @brief Get how far along the trajectory being followed is

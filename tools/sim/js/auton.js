@@ -258,6 +258,19 @@
         return planFor(sections).ok;
       },
 
+      /**
+       * approach(x, y, config, refine): auton::approach(). Onto the target facing it, from the speed
+       * the robot has (put it after a followTrajectory() that handed off with `until`); refine(pose,
+       * target) may move the target every tick. Held to setSpeedLimit()'s volts as it starts.
+       */
+      *approach(xIn, yIn, config = {}, refine = null) {
+        yield* begin();
+        const limited = Object.assign({}, config, {
+          maxVolts: limitedVolts(config.maxVolts === undefined ? 12.0 : config.maxVolts),
+        });
+        return yield* dt.approach({ xIn, yIn }, limited, refine);
+      },
+
       /** runAsync(function* () { yield* a.moveToPoint(0, 48); }): its blocks run one after another. */
       runAsync(motions) {
         if (inBackground) throw new Error('runAsync() inside runAsync(): yield* the motions instead');
@@ -316,6 +329,12 @@
 
       setMcl(on) {
         localizer.setCorrectionEnabled(on);
+      },
+
+      /** auton.cpp's setMclFromHere(): corrections on, the particles started over on odometry. */
+      setMclFromHere() {
+        localizer.restartHere();
+        localizer.setCorrectionEnabled(true);
       },
 
       /** pros::delay(), with the background motions running meanwhile. */

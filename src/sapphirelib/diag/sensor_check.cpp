@@ -18,6 +18,7 @@ pros::c::v5_device_e_t expectedRegistryType(DeviceKind kind) {
         case DeviceKind::rotation: return pros::c::E_DEVICE_ROTATION;
         case DeviceKind::distance: return pros::c::E_DEVICE_DISTANCE;
         case DeviceKind::optical: return pros::c::E_DEVICE_OPTICAL;
+        case DeviceKind::aiVision: return pros::c::E_DEVICE_AIVISION;
     }
     return pros::c::E_DEVICE_UNDEFINED;
 }
@@ -34,6 +35,7 @@ std::string deviceTypeName(pros::c::v5_device_e_t type) {
         case pros::c::E_DEVICE_ADI: return "an ADI expander";
         case pros::c::E_DEVICE_OPTICAL: return "an optical sensor";
         case pros::c::E_DEVICE_GPS: return "a GPS sensor";
+        case pros::c::E_DEVICE_AIVISION: return "an AI Vision sensor";
         default: return "an unrecognized device";
     }
 }

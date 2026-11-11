@@ -90,7 +90,19 @@
       sensorOutlierPct: 0.0,
       // field elements (boxes), and whether each is really there
       elements: [],
+      // Goals ({ xIn, yIn }) the front of the robot takes in, as far as one goes: a Goal ahead
+      // within goalStopHalfWidthIn of the robot's centerline stops it with the Goal's middle
+      // goalStopIn ahead of the tracking center (SL000056: pressed on one, 7.05in). Nothing else
+      // of a Goal is solid
+      goals: [],
+      goalStopIn: 7.05,
+      goalStopHalfWidthIn: 3.0,
       defender: { enabled: false, xIn: 30, yIn: 20, sizeIn: 18, patrol: false },
+      // stretches of wall a sensor reads further away than the wall ({ x1In, y1In, x2In, y2In,
+      // depthIn, inMap }), along one of the walls: Override's Toggles read it 3 to 4in long
+      // (SL000040, SL000070). inMap: the localizer's map has it as a blind stretch
+      // (FieldMap::addBlindStretch())
+      recesses: [],
       seed: 7,
     };
   }
@@ -266,7 +278,10 @@
       this.sampleSensors();
     }
 
-    /** Keep the robot (a circle as wide as its longer side) out of the walls and elements, sliding along them. */
+    /**
+     * Keep the robot (a circle as wide as its longer side) out of the walls and elements, sliding
+     * along them, and no further onto a Goal in its front than one goes (settings.goals).
+     */
     collide() {
       const s = this.settings;
       const r = Math.max(s.robotWidthIn, s.robotLengthIn) / 2;
@@ -276,7 +291,8 @@
       if (t.xIn > half - r) this.pushOut(half - r - t.xIn, 0);
       if (t.yIn < -half + r) this.pushOut(0, -half + r - t.yIn);
       if (t.yIn > half - r) this.pushOut(0, half - r - t.yIn);
-      const boxes = s.elements.filter((e) => e.inWorld !== false);
+      // a box marked solid: false is seen by the sensors but doesn't stop the robot
+      const boxes = s.elements.filter((e) => e.inWorld !== false && e.solid !== false);
       if (s.defender.enabled) {
         const d = s.defender;
         const h = d.sizeIn / 2;
@@ -299,6 +315,19 @@
           ];
           exits.sort((a, c) => Math.hypot(a[0], a[1]) - Math.hypot(c[0], c[1]));
           this.pushOut(exits[0][0], exits[0][1]);
+        }
+      }
+      // a Goal in the front of the robot, as far in as it goes
+      const rad = t.headingDeg * kDegToRad;
+      const fx = Math.sin(rad);
+      const fy = Math.cos(rad);
+      for (const g of s.goals) {
+        const dx = g.xIn - t.xIn;
+        const dy = g.yIn - t.yIn;
+        const along = dx * fx + dy * fy;
+        const across = dx * fy - dy * fx;
+        if (along > 0 && along < s.goalStopIn && Math.abs(across) < s.goalStopHalfWidthIn) {
+          this.pushOut(-(s.goalStopIn - along) * fx, -(s.goalStopIn - along) * fy);
         }
       }
     }
@@ -346,13 +375,35 @@
       return this.history[index];
     }
 
+    /**
+     * A ray's reading with settings.recesses: one that reaches the wall (nothing nearer) on a
+     * recess reads that much further along it, as if the wall there were depthIn further back.
+     */
+    recessed(ray, hitIn) {
+      const recesses = this.settings.recesses;
+      if (!recesses || !recesses.length || !Number.isFinite(hitIn)) return hitIn;
+      const half = this.settings.fieldSizeIn / 2;
+      const x = ray.xIn + hitIn * ray.dirX;
+      const y = ray.yIn + hitIn * ray.dirY;
+      const onWall = Math.abs(Math.abs(x) - half) < 1e-6 || Math.abs(Math.abs(y) - half) < 1e-6;
+      if (!onWall) return hitIn;
+      for (const r of recesses) {
+        const vertical = Math.abs(r.x1In - r.x2In) < 1e-9;
+        const on = vertical
+          ? Math.abs(x - r.x1In) < 1e-6 && y >= Math.min(r.y1In, r.y2In) && y <= Math.max(r.y1In, r.y2In)
+          : Math.abs(y - r.y1In) < 1e-6 && x >= Math.min(r.x1In, r.x2In) && x <= Math.max(r.x1In, r.x2In);
+        if (on) return hitIn + r.depthIn / Math.abs(vertical ? ray.dirX : ray.dirY);
+      }
+      return hitIn;
+    }
+
     sampleSensors() {
       const s = this.settings;
       for (let i = 0; i < s.sensors.length; ++i) {
         if ((this.timeMs + this.sensorPhaseMs[i]) % s.sensorPeriodMs !== 0) continue;
         const pose = this.pastTruth(s.sensorDelayMs);
         const ray = L.sensorRay(pose.xIn, pose.yIn, pose.headingDeg, s.sensors[i]);
-        const trueIn = this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+        const trueIn = this.recessed(ray, this.map.castRayIn(ray.xIn, ray.yIn, ray.dirX, ray.dirY));
         let mm = trueIn * 25.4;
         mm += gaussianAt(this.rng, s.sensorNoiseScale * 0.5 * Math.max(15, 0.05 * mm));
         // something nearer than the wall, anywhere along the beam. Only drawn when enabled, so a

@@ -65,7 +65,7 @@ Driving stops a running routine. Hover a label or slider for what it means.
   translation), drive it
   yourself, switch the motions between odometry + MCL and odometry alone
   (`setCorrectionEnabled()`), Auto-Tuned or hand-set PID gains. A routine with the lift and claw
-  (`js/macros.js`, the port of `robot/macros.hpp`; **Triple Pin (paths)**) moves the field's Pins:
+  (`js/macros.js`, the port of `robot/macros.hpp`; **Triple Pin (points)**) moves the field's Pins:
   the one in the claw rides with it, a stack on a Goal shows its count, the lift's level is under
   the robot, and the result line says what it scored at which level and what each wall reset did.
 - **Paths**: draw a `followTrajectory()` chain on the field. Click to add a point (on the path to

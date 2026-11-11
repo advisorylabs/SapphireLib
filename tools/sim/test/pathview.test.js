@@ -290,20 +290,50 @@ test('every action calls something robot/macros.hpp declares', () => {
   }
 });
 
-test('Paste C++ reads every path a routine has: autons.cpp\'s, its Triple Pin legs as the simulator drives them', () => {
+test('Paste C++ reads every path a routine has: autons.cpp\'s, which plans with the simulator\'s chassis and the robot\'s', () => {
   const fs = require('node:fs');
   const path = require('node:path');
-  const { TRIPLE_PIN, TRIPLE_PIN_LEGS } = require('../js/routines.js');
+  const W = require('../js/world.js');
   const source = fs.readFileSync(path.join(__dirname, '../../../src/robot/autons.cpp'), 'utf8');
   const parsed = P.parseCppAll(source);
   assert.ok(parsed.ok, parsed.error);
-  // its TrajectoryFollowConfig isn't a path, so only these come in
-  assert.deepEqual(parsed.docs.map((d) => d.name), ['trajectory example', 'triple pin to goal', 'triple pin to second pin',
-    'triple pin second to goal', 'triple pin to third pin', 'triple pin third to goal', 'triple pin off goal']);
-  // the C++ drives what routines.js drives
-  TRIPLE_PIN_LEGS.forEach((leg, k) => {
-    assert.deepEqual(P.toSections(parsed.docs[k + 1]), P.toSections(P.fromSections(TRIPLE_PIN[leg])), leg);
-  });
+  // the trajectory example's: Triple Pin drives point to point, with no paths. A lone path's claw
+  // and extender actions are read from what follows it, here every routine after it, whose other
+  // macros calls aren't a point's: the path comes in without them, saying so
+  assert.deepEqual(parsed.docs.map((d) => d.name), ['trajectory example']);
+  assert.match(parsed.warning, /actions weren't read/);
+  const robotModels = {
+    forward: { kS: 0.30, kV: 0.1698, kA: 0.0383 },
+    strafe: { kS: 2.21, kV: 0.3234, kA: 0.0838 },
+    turn: { kS: 1.10, kV: 0.0318, kA: 0.0019 },
+  };
+  for (const models of [W.defaultSettings().models, robotModels]) {
+    const plan = T.generateTrajectory(P.toSections(parsed.docs[0]), models);
+    assert.ok(plan.ok, plan.error);
+  }
+});
+
+test('the simulator\'s Triple Pin (points) drives autons.cpp\'s triplePinPoints() numbers', () => {
+  // routines.js's TRIPLE_PIN against the routine's calls in autons.cpp: change one, change both
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { TRIPLE_PIN } = require('../js/routines.js');
+  const source = fs.readFileSync(path.join(__dirname, '../../../src/robot/autons.cpp'), 'utf8');
+  const body = source.slice(source.indexOf('void triplePinPoints() {'));
+  const routine = body.slice(0, body.indexOf('\n}\n'));
+  const num = '(-?[\\d.]+)';
+  const calls = (name) => [...routine.matchAll(new RegExp(`\\b${name}\\(${num}(?:, ${num})?(?:, ${num})?`, 'g'))]
+    .map((m) => m.slice(1).filter((v) => v !== undefined).map(Number));
+  const constant = (name) => Number(source.match(new RegExp(`constexpr double ${name} = ${num};`))[1]);
+  const s = TRIPLE_PIN.start;
+  assert.deepEqual(calls('setPose')[0], [s.xIn, s.yIn, s.headingDeg]);
+  assert.deepEqual([constant('kGoalXIn'), constant('kGoalYIn')], [TRIPLE_PIN.goal.xIn, TRIPLE_PIN.goal.yIn]);
+  const at = (p) => [p.xIn, p.yIn];
+  assert.deepEqual(calls('moveToPoint'), [at(TRIPLE_PIN.aboveGoal)]);
+  assert.deepEqual(calls('driveTo'), [at(TRIPLE_PIN.belowGoal)]);
+  assert.deepEqual(calls('ontoPin'), [at(TRIPLE_PIN.secondPin), at(TRIPLE_PIN.thirdPin)]);
+  assert.deepEqual(calls('backTo'), [at(TRIPLE_PIN.afterSecondPin)]);
+  assert.deepEqual(calls('offGoalTo'), [at(TRIPLE_PIN.afterL1), at(TRIPLE_PIN.afterL2), at(TRIPLE_PIN.afterL3)]);
 });
 
 test('a lone path pasted with other constants keeps its actions; several paths come in without', () => {

@@ -12,6 +12,7 @@
 #include "robot/config.hpp"
 #include "robot/macros.hpp"
 #include "robot/tune.hpp"
+#include "robot/vision.hpp"
 #include "sapphirelib/auton/auton.hpp"
 #include "sapphirelib/util/log.hpp"
 
@@ -152,6 +153,23 @@ namespace {
 // which the localizer models as the beam's cone (BeamModel::coneHalfAngleDeg).
 // Only the faces a sensor out on the field can see: the back one is the
 // wall's.
+//
+// And what else the sensors see that stays put through autonomous, from the
+// field as measured: the center goal (8.77in tall, so the sensors see the
+// goal itself), the Pin standing in each medium (neutral) goal and in each
+// of the Midfield's four Cups, and the Pins stacked on the alliance goal the
+// Triple Pin routine scores on, which hold its preload from its first score
+// on. The sensors are mounted above an empty alliance or medium goal, so a
+// goal is seen only by the Pin in it, and a goal without one is left out.
+// Each of them is a believable wall in the wrong place to a localizer that
+// doesn't know it's there. The Cups and Pins standing on their own, and the
+// wall groups, get picked up and pushed around, and stay out.
+//
+// The Toggles, on top of the middle of every wall, read the wall 3 to 4in
+// long, not short (SL000040 head on; SL000070's back sensor 4in long at a
+// slant, which pulled the pose 1.2in east and 3.8in south on the drive to
+// the second Pin): blind stretches, so the localizer leaves out a reading
+// whose beam lands on one (FieldMap::addBlindStretch()).
 FieldMap fieldMap() {
     constexpr double kHalfIn = sapphirelib::localization::kVrcFieldSizeIn / 2.0;
     constexpr double kLoaderDepthIn = 3.74;
@@ -169,6 +187,30 @@ FieldMap fieldMap() {
             map.addSegment({wallX, farY, faceX, farY});
         }
     }
+    // Goals and Cups sit on tile corners, 23.545in apart (the manual's Appendix A)
+    constexpr double kTileIn = 23.545;
+    const auto square = [&map](double xIn, double yIn, double acrossIn) {
+        const double half = acrossIn / 2.0;
+        map.addBox(xIn - half, yIn - half, xIn + half, yIn + half);
+    };
+    constexpr double kGoalAcrossIn = 5.61; // across the flats
+    constexpr double kCupAcrossIn = 3.15;
+    constexpr double kPinAcrossIn = 1.6;
+    square(0.0, 0.0, kGoalAcrossIn); // the center goal
+    constexpr double kMediumGoals[][2] = {{-1.0, 2.0}, {-2.0, 1.0}, {2.0, -1.0}, {1.0, -2.0}};
+    for (const auto& goal : kMediumGoals) {
+        square(goal[0] * kTileIn, goal[1] * kTileIn, kPinAcrossIn); // a medium goal's Pin
+    }
+    constexpr double kMidfieldCups[][2] = {{-1.0, 0.0}, {0.0, -1.0}, {0.0, 1.0}, {1.0, 0.0}};
+    for (const auto& cup : kMidfieldCups) {
+        square(cup[0] * kTileIn, cup[1] * kTileIn, kCupAcrossIn); // a Midfield Cup and its Pin
+    }
+    square(-2.0 * kTileIn, -kTileIn, kPinAcrossIn); // the Triple Pin's stack, on red's goal
+    constexpr double kToggleHalfIn = 25.99 / 2.0;
+    map.addBlindStretch({-kHalfIn, -kToggleHalfIn, -kHalfIn, kToggleHalfIn}); // red's wall
+    map.addBlindStretch({kHalfIn, -kToggleHalfIn, kHalfIn, kToggleHalfIn});   // blue's
+    map.addBlindStretch({-kToggleHalfIn, -kHalfIn, kToggleHalfIn, -kHalfIn}); // the near wall
+    map.addBlindStretch({-kToggleHalfIn, kHalfIn, kToggleHalfIn, kHalfIn});   // the far wall
     return map;
 }
 
@@ -259,16 +301,27 @@ void initDevices() {
     // The auton functions autons.cpp writes routines with (drive(),
     // moveToPoint(), resetBack(), ..., sapphirelib/auton/auton.hpp) drive
     // this drivetrain by this odometry, and reset off the walls with the
-    // localizer's sensors. Override's loaders sit in the field's corners, so
-    // a wall reset stays 18in clear of them; and a reading that would move
-    // the robot more than 8in is likelier a game element than the wall.
+    // localizer's sensors. Override's loaders sit near the corners, on the
+    // side walls, 3.74in deep, so a wall reset stays 16in clear of a corner:
+    // the Triple Pin's back sensor, below the goal, landed its beam 18.7in from
+    // the bottom-left corner when that routine reset there, and the 18in this
+    // was dropped it a degree or an inch off (the simulator finds that cone clean, loader and all, an
+    // inch and 3 degrees either way, at 16). A reset may move the robot up
+    // to 60in, near enough no cap: odometry can drift past 8in over a
+    // routine (SL000066, about 13in by the third Pin), and the old 8in cap
+    // then threw out the very reset meant to fix it. Only a reading no drift
+    // could explain is skipped, so keep a game element out of the beam.
     sapphirelib::auton::use(chassis, odometry(), &localizer(),
-                            {.wallReset = {.cornerMarginIn = 18.0, .maxJumpIn = 8.0}});
+                            {.wallReset = {.cornerMarginIn = 16.0, .maxJumpIn = 60.0}});
 
     // Lift/claw/side piston driver macros, see macros.hpp. Zeroes the lift's
     // encoders here, and driver control zeroes them again on every press of
     // the bottom switch.
     macros::initialize();
+
+    // The AI Vision sensor, set up to see the yellow Pins (vision.hpp). Only
+    // a routine steering by it would read it, and none does now.
+    vision::initialize();
 
     // Auto-Tune's measured axis models (its readout and the SD log print
     // them), for velocity sticks and trajectories. TUNE.CFG's model.* lines
@@ -285,7 +338,14 @@ void initDevices() {
     // override these below.
     chassis.headingHoldPID().setGains({.kP = 0.0798, .kI = 0.0, .kD = 0.0});
     chassis.trackingForwardPID().setGains({.kP = 2.086, .kI = 0.0, .kD = 0.396});
-    chassis.trackingStrafePID().setGains({.kP = 17.817, .kI = 0.0, .kD = 2.120});
+    // Strafe by hand, not Auto-Tune's 17.817/2.120: that designs each Track axis for the same
+    // 0.4s response from its linear model, and this axis has 2.2V of static friction the design
+    // doesn't see. Saturating at 0.7in of error, it banged between +12V and -12V every 0.1-0.2s
+    // with under 1.2in of error (SL000069: the zig-zag into the second Pin, and the scatter left
+    // and right of it from run to run). The simulator, on the robot's models, reverses half as
+    // often at 6.0, and the Triple Pin on trajectories still landed all three Pins within 0.3in.
+    // An Auto-Tune saved to TUNE.CFG overrides this, so leave pid.trackStrafe out of it.
+    chassis.trackingStrafePID().setGains({.kP = 6.0, .kI = 0.0, .kD = 1.1});
     chassis.trackingTurnPID().setGains({.kP = 0.405, .kI = 0.0, .kD = 0.024});
 
     // TUNE.CFG's gains, axis models and lift gravity, over the values above

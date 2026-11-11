@@ -16,9 +16,9 @@
  * Team 96671H: Hitmen
  */
 
-#include <cstddef>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
-#include <initializer_list>
 #include <vector>
 
 #include "pros/rtos.hpp"
@@ -26,6 +26,8 @@
 #include "robot/macros.hpp"
 #include "sapphirelib/auton/auton.hpp"
 #include "sapphirelib/motion/trajectory_config.hpp"
+#include "sapphirelib/telemetry/event.hpp"
+#include "sapphirelib/util/wait.hpp"
 
 // The routines sit outside namespace robot, so the auton functions (drive(),
 // moveToPoint(), ...) are never hidden by something of the robot's with the
@@ -210,27 +212,27 @@ void triplePin() {
     pros::delay(250);
     macros::setClawClosed(false);
     pros::delay(250);
-    moveToPoint(-50, -5, {.timeoutMs = 1000});
+    moveToPoint(-50, -5, {.timeoutMs = 1500});
     macros::setLiftLevel(macros::Goal::alliance, 0);
-    turnTo(105);
-    moveToPoint(-35.5, -10.8, {.timeoutMs = 1000});
-    macros::setAutoClaw(true, 75);
-    moveToPose(-22, -17.5, 133, {.timeoutMs = 1750});
+    turnToPoint(-37, -10);
+    moveToPoint(-37, -10, {.timeoutMs = 1500});
+    macros::setAutoClaw(true);
+    moveToPose(-25.5, -25.5, 133, {.timeoutMs = 1750});
     macros::setLiftLevel(macros::Goal::alliance, 2);
-    turnTo(255);
-    moveToPoint(-47, -18, {.timeoutMs = 750});
+    turnToPoint(-56, -18);
+    moveToPoint(-56, -18, {.timeoutMs = 1250});
     macros::setLiftDeg(macros::liftScoreDeg());
     macros::waitForLift(1000);
     macros::setClawClosed(false);
     drive(-12, {.timeoutMs = 1500});
     macros::setLiftLevel(macros::Goal::alliance, 0);
-    turnToPoint(-43, -45);
+    turnToPoint(-48, -47.5);
     drive(15, {.chain = true});
-    macros::setAutoClaw(true, 65);
-    moveToPoint(-43, -45, {.timeoutMs = 2000}); 
+    macros::setAutoClaw(true);
+    moveToPoint(-48, -47.5, {.timeoutMs = 2000}); 
     macros::setLiftLevel(macros::Goal::alliance, 3);
-    turnTo(0);
-    moveToPoint(-43, -24, {.timeoutMs = 1500});
+    turnToPoint(-44, -27);
+    moveToPoint(-44, -27, {.timeoutMs = 1500});
     macros::setLiftDeg(macros::liftScoreDeg());
     macros::waitForLift(1000);
     macros::setClawClosed(false);
@@ -238,223 +240,264 @@ void triplePin() {
 
 }
 
-/// Triple Pin on trajectories: an example of triplePin() above with every drive planned in the
-// simulator's Paths tab, and a wall reset wherever a distance sensor sees clean wall. Not run on
-// the robot yet; the simulator runs it (Drive tab, "Triple Pin (paths)"), with these paths and
-// config.hpp's sensors, and tools/sim/js/routines.js explains each choice at length.
+/// Triple Pin on points: three Pins stacked on the alliance Goal by the left wall, every drive a
+// turn to face a point and a straight drive to it, as triplePin() above drives, so every stop is a
+// number to change in triplePinPoints() below. The simulator runs the same (Drive tab, "Triple
+// Pin (points)"; tools/sim/js/routines.js's TRIPLE_PIN has these numbers: change both).
 //
-// Three Pins stacked on the alliance Goal by the left wall, at (-47.09, -23.55), "the goal": the
-// preload at L1, the Pin standing at (-23.55, -23.55) at L2, the one at (-47.09, -47.09) at L3. The
-// claw holds a Pin about 5.3in ahead of the tracking center (from where triplePin() grabs its
-// second Pin), so the robot stops 5.3in short of the goal's middle, facing it, settling to half an
-// inch (kTriplePinScoreFollow). At a Pin it aims an inch past that, 4.3in short, the back of the
-// claw stopping the Pin: autoClaw shuts the claw at 125mm, the Pin about 5.7in ahead, and a robot
-// aiming at 5.3in that settles short, or was bumped back, never gets there. Each approach ends in
-// a short straight run at no more than 24 in/s.
+// The goal, at (-47.09, -23.55) (kGoalXIn, kGoalYIn), takes the preload at L1 from the north, the
+// Pin standing at (-23.55, -23.55) at L2 from the east, and the one at (-47.09, -47.09) at L3 from
+// the south: where the manual's Appendix A has them. ontoGoal() and ontoPin() take the goal's or
+// the Pin's spot and work out where the robot stops for it, facing it, so the routine's other
+// numbers are the stops between, where it turns: roughly the old trajectories' route. Each stop is
+// on the line the robot gets to it along (backTo() and offGoalTo() back straight along the robot's
+// heading), so moving one means moving it along that line, or the ones after it with it.
 //
-// The resets: only where something that needs the pose follows, and only where the simulator's
-// wallResetCheck() finds the beam's whole cone on clean wall, an inch and 3 degrees either way
-// (the localizer's own checks can't tell a Cup, a Pin or a Goal in the beam from the wall, and a
-// reading 2in short passes them):
-//   - nowhere before the third Pin. After the rams the back sensor is on the Toggle (where
-//     SL000040 read the wall 3in long) and the side ones are within 18in of the corners; above
-//     and on the goal from the north the Cup-Pin-Cup by the left wall is in the cone; around the
-//     second Pin the two Goals block the walls. On the goal from the east the near wall is clear
-//     but 42in off, and a reset there can't move a robot that has already stopped: the back-off
-//     after it would steer the correction out sideways with the claw still around the stack.
-//   - y at the stop east of the third Pin, for the run onto it (not x: the front sensor's beam is
-//     along that run).
-//   - x and y on the third Pin, still, for the drive back to the goal.
-// Each is averaged over 4 readings (averagedResets()): one reading at 28in is +-0.7in in the
-// simulator's noise, enough to miss the goal by itself. The simulator says what they buy: a 1in
-// bump on the way to the third Pin costs it the Pin without them, and nothing with them; with no
-// bump they cost the last score about half an inch of the inch and a quarter it has. Measure the
-// sensors' real noise from a log (the simulator's Tune tab) to know how many readings they need.
+// No wall resets, and the localizer's corrections off (setMcl(false)): odometry alone carries the
+// routine from the rams at the start.
 //
-// The kTriplePin... paths are the Paths tab's: Paths > Paste C++ reads them all at once, a path
-// each, to see them on the field and change them; Copy C++ writes one back. Planned for a robot up
-// to 17in square: the gap between the two alliance Goals the third Pin's legs use is 18in.
-const sapphirelib::motion::TrajectoryFollowConfig kTriplePinScoreFollow{
-    .positionErrorThresholdIn = 0.5};
+// In the simulator, with the robot's Auto-Tune models, these gains and push floors (devices.cpp),
+// and its 13.75 x 17in size, it stacks all three within 0.25in of the goal's middle, the last at
+// 13.3s, done at 13.9s; it stops within 0.5in of every stop, and touches nothing but the goal
+// coming into the aligner (1.5in clear of it otherwise).
 
-// Sapphire Sim path "triple pin to goal"
-const std::vector<sapphirelib::motion::TrajectorySection> kTriplePinToGoal{
-    {.waypoints = {{.xIn = -60.6, .yIn = -5, .headingDeg = 90},
-                   {.xIn = -52, .yIn = -7},
-                   {.xIn = -47.09, .yIn = -12.25, .headingDeg = 180}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -47.09, .yIn = -18.25}},
-     .constraints = {.forward = {.maxVelocity = 24}}},
-};
+// Where a Goal and a Pin stop in the front of the robot. The front edge is kFrontIn ahead of the
+// tracking center, and the goal aligner's back kAlignerDepthIn behind that; a Goal (5.61in across
+// its flats) or a Pin (1.6in across) stops against it with its middle half its width further on.
+constexpr double kFrontIn = 8.35;
+constexpr double kAlignerDepthIn = 3.5;
+constexpr double kGoalSeatIn = kFrontIn - kAlignerDepthIn + 5.61 / 2.0; // 7.65
+constexpr double kPinSeatIn = kFrontIn - kAlignerDepthIn + 1.6 / 2.0;   // 5.65
 
-// Sapphire Sim path "triple pin to second pin"
-const std::vector<sapphirelib::motion::TrajectorySection> kTriplePinToSecondPin{
-    {.waypoints = {{.xIn = -47.09, .yIn = -18.25, .headingDeg = 180},
-                   {.xIn = -47.09, .yIn = -12.25}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -35, .yIn = -11},
-                   {.xIn = -23.55, .yIn = -12.25}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -23.55, .yIn = -19.25}},
-     .constraints = {.forward = {.maxVelocity = 24}}},
-};
+// The goal the Triple Pin stacks on, where the manual has it.
+constexpr double kGoalXIn = -47.09;
+constexpr double kGoalYIn = -23.55;
 
-// Sapphire Sim path "triple pin second to goal"
-const std::vector<sapphirelib::motion::TrajectorySection> kTriplePinSecondToGoal{
-    {.waypoints = {{.xIn = -23.55, .yIn = -19.25, .headingDeg = 180},
-                   {.xIn = -30, .yIn = -21},
-                   {.xIn = -35.3, .yIn = -23.55, .headingDeg = 270}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -41.79, .yIn = -23.55}},
-     .constraints = {.forward = {.maxVelocity = 24}}},
-};
+// Every turn chains: it ends within 5 degrees, still turning, without a settle. Settling each one
+// to 2 degrees cost 1.4s over the routine in the simulator (with devices.cpp's push floors, so the
+// turns get there), and put the last score past 14.5s. What a turn leaves, the drive after it takes
+// out: ontoGoal()'s and ontoPin()'s approaches turn to face their target as they go.
+const Options kTurn{.chain = true};
 
-// Sapphire Sim path "triple pin to third pin"
-const std::vector<sapphirelib::motion::TrajectorySection> kTriplePinToThirdPin{
-    {.waypoints = {{.xIn = -41.79, .yIn = -23.55, .headingDeg = 270},
-                   {.xIn = -35.3, .yIn = -23.55}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -35.3, .yIn = -35},
-                   {.xIn = -37.5, .yIn = -47.09}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -42.79, .yIn = -47.09}},
-     .constraints = {.forward = {.maxVelocity = 24}}},
-};
+// Onto the goal (ontoGoal()): an approach (auton::approach()) facing the goal's middle, at
+// kGoalApproach.cruiseInPerS, ending kGoalShortIn short of where the goal seats, then the press:
+// on at no more than 6V until the goal stops the robot and the timeout ends it, so the goal, not
+// odometry, is the stop. Not a moveToPoint(): that holds the heading the turn left it on, a few
+// degrees off, and in the simulator the goal landed 1 to 3in off the aligner's middle, past the
+// 1.25in it catches. The approach ending further than kGoalPressReachIn from its end means
+// something stopped the robot well short of the goal: no press and no score, and the Pin stays in
+// the claw for driver control.
+constexpr double kGoalShortIn = 1.0;
+const sapphirelib::motion::ApproachConfig kGoalApproach{.cruiseInPerS = 30.0,
+                                                        .accelInPerS2 = 120.0,
+                                                        .decelInPerS2 = 120.0,
+                                                        .endShortIn = kGoalSeatIn + kGoalShortIn,
+                                                        .steerMinIn = kGoalSeatIn + 3.0,
+                                                        .maxLagIn = 2.0,
+                                                        .timeoutMs = 1500};
+constexpr double kGoalPressReachIn = 8.0;
+constexpr double kGoalPressIn = 3.0;
 
-// Sapphire Sim path "triple pin third to goal"
-const std::vector<sapphirelib::motion::TrajectorySection> kTriplePinThirdToGoal{
-    {.waypoints = {{.xIn = -42.79, .yIn = -47.09, .headingDeg = 270},
-                   {.xIn = -36, .yIn = -40},
-                   {.xIn = -35.3, .yIn = -23.55}},
-     .stopAtEnd = true},
-    {.waypoints = {{.xIn = -41.79, .yIn = -23.55}},
-     .constraints = {.forward = {.maxVelocity = 24}}},
-};
+// How long a score's dip has before the claw lets go, as R2's (macros.cpp's kScoreReleaseMs): the
+// claw opens once the lift reaches the dip or this long into it, whichever comes first, and the
+// lift carries on down meanwhile.
+constexpr std::uint32_t kScoreReleaseMs = 100;
 
-// Sapphire Sim path "triple pin off goal"
-const std::vector<sapphirelib::motion::TrajectorySection> kTriplePinOffGoal{
-    {.waypoints = {{.xIn = -41.79, .yIn = -23.55, .headingDeg = 270},
-                   {.xIn = -35.79, .yIn = -23.55}}},
-};
+// How far off the goal the robot backs before the lift comes down: the claw clear of the stack.
+constexpr double kLiftClearIn = 3.5;
 
-// R2's score from a routine: up at the level, the dip, and let go.
+// The drives to the stops, where the robot turns for its next run (backTo(), offGoalTo(),
+// driveTo()): chained, so each ends the first tick it's within 1in, still rolling, rather than
+// settling 200ms, which saved 1.1s over the routine in the simulator with the same scores. With
+// the robot's models and gains it stopped within 0.5in of every stop.
+const Options kStop{.chain = true, .exitError = 1.0};
+
+// --- The runs onto the Pins: the last third at autoClaw speed ---
+//
+// autoClaw's mode slows the robot to its speed limit (setAutoClaw() sets setSpeedLimit() to
+// macros.cpp's kClawSpeedVolts), but only for motions that start after it. So each run (ontoPin())
+// is a moveToPoint() for the first kAutoClawFromRun of the way (chained: it hands off within 3in
+// of there, slowing as it comes), then autoClaw on, then an approach for the last third, which
+// starts under autoClaw's limit. "The way" is the run: from where the robot turned to face the Pin
+// to where the Pin seats in the aligner.
+//
+// The approach turns the robot to face the Pin and drives at it at a steady
+// kPinApproach.cruiseInPerS, never strafing, through to kPinPastIn past where the Pin seats, so
+// the robot meets the Pin at that speed rather than slowing onto it: autoClaw's lead (macros.cpp's
+// kClawLeadMs) times the grab off the robot's speed as if it held, and here it does. It slows only
+// past the Pin (18^2 / (2 x 80) = 2.0in to stop, inside the 3in), and ontoPin() stops it
+// kPinCreepAfterGrabMs after the grab anyway. 18 in/s is under what autoClaw's 5V allows (about
+// 27 in/s); SL000066 knocked a Pin over at 36. autoClaw goes off again once the claw has the Pin:
+// its speed limit would hold the turn back to the goal to 5V.
+constexpr double kAutoClawFromRun = 2.0 / 3.0;
+constexpr double kPinPastIn = 3.0;
+const sapphirelib::motion::ApproachConfig kPinApproach{.cruiseInPerS = 18.0,
+                                                       .accelInPerS2 = 60.0,
+                                                       .decelInPerS2 = 80.0,
+                                                       .endShortIn = kPinSeatIn - kPinPastIn,
+                                                       // the Pin nearly in the aligner: hold
+                                                       .steerMinIn = kPinSeatIn + 2.0,
+                                                       .maxLagIn = 2.0,
+                                                       .timeoutMs = 2500};
+
+// How far ontoPin() creeps on for a Pin the approach stopped short of: one further than odometry
+// had it is still ahead of the jaws (SL000060 stopped 1.2in short and the claw never shut), and
+// its timeout if the claw never shuts. autoClaw caps it at 5V (macros.cpp's kClawSpeedVolts).
+// Once the claw shuts it stops kPinCreepAfterGrabMs later, the time autoClaw's lead allows for the
+// jaws to close on a Pin still coming in.
+constexpr double kPinCreepIn = 2.5;
+constexpr std::uint32_t kPinCreepMs = 600;
+constexpr std::uint32_t kPinCreepAfterGrabMs = 125;
+
+// `inches` short of (xIn, yIn) on the line from `from` to it.
+sapphirelib::motion::FieldPoint shortOf(const sapphirelib::odom::Pose& from, double xIn, double yIn,
+                                        double inches) {
+    const double d = std::hypot(xIn - from.xIn, yIn - from.yIn);
+    const double k = d > 0.0 ? std::max(d - inches, 0.0) / d : 0.0;
+    return {.xIn = from.xIn + (xIn - from.xIn) * k, .yIn = from.yIn + (yIn - from.yIn) * k};
+}
+
+// Onto the goal whose middle is (goalXIn, goalYIn): turn to face it, the approach on to just short
+// of where it seats in the aligner, then the press (see kGoalApproach). False, without the press,
+// if something stopped the robot well short of it, with an auton,no_score line in the log saying
+// how far short.
+bool ontoGoal(double goalXIn, double goalYIn) {
+    turnToPoint(goalXIn, goalYIn, kTurn);
+    const double shortIn = approach(goalXIn, goalYIn, kGoalApproach).finalError;
+    if (shortIn > kGoalPressReachIn) {
+        sapphirelib::telemetry::event("auton", "no_score,short_in=%.1f", shortIn);
+        return false;
+    }
+    drive(kGoalPressIn, {.timeoutMs = 300, .maxVolts = 6});
+    return true;
+}
+
+// R2's score from a routine: up at the level, the dip, and let go as R2 does (kScoreReleaseMs).
 void scoreOnGoal() {
     macros::waitForLift(1500);
     macros::setLiftDeg(macros::liftScoreDeg());
-    macros::waitForLift(1000);
+    macros::waitForLift(kScoreReleaseMs);
     macros::setClawClosed(false);
     pros::delay(100); // the claw open before backing off
 }
 
-// What a wall reset sets, for averagedResets().
-enum class ResetAxis : std::uint8_t { x, y };
-
-struct WallReading {
-    bool (*reset)(); // resetFront and the rest
-    ResetAxis axis;  // what it sets
-};
-
-double poseAlong(ResetAxis axis) {
+// How far behind the robot (xIn, yIn) is, along its heading.
+double behindIn(double xIn, double yIn) {
     const sapphirelib::odom::Pose here = pose();
-    return axis == ResetAxis::x ? here.xIn : here.yIn;
+    const double a = here.headingDeg * 3.14159265358979323846 / 180.0;
+    return -((xIn - here.xIn) * std::sin(a) + (yIn - here.yIn) * std::cos(a));
 }
 
-// Wall resets averaged over several readings, with the auton functions as they are: resetFront()
-// and the rest each set x or y from one reading alone, so `readings` of them 40ms apart (the
-// sensors read about every 33ms), averaged, average the readings, and four halve one reading's
-// noise. Each is carried forward to now by what odometry has moved since, so the robot may move
-// across the beams meanwhile, but not along them. Every wall is read every round; a reading a
-// reset skips (its log line says why) is left out. Returns how many took.
-int averagedResets(std::initializer_list<WallReading> walls, int readings = 4) {
-    struct Sum {
-        double total = 0.0; // each reading's x or y, carried forward to now
-        int count = 0;
-        double last = 0.0; // odometry's x or y when it last looked
-    };
-    std::vector<Sum> sums(walls.size());
-    int took = 0;
-    for (int i = 0; i < readings; i++) {
-        if (i > 0) pros::delay(40);
-        std::size_t k = 0;
-        for (const WallReading& wall : walls) {
-            Sum& sum = sums[k++];
-            sum.total += sum.count * (poseAlong(wall.axis) - sum.last);
-            if (wall.reset()) {
-                sum.total += poseAlong(wall.axis);
-                sum.count++;
-                took++;
-            }
-            sum.last = poseAlong(wall.axis);
-        }
-    }
-    sapphirelib::odom::Pose averaged = pose();
-    std::size_t k = 0;
-    for (const WallReading& wall : walls) {
-        const Sum& sum = sums[k++];
-        if (sum.count == 0) continue;
-        const double value =
-            (sum.total + sum.count * (poseAlong(wall.axis) - sum.last)) / sum.count;
-        (wall.axis == ResetAxis::x ? averaged.xIn : averaged.yIn) = value;
-    }
-    setPose(averaged.xIn, averaged.yIn, averaged.headingDeg);
-    return took;
+// Straight back off the goal until the robot is level with (xIn, yIn), holding the heading, the
+// lift down to the bottom once the claw has cleared the stack (kLiftClearIn). It backs along its
+// heading, not to the point: put the point on the line straight back from the goal through where
+// the robot came onto it, or it stops beside it. Straight back, so the claw lifts clear of the
+// stack square and a corner doesn't swing into the goal. kStop by default: a routine's last motion
+// passes {} instead, to settle.
+void offGoalTo(double xIn, double yIn, Options options = kStop) {
+    const double backIn = behindIn(xIn, yIn);
+    runAsync([backIn, options] { drive(-backIn, options); });
+    waitUntilTraveled(kLiftClearIn);
+    macros::setLiftLevel(macros::Goal::alliance, 0);
+    waitForMotion();
 }
 
-void triplePinPaths() {
+// Straight back until level with (xIn, yIn), holding the heading, as offGoalTo() but with the lift
+// left alone: put the point on the line the robot came in along.
+void backTo(double xIn, double yIn) { drive(-behindIn(xIn, yIn), kStop); }
+
+// To (xIn, yIn), facing the way it goes: turn to face it, then straight there (kStop).
+void driveTo(double xIn, double yIn) {
+    turnToPoint(xIn, yIn, kTurn);
+    moveToPoint(xIn, yIn, kStop);
+}
+
+// The running motion until the claw shuts (and kPinCreepAfterGrabMs on, then stopped) or it ends.
+void untilGrabbed() {
+    sapphirelib::waitUntil([] { return macros::clawClosed() || !isMotionRunning(); }, 0);
+    if (macros::clawClosed()) {
+        pros::delay(kPinCreepAfterGrabMs); // the jaws shut on it before the robot stops
+        cancelMotion();
+    }
+    waitForMotion();
+}
+
+// Onto the Pin standing at (pinXIn, pinYIn): turn to face it, a moveToPoint() for two thirds of
+// the way to where it seats, then autoClaw on and the approach at its speed for the last third
+// (see kPinApproach). The robot stops kPinCreepAfterGrabMs after the claw shuts. If the approach
+// ends with the claw still open, the rest of the way straight ahead, at autoClaw's 5V, until it
+// shuts: the Pin was further than odometry had it, and is still ahead of the jaws. autoClaw off
+// at the end. False if the claw didn't shut on it. An auton,pin_run line in the log says where the
+// run left the robot.
+bool ontoPin(double pinXIn, double pinYIn) {
+    turnToPoint(pinXIn, pinYIn, kTurn);
+    const sapphirelib::odom::Pose here = pose();
+    const double runIn = std::max(std::hypot(pinXIn - here.xIn, pinYIn - here.yIn) - kPinSeatIn, 0.0);
+    const sapphirelib::motion::FieldPoint handoff =
+        shortOf(here, pinXIn, pinYIn, kPinSeatIn + runIn * (1.0 - kAutoClawFromRun));
+    moveToPoint(handoff.xIn, handoff.yIn, {.chain = true});
+    macros::setAutoClaw(true); // before the approach starts, so its speed limit holds it
+    runAsync([pinXIn, pinYIn] { approach(pinXIn, pinYIn, kPinApproach); });
+    untilGrabbed();
+    if (!macros::clawClosed()) {
+        runAsync([] { drive(kPinCreepIn, {.timeoutMs = kPinCreepMs}); });
+        untilGrabbed();
+    }
+    const sapphirelib::odom::Pose end = pose();
+    sapphirelib::telemetry::event(
+        "auton", "pin_run,grabbed=%d,x=%.2f,y=%.2f,to_seat_in=%.2f", macros::clawClosed() ? 1 : 0,
+        end.xIn, end.yIn, std::hypot(pinXIn - end.xIn, pinYIn - end.yIn) - kPinSeatIn);
+    macros::setAutoClaw(false); // full speed for what comes next
+    return macros::clawClosed();
+}
+
+void triplePinPoints() {
+    // odometry alone: the localizer's corrections off for the whole routine (SL000040, 42 and 70)
+    setMcl(false);
+    macros::setClawClosed(true);
+    macros::setExtended(macros::Side::left, false);
     setPose(-60.6, -5, 90);
-    setMcl(false); // as in triplePin(): the resets do the correcting
-    // planned now, a few ms each, rather than once moving
-    for (const std::vector<TrajectorySection>* leg :
-         {&kTriplePinToGoal, &kTriplePinToSecondPin, &kTriplePinSecondToGoal, &kTriplePinToThirdPin,
-          &kTriplePinThirdToGoal, &kTriplePinOffGoal}) {
-        if (!planTrajectory(*leg)) return;
-    }
     macros::setLiftLevel(macros::Goal::alliance, 1);
-    // the Toggle, twice, as triplePin() rams it, and x from the wall it ends pinned against
+    // the Toggle, twice, as triplePin() rams it, and x from the wall it ends pinned against. Out
+    // until within 5in of the 10 (not 1in, which crawled the last inches at 1V), and back until
+    // the 600ms runs out, about when it reaches the wall (SL000053)
     for (int i = 0; i < 2; i++) {
-        drive(10, {.chain = true, .exitError = 1});
-        drive(-14, {.timeoutMs = 750});
+        drive(10, {.chain = true, .exitError = 5});
+        drive(-14, {.timeoutMs = 600});
     }
     const sapphirelib::odom::Pose here = pose();
     setPose(-60.6, here.yIn, here.headingDeg);
 
-    // 1: the preload, onto the goal from the north at L1
-    if (!followTrajectory(kTriplePinToGoal, kTriplePinScoreFollow).settled()) return;
+    // Each stop below is on the line the robot gets to it along, so it stops on it, not beside it.
+    // 1: straight out from the wall to above the goal (no turn pinned against the wall: a back
+    // corner would swing into it), then the preload onto it from the north (171) at L1
+    moveToPoint(-50, -5);
+    if (!ontoGoal(kGoalXIn, kGoalYIn)) return;
     scoreOnGoal();
 
-    // 2: straight back off the goal (point 1) before the lift comes down, then autoClaw grabs the
-    // second Pin on the way in. Onto the goal from the east at L2
-    runAsync([] { followTrajectory(kTriplePinToSecondPin); });
-    if (!waitUntilWaypoint(1)) return;
-    macros::setLiftLevel(macros::Goal::alliance, 0);
-    macros::setAutoClaw(true);
-    waitForMotion();
-    if (!macros::clawClosed()) return; // missed it: stop here
+    // 2: straight back off the goal to y = 0 (on the line from the goal's middle out through
+    // (-50, -5)), the second Pin from there (131), straight back off it 8.3in up the line it came
+    // in along, then onto the goal from the east (253) at L2
+    offGoalTo(-50.8, 0);
+    if (!ontoPin(-23.55, -23.55)) return; // missed it: stop here
     macros::setLiftLevel(macros::Goal::alliance, 2);
-    followTrajectory(kTriplePinSecondToGoal, kTriplePinScoreFollow);
+    backTo(-29.8, -18.1);
+    if (!ontoGoal(kGoalXIn, kGoalYIn)) return;
     scoreOnGoal();
 
-    // 3: back off east, down the gap between the Goals to a stop east of the third Pin (point 3),
-    // and y off the near wall there while it runs west onto the Pin. On it, x and y again, still,
-    // and onto the goal at L3
-    runAsync([] { followTrajectory(kTriplePinToThirdPin); });
-    if (!waitUntilWaypoint(1)) return;
-    macros::setLiftLevel(macros::Goal::alliance, 0);
-    macros::setAutoClaw(true);
-    if (!waitUntilWaypoint(3)) return;
-    averagedResets({{&resetLeft, ResetAxis::y}});
-    waitForMotion();
-    if (!macros::clawClosed()) return;
-    averagedResets({{&resetFront, ResetAxis::x}, {&resetLeft, ResetAxis::y}});
+    // 3: straight back off the goal (on the line it came in along) to where the third Pin's run
+    // (214), down the gap between the two Goals, passes this one 3in clear; then to 16in below the
+    // goal and onto it from the south at L3
+    offGoalTo(-27.1, -17.2);
+    if (!ontoPin(-47.09, -47.09)) return;
     macros::setLiftLevel(macros::Goal::alliance, 3);
-    followTrajectory(kTriplePinThirdToGoal, kTriplePinScoreFollow);
+    driveTo(-47.09, -39.55);
+    if (!ontoGoal(kGoalXIn, kGoalYIn)) return;
     scoreOnGoal();
 
-    // off the goal, so driver control starts clear of it, the lift coming down once it's out
-    runAsync([] { followTrajectory(kTriplePinOffGoal); });
-    waitUntilTraveled(3);
-    macros::setLiftLevel(macros::Goal::alliance, 0);
-    waitForMotion();
+    // straight back off the goal to (-47.09, -35.5), so driver control starts clear of it. Settled,
+    // not chained ({}): the routine's last motion
+    offGoalTo(-47.09, -35.5, {});
 }
 
 } // namespace
@@ -462,7 +505,7 @@ void triplePinPaths() {
 void robot::registerAutons(sapphirelib::gui::AutonSelectorPage& selector) {
     selector.addRoutine("Do Nothing", &doNothing);
     selector.addRoutine("Triple Pin", &triplePin);
-    selector.addRoutine("Triple Pin (paths)", &triplePinPaths);
+    selector.addRoutine("Triple Pin (points)", &triplePinPoints);
     selector.addRoutine("Tuning Test", &tuningTest);
     selector.addRoutine("Odom Test", &odomTest);
     selector.addRoutine("Async Example", &asyncExample);

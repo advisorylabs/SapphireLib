@@ -276,6 +276,18 @@ public:
     void relocalizeGlobally();
 
     /**
+     * @brief Start the particles over around odometry's pose at the next update, as setPose()
+     * does, without moving odometry. Safe to call from any task
+     *
+     * For turning corrections back on (setCorrectionEnabled()) once odometry is the better guess:
+     * with corrections off the particles keep weighing every reading, and wherever the readings
+     * misled them is where corrections would take odometry the moment they're on. In 96671H's
+     * SL000070 the estimate sat 2.8in south of odometry at the goal, with corrections off from the
+     * start, and they moved the pose 3.8in in a fraction of a second when turned on
+     */
+    void restartHere();
+
+    /**
      * @brief Get the settings the localizer was built with
      */
     const LocalizerConfig& config() const;
@@ -407,6 +419,7 @@ private:
 
     std::atomic<bool> correctionEnabled_;
     std::atomic<bool> relocalizeRequested_{false};
+    std::atomic<bool> restartRequested_{false};
 
     // the mounts setSensorMounts() last gave, which update() hands the filter (only update()
     // touches the filter) the next time it sees mountsChanged_

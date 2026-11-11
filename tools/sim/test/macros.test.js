@@ -74,8 +74,9 @@ test('down at the bottom, the lift rests on its stop', () => {
 });
 
 test('opening the claw over a Goal with the lift up stacks the Pin at the Goal\'s next level', () => {
-  // the claw holds its Pin kClawReachIn ahead: stopped that far east of the left red Goal, facing it
-  const onGoal = { xIn: -2 * T + M.kClawReachIn, yIn: -T, headingDeg: 270 };
+  // the claw holds its Pin kClawReachUpIn ahead with the lift up: stopped that far east of the left
+  // red Goal, facing it
+  const onGoal = { xIn: -2 * T + M.kClawReachUpIn, yIn: -T, headingDeg: 270 };
   const sim = run(onGoal, function* (a, m) {
     m.setLiftLevel(m.Goal.alliance, 1);
     yield* m.waitForLift(1500);
@@ -93,7 +94,7 @@ test('opening the claw over a Goal with the lift up stacks the Pin at the Goal\'
 });
 
 test('a neutral Goal starts with its Pin, so the first one scored on it is its L2', () => {
-  const onGoal = { xIn: -T, yIn: 2 * T - M.kClawReachIn, headingDeg: 0 };
+  const onGoal = { xIn: -T, yIn: 2 * T - M.kClawReachUpIn, headingDeg: 0 };
   const sim = run(onGoal, function* (a, m) {
     m.setLiftLevel(m.Goal.medium, 2);
     yield* m.waitForLift(1500);

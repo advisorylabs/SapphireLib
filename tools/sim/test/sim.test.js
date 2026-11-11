@@ -377,13 +377,14 @@ test('blocked by the defender, the plan waits, and the motion still finishes', (
   assert.ok(run.sim.errors().corrected < 1.0);
 });
 
-// --- Triple Pin (paths): autons.cpp's triplePinPaths() ---
+// --- Triple Pin (points): autons.cpp's triplePinPoints() ---
 
-const F = require('../js/field.js');
 const A = require('../js/auton.js');
+const F = require('../js/field.js');
 const RT = require('../js/routines.js');
+const M = require('../js/macros.js');
 
-const { TRIPLE_PIN, TRIPLE_PIN_LEGS, ROBOT_SENSOR_MOUNTS, ROBOT_WALL_RESET } = RT;
+const { TRIPLE_PIN } = RT;
 const triplePin = ROUTINES.find((r) => r.id === 'triplePin');
 // devices.cpp's Auto-Tune axis models: the robot's own speed
 const kRobotModels = {
@@ -391,150 +392,213 @@ const kRobotModels = {
   strafe: { kS: 2.21, kV: 0.3234, kA: 0.0838 },
   turn: { kS: 1.10, kV: 0.0318, kA: 0.0019 },
 };
+// devices.cpp's PID gains, which the simulator's Auto-Tune doesn't land on exactly from the models
+// above (its Drive kP is 3.6, the robot's 2.1)
+const kDeviceGains = {
+  drive: { kP: 2.086, kI: 0.0, kD: 0.396 },
+  turn: { kP: 0.2587, kI: 0.0, kD: 0.0125 },
+  tracking: { forward: { kP: 2.086, kI: 0.0, kD: 0.396 }, strafe: { kP: 6.0, kI: 0.0, kD: 1.1 }, turn: { kP: 0.405, kI: 0.0, kD: 0.024 } },
+};
+const robotModels = (o) => { o.world.models = kRobotModels; };
+// the robot's gains too, set once the routine has started (runRoutine() applies Auto-Tune's first)
+const deviceGains = (during = () => {}) => (sim) => {
+  if (sim.world.timeMs === 0) sim.robot.drivetrain.setGains(kDeviceGains);
+  during(sim);
+};
+// the simulator's chassis, the robot's models, and the robot's models with its own gains
+const kTriplePinCases = [
+  ['the simulator\'s chassis', () => {}, (during = () => {}) => during],
+  ['the robot\'s models', robotModels, (during = () => {}) => during],
+  ['the robot\'s models and gains', robotModels, deviceGains],
+];
+const grabsOf = (run) => run.sim.robot.events.filter((e) => /claw closed on/.test(e.text)).map((e) => e.text);
 
-// The routine with its wall resets doing nothing, to see what they buy
-function withoutResets(body) {
-  const create = A.create;
-  A.create = (robot, settings) => {
-    const a = create(robot, settings);
-    for (const k of ['resetFront', 'resetBack', 'resetLeft', 'resetRight']) a[k] = () => false;
-    return a;
-  };
-  try {
-    return body();
-  } finally {
-    A.create = create;
-  }
-}
-
-test('Triple Pin (paths) stacks its three Pins at L1, L2 and L3, inside autonomous\'s 15 s', () => {
-  for (const models of [null, kRobotModels]) {
-    const run = runRoutine(triplePin, (o) => { if (models) o.world.models = models; });
-    const label = models ? 'the robot\'s models' : 'the simulator\'s';
+test('Triple Pin (points) stacks its three Pins at L1, L2 and L3 inside 14.5 s, with no wall resets', () => {
+  for (const [label, tweak, during] of kTriplePinCases) {
+    const run = runRoutine(triplePin, tweak, during());
     assert.ok(run.finished, label);
-    assert.ok(run.sim.world.timeMs < 15000, `${label}: done at ${run.sim.world.timeMs} ms`);
+    // 13.1 to 14.3 s: the 15 s autonomous period with room for a slower robot
+    assert.ok(run.sim.world.timeMs < 14500, `${label}: done at ${run.sim.world.timeMs} ms`);
     const scored = run.sim.robot.macros.scored();
     assert.deepEqual(scored.map((p) => p.goal), ['red goal (left)', 'red goal (left)', 'red goal (left)'], label);
     // each at the next level of the stack, with the lift at that level
     assert.deepEqual(scored.map((p) => [p.level, p.liftLevel]), [[1, 1], [2, 2], [3, 3]], label);
     // macros.js lands a Pin on a Goal within 1.25in of its middle: each well inside that
-    for (const p of scored) assert.ok(p.offIn < 1.0, `${label}: L${p.level} ${p.offIn.toFixed(2)}in off the goal's middle`);
-    // four readings of y east of the third Pin, then four rounds of x and y on it, every one taken
-    const resets = run.sim.robot.events.filter((e) => /^reset/.test(e.text));
-    const round = ['resetFront', 'resetLeft'];
-    assert.deepEqual(resets.map((e) => e.text.split(':')[0]),
-      ['resetLeft', 'resetLeft', 'resetLeft', 'resetLeft', ...round, ...round, ...round, ...round], label);
-    // a reading the sensor drops is left out of the average, but nearly all of them take
-    const took = resets.filter((e) => !/skipped/.test(e.text)).length;
-    assert.ok(took >= 10, `${label}: ${took} of 12 took: ${resets.map((e) => e.text).join('; ')}`);
+    for (const p of scored) assert.ok(p.offIn < 0.75, `${label}: L${p.level} ${p.offIn.toFixed(2)}in off the goal's middle`);
+    // odometry alone: not one wall reset, and the localizer's corrections off
+    assert.deepEqual(run.sim.robot.events.filter((e) => /^reset|goal_reset/.test(e.text)).map((e) => e.text), [], label);
   }
 });
 
-test('Triple Pin (paths) resets only where its sensors\' cones see clean wall, on the real field', () => {
-  const field = F.override();
-  const T = field.tilePitchIn;
-  const without = (gone) => field.objects.filter((o) => !(o.kind === 'pin' && gone.some(([x, y]) => Math.hypot(o.xIn - x, o.yIn - y) < 0.5)));
-  const robot = (deg) => ROBOT_SENSOR_MOUNTS.find((m) => m.facingDeg === deg);
-  const leg = TRIPLE_PIN.toThirdPin;
-  const at = (point) => ({ xIn: point.xIn, yIn: point.yIn, headingDeg: 270 });
-  // the stop east of the third Pin (point 3) with the second Pin gone, and on the third Pin with it
-  // in the claw: an inch and 3 degrees either way of the plan, with config.hpp's sensors
-  const checks = [
-    { where: 'east of the third Pin', pose: at(leg[1].waypoints[1]), sensor: robot(270), axis: 'y', gone: [[-T, -T]] },
-    { where: 'on the third Pin', pose: at(leg[2].waypoints[0]), sensor: robot(0), axis: 'x', gone: [[-T, -T], [-2 * T, -2 * T]] },
-    { where: 'on the third Pin', pose: at(leg[2].waypoints[0]), sensor: robot(270), axis: 'y', gone: [[-T, -T], [-2 * T, -2 * T]] },
-  ];
-  for (const c of checks) {
-    for (const dx of [-1, 0, 1]) {
-      for (const dy of [-1, 0, 1]) {
-        for (const dh of [-3, 0, 3]) {
-          const pose = { xIn: c.pose.xIn + dx, yIn: c.pose.yIn + dy, headingDeg: c.pose.headingDeg + dh };
-          const r = F.wallResetCheck(field, pose, c.sensor,
-            { cornerMarginIn: ROBOT_WALL_RESET.cornerMarginIn, objects: without(c.gone), toleranceIn: dh ? 0.5 : 0.25 });
-          assert.ok(r.ok && r.axis === c.axis, `${c.where}, off by (${dx}, ${dy}, ${dh}): ${r.why}`);
-        }
+test('Triple Pin (points) gets the second Pin where the field has it, even on a robot slower than its models', () => {
+  // SL000060: the robot lagged its plans by up to 4in, and the routine ended with the claw open. A
+  // robot 15% and 30% slower than the models it drives by does the same without ontoPin()'s creep
+  for (const slower of [1.0, 1.15, 1.3]) {
+    const run = runRoutine(triplePin, (o) => {
+      o.world.models = JSON.parse(JSON.stringify(kRobotModels));
+      for (const axis of ['forward', 'strafe', 'turn']) {
+        o.world.models[axis].kV *= slower;
+        o.world.models[axis].kA *= slower;
       }
-    }
-  }
-  // and where the routine's comment says it doesn't reset, it couldn't
-  const skipped = [
-    [{ xIn: -60.6, yIn: -5, headingDeg: 90 }, robot(180), /Toggle/], // back on the Toggle after the rams
-    [{ xIn: -60.6, yIn: -5, headingDeg: 90 }, robot(90), /corner/],
-    [TRIPLE_PIN.toGoal[1].waypoints[0], robot(90), /cup/], // on the goal from the north
-    [{ xIn: -41.79, yIn: -23.55, headingDeg: 270 }, robot(0), /red goal/], // on it from the east
-    [TRIPLE_PIN.toSecondPin[2].waypoints[0], robot(0), /red goal/], // the second Pin
-    [TRIPLE_PIN.toSecondPin[2].waypoints[0], robot(90), /red goal/],
-  ];
-  for (const [point, mount, why] of skipped) {
-    const pose = { xIn: point.xIn, yIn: point.yIn, headingDeg: point.headingDeg === undefined ? 180 : point.headingDeg };
-    const r = F.wallResetCheck(field, pose, mount, { cornerMarginIn: ROBOT_WALL_RESET.cornerMarginIn });
-    assert.ok(!r.ok && why.test(r.why), `(${pose.xIn}, ${pose.yIn}): ${r.why || 'ok'}`);
+    }, deviceGains((sim) => { if (sim.world.timeMs === 0) sim.robot.drivetrain.setAxisModels(kRobotModels); }));
+    const grabs = grabsOf(run);
+    assert.match(grabs[0] || '', /\(-23\.5, -23\.5\)/, `${slower}x slower: ${grabs.join('; ')}`);
+    assert.equal(run.sim.robot.macros.scored().length, 3, `${slower}x slower`);
   }
 });
 
-test('Triple Pin (paths): a bump on the way to the third Pin costs it the Pin, unless the resets put it back', () => {
-  const bump = (sim) => { if (sim.world.timeMs === 9500) sim.world.bump(0, 1.0); };
-  const errorAt = new Map();
-  const run = runRoutine(triplePin, () => {}, (sim) => {
-    bump(sim);
-    errorAt.set(sim.world.timeMs, sim.errors().corrected);
+test('Triple Pin (points): each run onto a Pin is at autoClaw speed for its last third, and no turn after it is held to 5V', () => {
+  // each moveToPoint()'s target and where the robot was as it started, each approach's start (its
+  // volts cap, whether a camera steers it), each turn's volts cap, the robot's true speed each
+  // tick, and when autoClaw turns on
+  const moves = [];
+  const approaches = [];
+  const turns = [];
+  const ticks = [];
+  const autoClawAt = [];
+  let wasOn = false;
+  let prev = null;
+  const run = runRoutine(triplePin, robotModels, deviceGains((sim) => {
+    const dt = sim.robot.drivetrain;
+    if (!dt.wrappedForTest) {
+      const moveToPoint = dt.moveToPoint.bind(dt);
+      dt.moveToPoint = (xIn, yIn, exit) => {
+        moves.push({ tMs: sim.world.timeMs, target: { xIn, yIn }, from: sim.robot.odometry.getPose() });
+        return moveToPoint(xIn, yIn, exit);
+      };
+      const approach = dt.approach.bind(dt);
+      dt.approach = (target, config, refine) => {
+        approaches.push({ tMs: sim.world.timeMs, target, maxVolts: config.maxVolts, refine: !!refine });
+        return approach(target, config, refine);
+      };
+      const turnToHeading = dt.turnToHeading.bind(dt);
+      dt.turnToHeading = (headingDeg, exit, direction) => {
+        turns.push({ tMs: sim.world.timeMs, maxVolts: exit.maxVolts });
+        return turnToHeading(headingDeg, exit, direction);
+      };
+      dt.wrappedForTest = true;
+    }
+    const truth = sim.world.truth;
+    if (prev) ticks.push({ tMs: sim.world.timeMs, truth: Object.assign({}, truth), speed: Math.hypot(truth.xIn - prev.xIn, truth.yIn - prev.yIn) / 0.01 });
+    prev = Object.assign({}, truth);
+    const on = !!sim.robot.macros && sim.robot.macros.autoClaw();
+    if (on && !wasOn) autoClawAt.push({ tMs: sim.world.timeMs, pose: sim.robot.odometry.getPose() });
+    wasOn = on;
+  }));
+  assert.ok(run.finished);
+  assert.equal(autoClawAt.length, 2);
+  // what autoClaw's speed limit lets the robot's forward axis hold
+  const fiveVoltInPerS = (M.kClawSpeedVolts - kRobotModels.forward.kS) / kRobotModels.forward.kV;
+  [TRIPLE_PIN.secondPin, TRIPLE_PIN.thirdPin].forEach((pin, i) => {
+    const label = `Pin ${i + 2}`;
+    const toSeat = (p) => Math.hypot(pin.xIn - p.xIn, pin.yIn - p.yIn) - RT.kPinSeatIn;
+    // the run: from where the moveToPoint() before autoClaw started, facing the Pin, to the seat
+    const move = moves.filter((m) => m.tMs <= autoClawAt[i].tMs).pop();
+    const runIn = toSeat(move.from);
+    near(toSeat(move.target), runIn / 3, 0.05, `${label}: the moveToPoint() ends a third of the run out`);
+    // autoClaw on at the hand-off: a third of the run to go, or up to the chained move's 3in more
+    const leftIn = toSeat(autoClawAt[i].pose);
+    assert.ok(leftIn >= runIn / 3 - 0.5 && leftIn <= runIn / 3 + 3.5, `${label}: autoClaw on with ${leftIn.toFixed(1)}in to go of ${runIn.toFixed(1)}`);
+    // the approach starting with it, held to autoClaw's 5V, no camera steering it, aimed at the Pin
+    const a = approaches.find((x) => x.tMs >= autoClawAt[i].tMs);
+    assert.ok(a.tMs - autoClawAt[i].tMs <= 10, `${label}: approach at ${a.tMs} ms, autoClaw at ${autoClawAt[i].tMs}`);
+    assert.equal(a.maxVolts, M.kClawSpeedVolts, `${label}: the approach's volts`);
+    assert.equal(a.refine, false, `${label}: no camera`);
+    assert.deepEqual(a.target, { xIn: pin.xIn, yIn: pin.yIn });
+    // the robot no faster than autoClaw's 5V lets it go, the whole last third
+    const lastThird = ticks.filter((t) => t.tMs >= autoClawAt[i].tMs && t.tMs <= autoClawAt[i].tMs + 1500 && toSeat(t.truth) >= 0);
+    const fastest = Math.max(...lastThird.map((t) => t.speed));
+    assert.ok(fastest < fiveVoltInPerS, `${label}: ${fastest.toFixed(1)} in/s in the last third, past autoClaw's ${fiveVoltInPerS.toFixed(1)}`);
   });
-  const events = run.sim.robot.events;
-  const firstReset = events.find((e) => /^resetLeft/.test(e.text));
-  const grab = events.find((e) => /autoClaw grabbed/.test(e.text) && e.tMs > firstReset.tMs);
-  // (each tick's error is taken before the tick, so the one before the reset's is the tick before)
-  assert.ok(errorAt.get(firstReset.tMs - 10) > 1.0, `before the resets ${errorAt.get(firstReset.tMs - 10)}`);
-  assert.ok(errorAt.get(grab.tMs) < 0.5, `at the grab ${errorAt.get(grab.tMs)}`);
-  assert.equal(run.sim.robot.macros.scored().length, 3);
-  // without them, the claw runs past the Pin's side and never shuts on it
-  const blind = withoutResets(() => runRoutine(triplePin, () => {}, bump));
-  assert.equal(blind.sim.robot.macros.scored().length, 2);
+  // autoClaw's lead assumes the speed holds as the Pin comes in: here it does
+  const speeds = run.sim.robot.events.filter((e) => /autoClaw grabbed/.test(e.text)).map((e) => +e.text.match(/([\d.]+) in\/s/)[1]);
+  assert.equal(speeds.length, 2);
+  for (const s of speeds) near(s, RT.kPinApproach.cruiseInPerS, 1.5, 'grab speed');
+  // the claw shuts on each Pin where the field has it
+  const grabs = grabsOf(run);
+  assert.match(grabs[0] || '', /\(-23\.5, -23\.5\)/, grabs.join('; '));
+  assert.match(grabs[1] || '', /\(-47\.1, -47\.1\)/, grabs.join('; '));
+  // autoClaw off once the claw has the Pin: every turn at full volts
+  assert.deepEqual(turns.filter((t) => t.maxVolts < 12).map((t) => t.tMs), []);
 });
 
-test('averaged resets: four readings land nearer than one', () => {
-  const averaged = { x: [], y: [] };
-  const single = { x: [], y: [] };
-  for (let seed = 1; seed <= 24; ++seed) {
-    for (const [out, readings] of [[averaged, 4], [single, 1]]) {
-      const options = SIM.defaultOptions();
-      options.world.seed = seed;
-      // still on the third Pin's spot, with the robot's sensors, odometry an inch off each way
-      const spot = { xIn: TRIPLE_PIN.toThirdPin[2].waypoints[0].xIn, yIn: -47.09, headingDeg: 270 };
-      const sim = new SIM.Simulation(options);
-      sim.runRoutine({ name: 'test', start: spot, world: triplePin.world, *run(robot) {
-        const a = A.create(robot, { wallReset: ROBOT_WALL_RESET });
-        a.setPose(spot.xIn + 1, spot.yIn - 1, spot.headingDeg);
-        yield* a.delay(100);
-        yield* RT.averagedResets(a, [[a.resetFront, 'x'], [a.resetLeft, 'y']], readings);
-      } });
-      while (sim.program) sim.tick();
-      const pose = sim.robot.odometry.getPose();
-      out.x.push(pose.xIn - sim.world.truth.xIn);
-      out.y.push(pose.yIn - sim.world.truth.yIn);
-    }
-  }
-  const rms = (v) => Math.sqrt(v.reduce((sum, e) => sum + e * e, 0) / v.length);
-  for (const axis of ['x', 'y']) {
-    assert.ok(rms(averaged[axis]) < 0.7 * rms(single[axis]), `${axis}: ${rms(averaged[axis])} vs one reading's ${rms(single[axis])}`);
-    assert.ok(rms(averaged[axis]) < 0.5, `${axis}: ${rms(averaged[axis])}`);
-  }
-});
-
-test('Triple Pin (paths): its legs plan, and only the goal it scores on is in the footprint\'s way', () => {
+test('Triple Pin (points): the robot touches the wall only in the rams, and a Goal only as the one it scores on comes into the aligner', () => {
   const field = F.override();
-  const models = W.defaultSettings().models;
-  // where it takes the goal into the front of the robot, and backs off it
-  const onGoal = [[-47.09, -18.25], [-41.79, -23.55]];
-  for (const size of [15, 16, 17]) {
-    for (const leg of TRIPLE_PIN_LEGS) {
-      const plan = T.generateTrajectory(TRIPLE_PIN[leg], models);
-      assert.ok(plan.ok, `${leg}: ${plan.error}`);
-      for (const s of plan.trajectory.samples) {
-        for (const hit of F.footprintHits(F.footprint(s, size, size), field)) {
-          const scoring = hit === 'red goal (left)' && onGoal.some(([x, y]) => Math.hypot(s.xIn - x, s.yIn - y) <= 6.6);
-          assert.ok(scoring, `${size}in, ${leg} at ${s.tS.toFixed(2)}s: ${hit}`);
-        }
+  const W = require('../js/world.js');
+  // the robot's footprint, 13.75 x 17in, its middle (kFrontIn - back) / 2 ahead of the tracking
+  // center: its front edge is kFrontIn ahead, its back the rest of the 17in behind
+  const back = RT.kRobotLengthIn - RT.kFrontIn;
+  const middleAheadIn = (RT.kFrontIn - back) / 2;
+  const footprint = (p) => {
+    const a = p.headingDeg * Math.PI / 180;
+    return F.footprint({ xIn: p.xIn + middleAheadIn * Math.sin(a), yIn: p.yIn + middleAheadIn * Math.cos(a), headingDeg: p.headingDeg },
+      RT.kRobotWidthIn, RT.kRobotLengthIn);
+  };
+  // The footprint is a plain rectangle, without the goal aligner's 3.5in recess in its front: a
+  // Goal at the front edge is the Goal coming into the aligner, square to it, which is how every
+  // score starts. So the goal it scores on may touch it there: its middle ahead, from where it
+  // first reaches the front edge back to an inch past where it seats, and no further across than
+  // what the aligner takes (world.js's goalStopHalfWidthIn). Anywhere else on the robot, or any
+  // other Goal, is a collision
+  const across = W.defaultSettings().goalStopHalfWidthIn;
+  const inTheAligner = (p) => {
+    const g = TRIPLE_PIN.goal;
+    const a = p.headingDeg * Math.PI / 180;
+    const dx = g.xIn - p.xIn;
+    const dy = g.yIn - p.yIn;
+    const ahead = dx * Math.sin(a) + dy * Math.cos(a);
+    const right = dx * Math.cos(a) - dy * Math.sin(a);
+    return ahead >= RT.kGoalSeatIn - 1.0 && ahead <= RT.kFrontIn + 5.61 / Math.sqrt(3) + 0.5 && Math.abs(right) <= across;
+  };
+  for (const [label, tweak, during] of kTriplePinCases) {
+    const hits = [];
+    runRoutine(triplePin, tweak, during((sim) => {
+      const truth = sim.world.truth;
+      // the rams: pinned against the left wall, facing away from it
+      const ramming = truth.xIn < -60 && Math.abs(truth.headingDeg - 90) < 3;
+      for (const hit of F.footprintHits(footprint(truth), field)) {
+        if (hit === 'wall' && ramming) continue;
+        if (hit === 'red goal (left)' && inTheAligner(truth)) continue;
+        hits.push(`${hit} at ${sim.world.timeMs} ms, (${truth.xIn.toFixed(1)}, ${truth.yIn.toFixed(1)}) facing ${truth.headingDeg.toFixed(0)}`);
       }
-    }
+    }));
+    assert.deepEqual(hits.slice(0, 5), [], label);
   }
 });
+
+test('Triple Pin (points) stops on its stops: within 0.75in of each, with the robot\'s models and gains', () => {
+  // each stop is on the line the robot gets to it along (backTo() and offGoalTo() back straight
+  // along its heading), so it stops on the point, not beside it; and the push floors (devices.cpp,
+  // robot.js's kPushFloorVolts) carry each drive into its exit. Odometry's pose: where it thinks
+  // it is, which is what the routine's numbers say
+  const stops = ['aboveGoal', 'afterL1', 'afterSecondPin', 'afterL2', 'belowGoal', 'afterL3'];
+  const closest = Object.fromEntries(stops.map((k) => [k, Infinity]));
+  runRoutine(triplePin, robotModels, deviceGains((sim) => {
+    const p = sim.robot.odometry.getPose();
+    for (const k of stops) closest[k] = Math.min(closest[k], Math.hypot(p.xIn - TRIPLE_PIN[k].xIn, p.yIn - TRIPLE_PIN[k].yIn));
+  }));
+  for (const k of stops) assert.ok(closest[k] < 0.75, `${k}: ${closest[k].toFixed(2)}in at the closest`);
+});
+
+test('followTrajectory() with until hands off still moving, and approach() carries straight on', () => {
+  const start = { xIn: 0, yIn: -48, headingDeg: 0 };
+  let handoff = null;
+  const run = runMotion(start, function* (robot) {
+    const a = A.create(robot);
+    const leg = [{ waypoints: [{ xIn: 0, yIn: -48, headingDeg: 0 }, { xIn: 0, yIn: 0 }] }];
+    const followed = yield* a.followTrajectory(leg, { until: () => robot.odometry.getPose().yIn >= -30 });
+    handoff = { reason: followed.reason, speedInPerS: robot.odometry.snapshot().rawVelocity.yInPerS,
+      volts: robot.drivetrain.applied.forward, yIn: robot.odometry.getPose().yIn };
+    return yield* a.approach(0, 0, { cruiseInPerS: 18, endShortIn: 6 });
+  });
+  assert.equal(handoff.reason, 'settled');
+  near(handoff.yIn, -30, 1.0, 'handed off where until said');
+  assert.ok(handoff.speedInPerS > 15, `${handoff.speedInPerS.toFixed(1)} in/s at the handoff`);
+  assert.ok(handoff.volts > 1, `${handoff.volts.toFixed(2)}V left on, not braked`);
+  assert.equal(run.result.reason, 'settled');
+  near(run.sim.robot.odometry.getPose().yIn, -6, 1.0, 'ended its end short of the target');
+});
+
+function near(actual, expected, tolerance, label) {
+  assert.ok(Math.abs(actual - expected) <= tolerance, `${label}: ${actual} vs ${expected}`);
+}

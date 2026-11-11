@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "pros/rtos.hpp"
 #include "sapphirelib/chassis/competition_watch.hpp"
@@ -666,6 +667,8 @@ motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Traject
 
     const CompetitionWatch watch;
     bool interrupted = false;
+    // config.until said to hand off: end here, still moving
+    bool handedOff = false;
     motion::TrajectoryFollower follower(trackingForwardPID_, trackingStrafePID_, trackingTurnPID_);
     follower.begin(trajectory, models, config, pros::millis());
     // this motion's progress from the start, numbered so nobody mistakes the last one's for it
@@ -713,13 +716,23 @@ motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Traject
             interrupted = true;
             break;
         }
+        // handed off: the volts above stay on for the next motion to take over from
+        if (config.until && config.until()) {
+            handedOff = true;
+            break;
+        }
         pros::delay(kLoopDelayMs);
     }
 
-    stop();
+    if (!handedOff) stop();
     motion::MotionResult result = follower.result();
-    if (interrupted) {
-        result.reason = motion::ExitReason::interrupted;
+    if (handedOff) {
+        result.reason = motion::ExitReason::settled;
+        telemetry::event("motion", "handoff,followTrajectory,distance_in=%.3f",
+                         follower.progress().distanceIn);
+    }
+    if (interrupted || handedOff) {
+        if (interrupted) result.reason = motion::ExitReason::interrupted;
         // the follower still thinks it's running; nobody else will say otherwise
         publishProgress(motion::TrajectoryProgress{.running = false,
                                                    .section = follower.progress().section,
@@ -734,6 +747,63 @@ motion::MotionResult HolonomicDrivetrain::followTrajectory(const motion::Traject
                                                            motion::TrajectoryFollowConfig config) {
     if (odometry_ == nullptr) return abortMotion("followTrajectory", kNoOdometry);
     return followTrajectory(trajectory, *odometry_, config);
+}
+
+motion::MotionResult HolonomicDrivetrain::approach(motion::FieldPoint target,
+                                                   const odom::Odometry& odometry,
+                                                   motion::ApproachConfig config,
+                                                   motion::ApproachRefiner refine) {
+    // read once, as followTrajectory() does
+    const HolonomicAxisModels models = axisModels();
+    if (!models.forward.valid()) {
+        return abortMotion("approach",
+                           "no forward axis model - run Auto-Tune, or setAxisModels() / TUNE.CFG");
+    }
+    config.maxVolts = std::clamp(config.maxVolts, 0.0, kFullScaleVolts);
+
+    // the speed it takes over at: forward along the way it faces, as the claw's lead measures it
+    const odom::Odometry::Snapshot first = odometry.snapshot();
+    const double headingRad = first.pose.headingDeg * (kPi / 180.0);
+    const double startInPerS = first.rawVelocity.xInPerS * std::sin(headingRad) +
+                               first.rawVelocity.yInPerS * std::cos(headingRad);
+    telemetry::event("motion",
+                     "start,approach,x=%.3f,y=%.3f,cruise_ips=%.1f,start_ips=%.1f,end_short_in=%.2f,"
+                     "timeout_ms=%u",
+                     target.xIn, target.yIn, config.cruiseInPerS, startInPerS, config.endShortIn,
+                     static_cast<unsigned>(config.timeoutMs));
+
+    const CompetitionWatch watch;
+    bool interrupted = false;
+    motion::TargetApproach controller(trackingForwardPID_, trackingTurnPID_);
+    controller.begin(config, startInPerS, pros::millis());
+
+    while (true) {
+        const odom::Odometry::Snapshot snapshot = odometry.snapshot();
+        if (refine) refine(snapshot.pose, target);
+        const motion::ApproachTick tick =
+            controller.update(snapshot.pose, snapshot.rawVelocity, target, models.forward,
+                              models.turn, pros::millis());
+        holonomicVolts(tick.forwardVolts, 0.0, tick.turnVolts, config.maxVolts);
+        if (controller.reason() != motion::ExitReason::running) break;
+        // autonomous ended (or a disable) under it: stop, rather than drive on into driver control
+        if (watch.changed()) {
+            interrupted = true;
+            break;
+        }
+        pros::delay(kLoopDelayMs);
+    }
+
+    stop();
+    motion::MotionResult result = controller.result();
+    if (interrupted) result.reason = motion::ExitReason::interrupted;
+    return finishMotion("approach", result);
+}
+
+motion::MotionResult HolonomicDrivetrain::approach(motion::FieldPoint target,
+                                                   motion::ApproachConfig config,
+                                                   motion::ApproachRefiner refine) {
+    if (odometry_ == nullptr) return abortMotion("approach", kNoOdometry);
+    return approach(target, *odometry_, config, std::move(refine));
 }
 
 double HolonomicDrivetrain::degreesToInches(double degrees) const {

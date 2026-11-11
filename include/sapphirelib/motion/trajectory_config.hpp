@@ -173,6 +173,18 @@ struct TrajectoryFollowConfig {
      * trajectory's last point from speed, on feedback alone, which overshoots: always return one
      */
     std::function<const Trajectory*(const Trajectory& ending)> next;
+
+    /**
+     * ends the follow early, still moving, on the first tick this returns true: the motors keep
+     * that tick's volts for the motion after it to take over at speed, as a chained motion leaves
+     * them (chassis::ExitConditions::chain). For handing a trajectory off part way to a motion
+     * that steers by a sensor (auton::approach()). The result is settled, with finalError the
+     * distance to the plan's last point as usual.
+     *
+     * Runs on the motion's task inside the control loop, so it must be quick. Empty (the default)
+     * follows to the end
+     */
+    std::function<bool()> until;
 };
 
 } // namespace sapphirelib::motion

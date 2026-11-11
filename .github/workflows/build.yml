@@ -89,6 +89,8 @@ jobs:
               tests/motion/pure_pursuit_math_test.cpp) extra="src/sapphirelib/motion/path.cpp" ;;
               tests/motion/trajectory_path_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
               tests/motion/turn_math_test.cpp) extra="src/sapphirelib/util/angle.cpp" ;;
+              tests/motion/target_approach_test.cpp)
+                extra="src/sapphirelib/motion/exit_tracker.cpp src/sapphirelib/control/pid.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/util/angle.cpp" ;;
               tests/motion/trajectory_generator_test.cpp)
                 extra="src/sapphirelib/motion/trajectory.cpp src/sapphirelib/motion/trajectory_path.cpp src/sapphirelib/motion/holonomic_feedforward.cpp src/sapphirelib/control/feedforward.cpp src/sapphirelib/util/angle.cpp" ;;
               tests/motion/boomerang_math_test.cpp)

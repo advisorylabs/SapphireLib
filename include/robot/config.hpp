@@ -64,11 +64,13 @@ constexpr char kLiftBottomSwitch = 'A';
 // Sees a pin in the claw: autoClaw closes on it at the bottom, and the Branch
 // autons pick their branch by it.
 constexpr std::uint8_t kClawDistance = 15;
-// The two pistons, on 3-wire ports (not smart ports). R1 opens and closes the
-// claw, a score opens it, and autoClaw closes it; Y pushes the side piston out
-// and pulls it back in (see macros.hpp).
+// The pistons, on 3-wire ports (not smart ports). R1 opens and closes the
+// claw, a score opens it, and autoClaw closes it. Y pushes both side toggles
+// out and pulls them back in, and each one out also fires on its own when its
+// sensors see something (see Side toggles below, and macros.hpp).
 constexpr char kClawPiston = 'B';
-constexpr char kSidePiston = 'H';
+constexpr char kLeftTogglePiston = 'H';
+constexpr char kRightTogglePiston = 'G';
 
 // --- Localization distance sensors (devices.cpp) ---
 // One per side, for Monte Carlo localization. The team calls them by
@@ -77,6 +79,25 @@ constexpr std::uint8_t kDistanceFront = 21;  // north
 constexpr std::uint8_t kDistanceRight = 8; // east
 constexpr std::uint8_t kDistanceBack = 11;  // south
 constexpr std::uint8_t kDistanceLeft = 12;   // west
+
+// --- Side toggles (macros.cpp) ---
+// Each side's toggle fires when its distance sensor reads close enough and
+// its optical sensor sees red, yellow or blue (macros.cpp's kToggle*). The
+// distance sensors are the localizer's west and east ones above; give a
+// toggle its own here if it gets one.
+constexpr std::uint8_t kLeftToggleOptical = 17;
+constexpr std::uint8_t kRightToggleOptical = 1; // on 18 until the AI Vision sensor took it
+constexpr std::uint8_t kLeftToggleDistance = kDistanceLeft;
+constexpr std::uint8_t kRightToggleDistance = kDistanceRight;
+
+// --- AI Vision sensor (vision.cpp) ---
+// Sees the yellow/yellow Pins with its own AI model of the game elements, for
+// a routine's run onto one to steer by (vision.hpp). No routine does now: the
+// Triple Pin's runs end in an approach() without a camera. Driver control
+// never reads it, autoClaw included. It has to be
+// running the competition model (VEXcode's AI Vision Utility sets that). The
+// Diagnostics page checks it ("AI Vision sensor").
+constexpr std::uint8_t kVision = 18;
 
 } // namespace robot::ports
 
@@ -119,8 +140,8 @@ constexpr double kHorizontalWheelDiameterIn = 2.043;
 // phantom travel into the pose. TODO: check once on the robot: on the Odom
 // page, spin in place a few turns and watch x/y, which should barely move;
 // or run "Calibrate Offsets" and compare its signs with these.
-constexpr double kVerticalWheelOffsetIn = 0.01;
-constexpr double kHorizontalWheelOffsetIn = 0.0;
+constexpr double kVerticalWheelOffsetIn = 0.00;
+constexpr double kHorizontalWheelOffsetIn = 0.82;
 
 // Where each localization distance sensor's face sits, measured from the
 // tracking center (see DistanceSensorMount): inches forward (negative is
@@ -157,5 +178,17 @@ constexpr double kLeftSensorRightIn = -4.88;
 // pieces facing each other.
 constexpr double kSensorCalibrationBoxWidthIn = 0.0;
 constexpr double kSensorCalibrationBoxDepthIn = 0.0;
+
+// Where the AI Vision sensor's lens sits, from the tracking center: inches
+// forward and right (as the distance sensors above), and which way it looks,
+// degrees off the robot's front (positive turned right). With right and yaw
+// both 0 the camera is on the robot's centerline looking straight ahead, so a
+// Pin centered in its image is a Pin centered on the claw, which is what the
+// steering aims for (vision.cpp). Mounted off the centerline or turned, set
+// them and it still aims the claw, not the image's middle, at the Pin.
+// TODO: measure all three; these are the centerline guess.
+constexpr double kVisionForwardIn = -6.0;
+constexpr double kVisionRightIn = 0.0;
+constexpr double kVisionYawDeg = 0.0;
 
 } // namespace robot

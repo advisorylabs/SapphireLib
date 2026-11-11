@@ -402,6 +402,14 @@ motion::MotionResult followTrajectory(const std::vector<motion::TrajectorySectio
     return holonomic->followTrajectory(plan.result.trajectory, *odometry, std::move(config));
 }
 
+motion::MotionResult approach(double xIn, double yIn, motion::ApproachConfig config,
+                              motion::ApproachRefiner refine) {
+    if (holonomic == nullptr) return holonomicOnly("approach");
+    if (auto skip = begin("approach")) return *skip;
+    config.maxVolts = limitedVolts(config.maxVolts);
+    return holonomic->approach({.xIn = xIn, .yIn = yIn}, *odometry, config, std::move(refine));
+}
+
 bool planTrajectory(const std::vector<motion::TrajectorySection>& sections) {
     if (holonomic == nullptr) {
         holonomicOnly("planTrajectory");
@@ -499,6 +507,16 @@ void setMcl(bool on) {
         return;
     }
     localizer->setCorrectionEnabled(on);
+}
+
+void setMclFromHere() {
+    if (localizer == nullptr) {
+        SAPPHIRELIB_LOG_ERROR("auton", "setMclFromHere: no localizer - pass one to auton::use()");
+        return;
+    }
+    // the restart lands at the localizer's next update, before any correction it makes
+    localizer->restartHere();
+    localizer->setCorrectionEnabled(true);
 }
 
 } // namespace sapphirelib::auton

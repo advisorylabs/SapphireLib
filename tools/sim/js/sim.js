@@ -56,20 +56,21 @@
      * routine changes about the world for its run (its `world`, see runRoutine()), on top of the
      * page's settings and without changing them.
      */
-    reset(start = this.options.start, world = this.worldOverrides || null) {
+    reset(start = this.options.start, world = this.worldOverrides || null, localizer = this.localizerOverrides || null) {
       const o = this.options;
       this.worldOverrides = world;
+      this.localizerOverrides = localizer;
       this.world = new W.World(world ? Object.assign({}, o.world, world) : o.world, start);
       this.gains = this.currentGains();
       this.robot = new R.Robot(this.world, {
         odometryConfig: { verticalOffsetIn: o.world.verticalOffsetIn, horizontalOffsetIn: o.world.horizontalOffsetIn },
-        localizer: o.localizer,
+        localizer: localizer ? Object.assign({}, o.localizer, localizer.config || {}) : o.localizer,
         gains: this.gains,
         startPose: start,
         mapFor: () => this.localizerMap(),
         mounts: o.localizerMounts,
       });
-      this.robot.localizerPeriodMs = o.localizerPeriodMs;
+      this.robot.localizerPeriodMs = (localizer && localizer.periodMs) || o.localizerPeriodMs;
       this.robot.localizer.setCorrectionEnabled(o.correctOdometry);
       this.robot.drivetrain.setAxisModels(o.world.models);
       this.program = null;
@@ -81,12 +82,20 @@
       this.robot.localizer.update();
     }
 
-    /** The localizer's map: the walls, plus the elements it's told about. */
+    /**
+     * The localizer's map: the walls, plus the elements it's told about: every one with
+     * elementsInMap, and otherwise those marked inMap (a routine's world: Triple Pin's Loaders,
+     * as devices.cpp's fieldMap() has them).
+     */
     localizerMap() {
       const o = this.options;
+      const settings = this.world ? this.world.settings : o.world;
       const map = L.FieldMap.centered(o.world.fieldSizeIn);
-      if (o.elementsInMap) {
-        for (const e of o.world.elements) map.addBox(e.minXIn, e.minYIn, e.maxXIn, e.maxYIn);
+      for (const e of settings.elements) {
+        if (o.elementsInMap || e.inMap) map.addBox(e.minXIn, e.minYIn, e.maxXIn, e.maxYIn);
+      }
+      for (const r of settings.recesses || []) {
+        if (r.inMap) map.addBlindStretch({ x1In: r.x1In, y1In: r.y1In, x2In: r.x2In, y2In: r.y2In });
       }
       return map;
     }
@@ -124,7 +133,7 @@
      * own distance sensors, say. Its changes last until the next routine.
      */
     runRoutine(routine) {
-      this.reset(routine.start, routine.world || null);
+      this.reset(routine.start, routine.world || null, routine.localizer || null);
       if (routine.script) this.world.setScript(routine.script);
       this.programName = routine.name;
       this.program = routine.run(this.robot);

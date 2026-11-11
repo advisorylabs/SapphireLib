@@ -152,6 +152,10 @@ void MonteCarloLocalizer::update() {
         // setPose() cleared odometry's correction
         correctionXIn_.store(0.0);
         correctionYIn_.store(0.0);
+        restartRequested_.store(false);
+    } else if (restartRequested_.exchange(false)) {
+        // around odometry's pose, its correction kept: the estimate starts where odometry is
+        filter_.reset(snapshot.pose.xIn, snapshot.pose.yIn, config_.startSpreadIn);
     }
 
     // predict from raw odometry's travel, which a correction easing in never moves
@@ -181,6 +185,17 @@ void MonteCarloLocalizer::update() {
         const SensorRay ray = sensorRay(0.0, 0.0, beamHeadingDeg, filter_.sensors()[s]);
         const double closingSpeed = velocityX * ray.dirX + velocityY * ray.dirY;
         reading = compensateLatency(reading, closingSpeed, latencyS);
+        // a beam landing on a stretch of wall that doesn't read where the wall is (a Toggle, see
+        // FieldMap::addBlindStretch()), from where odometry has the robot, is left out: it reads a
+        // believable wall a few inches from where the wall is
+        if (reading.valid && !filter_.map().blindStretches().empty()) {
+            const SensorRay beam = sensorRay(snapshot.pose.xIn, snapshot.pose.yIn, beamHeadingDeg,
+                                             filter_.sensors()[s]);
+            if (filter_.map().landsOnBlindStretch(beam.xIn, beam.yIn, beam.dirX, beam.dirY,
+                                                  filter_.config().beam.coneHalfAngleDeg)) {
+                reading.valid = false;
+            }
+        }
         readings_[s] = reading;
         beams_[s].closingSpeedInPerS = closingSpeed;
         if (reading.valid) ++used;
@@ -196,7 +211,10 @@ void MonteCarloLocalizer::update() {
     // matches the walls
     const bool inFieldFrame = !config_.waitForSetPose || snapshot.resetCount > 0;
     std::uint32_t blockedBy = 0;
-    if (!correctionEnabled_.load()) blockedBy |= LocalizationStatus::kCorrectionOff;
+    // a restart asked for since this update's started counts as off: it lands at the next one
+    if (!correctionEnabled_.load() || restartRequested_.load()) {
+        blockedBy |= LocalizationStatus::kCorrectionOff;
+    }
     if (!inFieldFrame) blockedBy |= LocalizationStatus::kNoSetPose;
     if (!weighed) blockedBy |= LocalizationStatus::kNoReadings;
     if (spinning) blockedBy |= LocalizationStatus::kSpinning;
@@ -204,8 +222,18 @@ void MonteCarloLocalizer::update() {
         blockedBy |= LocalizationStatus::kTooSpread;
     }
     if (agreeing < config_.minAgreeingSensors) blockedBy |= LocalizationStatus::kTooFewAgree;
-    const double correctionXIn = estimate.xIn - raw.xIn;
-    const double correctionYIn = estimate.yIn - raw.yIn;
+    // only along an axis some agreeing reading measures: two sensors both on the left wall say
+    // nothing about y, and the particles' y wanders where nothing holds it (SL000070: 3.8in in y
+    // from the left wall alone). An axis none measures keeps the correction it had
+    bool measuresX = false;
+    bool measuresY = false;
+    for (std::size_t s = 0; s < checks_.size(); ++s) {
+        if (!checks_[s].used || !checks_[s].agrees) continue;
+        measuresX = measuresX || checks_[s].measuresX;
+        measuresY = measuresY || checks_[s].measuresY;
+    }
+    const double correctionXIn = measuresX ? estimate.xIn - raw.xIn : correctionXIn_.load();
+    const double correctionYIn = measuresY ? estimate.yIn - raw.yIn : correctionYIn_.load();
     // refused if a setPose() landed since the snapshot; the next update starts over
     if (blockedBy == 0 &&
         !odometry_.setPositionCorrection(correctionXIn, correctionYIn,
@@ -299,6 +327,8 @@ void MonteCarloLocalizer::setCorrectionEnabled(bool enabled) { correctionEnabled
 bool MonteCarloLocalizer::correctionEnabled() const { return correctionEnabled_.load(); }
 
 void MonteCarloLocalizer::relocalizeGlobally() { relocalizeRequested_.store(true); }
+
+void MonteCarloLocalizer::restartHere() { restartRequested_.store(true); }
 
 const LocalizerConfig& MonteCarloLocalizer::config() const { return config_; }
 

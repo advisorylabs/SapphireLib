@@ -9,6 +9,8 @@
  * Team 96671H: Hitmen
  */
 
+#include <atomic>
+
 #include "main.h"
 #include "robot/autocycle.hpp"
 #include "robot/devices.hpp"
@@ -18,6 +20,16 @@
 #include "robot/screen.hpp"
 #include "robot/telemetry.hpp"
 #include "sapphirelib/api.hpp"
+
+namespace {
+
+// Whether driver control's next start is a fresh one, which pushes both side
+// toggles out (opcontrol()): the program's first start of it, or the first
+// after autonomous. Not a re-enable partway through driver control (a field
+// fault), which leaves them where the driver had them.
+std::atomic<bool> freshDriverStart{true};
+
+} // namespace
 
 /**
  * Runs initialization code. This occurs as soon as the program is started.
@@ -105,6 +117,8 @@ void competition_initialize() {
  * from where it left off.
  */
 void autonomous() {
+    // First, so a routine cut off by the end of the period still counts.
+    freshDriverStart.store(true);
     // The claw starts open: autonomous closes it on the preload and lifts it,
     // ahead of the routine. Driver control's start leaves the claw alone.
     // The valves are resent first, as at every enable (resendPistons()).
@@ -129,6 +143,12 @@ void autonomous() {
 void opcontrol() {
     sapphirelib::input::Controller& controller = robot::controller();
 
+    // Driver control starts with both side toggles out, whichever autonomous
+    // left in (a routine can pull the left one in), so both fire on their own
+    // until Y's first press pulls them in. Only on a fresh start
+    // (freshDriverStart).
+    if (freshDriverStart.exchange(false)) robot::macros::setExtended(true);
+
     while (true) {
         // One sample of every button and stick, and this tick's "now".
         controller.update();
@@ -146,10 +166,10 @@ void opcontrol() {
         // sticks drive from that same tick. See robot/autocycle.hpp.
         const bool cycling = robot::autocycle::update(controller);
 
-        // Skip driving from the sticks (and B, the drive's invert) while the
-        // auto cycle or a GUI routine (the Odom page's offset calibration, or
-        // a PID tuner test or Auto-Tune run) is driving the chassis on its
-        // own, see robot::screenBusy().
+        // Skip driving from the sticks while the auto cycle or a GUI routine
+        // (the Odom page's offset calibration, or a PID tuner test or
+        // Auto-Tune run) is driving the chassis on its own, see
+        // robot::screenBusy().
         if (!cycling && !robot::screenBusy()) robot::drive(controller);
 
         // X+UP runs the selected auton, off the field only; X, UP and DOWN

@@ -22,6 +22,7 @@
 #include "robot/devices.hpp"
 #include "robot/macros.hpp"
 #include "robot/tune.hpp"
+#include "robot/vision.hpp"
 
 namespace robot {
 
@@ -309,6 +310,9 @@ void startTelemetry() {
 
     // "lift" PID, "lift.act" and "mech".
     macros::attachTelemetry(log);
+
+    // "vision": every frame the AI Vision sensor shows a run onto a Pin.
+    vision::attachTelemetry(log);
 
     // #meta lines at the top of every file: which TUNE.CFG revision this run
     // used, and the localizer's settings and sensor mounts, so each log says

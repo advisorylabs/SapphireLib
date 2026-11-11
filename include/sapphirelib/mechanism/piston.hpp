@@ -72,8 +72,11 @@ public:
      * A piston built at namespace scope sets its port up from its constructor, before
      * initialize(), and the brain may not take it: the valve can then sit at the port's low state,
      * whatever `extendedAtStart` said, while extended() says otherwise. Call this once the program
-     * is running, and at each enable, so the valve matches. The piston doesn't move as far as the
-     * class knows, so its time in state keeps counting
+     * is running, at each enable, or every tick, so the valve matches. Always writes the level,
+     * even when it hasn't changed, but sets the port up only when the brain doesn't have it as an
+     * output: setting a port up again takes it low, and the write right after can be lost. When it
+     * did set the port up, call it again a tick later. The piston doesn't move as far as the class
+     * knows, so its time in state keeps counting
      */
     void resend();
 
@@ -107,6 +110,8 @@ private:
     // where pneumatics_ is, for resend(): INTERNAL_ADI_PORT for the brain's own ports
     std::uint8_t smartPort_;
     std::uint8_t adiPort_;
+    // whether extended is the port's low state, for resend()'s write
+    bool extendedIsLow_;
 };
 
 } // namespace sapphirelib::mechanism

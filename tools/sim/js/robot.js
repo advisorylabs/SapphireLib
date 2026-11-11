@@ -48,6 +48,34 @@
   const kMaxCorrectionDtS = 0.1;
   // devices.cpp's DrivetrainConfig::headingCorrectionKP, for driveDistance()
   const kHeadingCorrectionKP = 0.4;
+  // devices.cpp's DrivetrainConfig::minForwardVolts, minStrafeVolts and minTurnVolts: the least a
+  // point motion pushes with on each axis until it first gets within its exit threshold (see
+  // atLeast()). Drivetrain.floors; all 0 leaves the motions bare PIDs
+  const kPushFloorVolts = { forward: 1.0, strafe: 4.0, turn: 2.5 };
+
+  // holonomic_drivetrain.cpp's floorOff(): whether a motion's push floor is off, from when the
+  // error first gets within the threshold until it's back past twice the threshold
+  function floorOff(off, error, threshold) {
+    const size = Math.abs(error);
+    if (size <= threshold) return true;
+    if (size > 2.0 * threshold) return false;
+    return off;
+  }
+
+  // holonomic_drivetrain.cpp's atLeast(): volts raised to at least minVolts toward the error while
+  // the floor is on; never against the error (the PID braking)
+  function atLeast(volts, error, minVolts, reached) {
+    if (reached || !(minVolts > 0.0) || volts * error < 0.0 || Math.abs(volts) >= minVolts) return volts;
+    return Math.sign(error) * minVolts;
+  }
+
+  // holonomic_drivetrain.cpp's translationFloor(): the forward and sideways floors, blended by how
+  // much of the way (forwardIn, lateralIn) is each
+  function translationFloor(forwardIn, lateralIn, floors) {
+    const squared = forwardIn * forwardIn + lateralIn * lateralIn;
+    if (!(squared > 0.0)) return 0.0;
+    return (forwardIn * forwardIn * floors.forward + lateralIn * lateralIn * floors.strafe) / squared;
+  }
 
   // --- sensors::Imu --------------------------------------------------------------
 
@@ -235,6 +263,7 @@
       this.clock = clock;
       this.correctionEnabled = this.config.correctOdometry;
       this.relocalizeRequested = false;
+      this.restartRequested = false;
       this.started = false;
       this.lastResetCount = 0;
       this.lastRawPose = { xIn: 0, yIn: 0, headingDeg: 0 };
@@ -270,6 +299,12 @@
         this.lastUpdateMs = nowMs;
         this.status.correctionXIn = 0;
         this.status.correctionYIn = 0;
+        this.restartRequested = false;
+        restarted = true;
+      } else if (this.restartRequested) {
+        // restartHere(): around odometry's pose, its correction kept
+        this.restartRequested = false;
+        this.filter.reset(snapshot.pose.xIn, snapshot.pose.yIn, this.config.startSpreadIn);
         restarted = true;
       }
       const dxIn = raw.xIn - this.lastRawPose.xIn;
@@ -303,6 +338,16 @@
         const ray = L.sensorRay(0.0, 0.0, beamHeadingDeg, this.filter.sensors[s]);
         const closingSpeed = velocityX * ray.dirX + velocityY * ray.dirY;
         r = L.compensateLatency(r, closingSpeed, latencyS);
+        // monte_carlo_localizer.cpp: a beam landing on a blind stretch (a Toggle), from where
+        // odometry has the robot, is left out
+        const map = this.filter.map;
+        if (r.valid && map.blindStretches && map.blindStretches.length) {
+          const p = w.snapshot.pose;
+          const beam = L.sensorRay(p.xIn, p.yIn, beamHeadingDeg, this.filter.sensors[s]);
+          if (map.landsOnBlindStretch(beam.xIn, beam.yIn, beam.dirX, beam.dirY, config.filter.beam.coneHalfAngleDeg)) {
+            r = Object.assign({}, r, { valid: false });
+          }
+        }
         readings.push(r);
         closing.push(closingSpeed);
         if (r.valid) ++used;
@@ -334,8 +379,17 @@
       if (w.spinning) blockedBy |= BLOCKED.spinning;
       if (!(w.estimate.spreadIn <= config.maxCorrectionSpreadIn)) blockedBy |= BLOCKED.tooSpread;
       if (w.agreeing < config.minAgreeingSensors) blockedBy |= BLOCKED.tooFewAgree;
-      const correctionXIn = w.estimate.xIn - w.raw.xIn;
-      const correctionYIn = w.estimate.yIn - w.raw.yIn;
+      // monte_carlo_localizer.cpp: only along an axis some agreeing reading measures; the other
+      // keeps the correction it had
+      let measuresX = false;
+      let measuresY = false;
+      for (const c of w.checks) {
+        if (!c.used || !c.agrees) continue;
+        measuresX = measuresX || c.measuresX;
+        measuresY = measuresY || c.measuresY;
+      }
+      const correctionXIn = measuresX ? w.estimate.xIn - w.raw.xIn : this.status.correctionXIn;
+      const correctionYIn = measuresY ? w.estimate.yIn - w.raw.yIn : this.status.correctionYIn;
       if (blockedBy === 0 && !this.odometry.setPositionCorrection(correctionXIn, correctionYIn,
         config.maxCorrectionRateInPerS, w.snapshot.resetCount)) {
         blockedBy |= BLOCKED.refused;
@@ -416,6 +470,11 @@
 
     relocalizeGlobally() {
       this.relocalizeRequested = true;
+    }
+
+    /** monte_carlo_localizer.cpp's restartHere(): the particles over around odometry's pose next update. */
+    restartHere() {
+      this.restartRequested = true;
     }
   }
 
@@ -661,6 +720,102 @@
     }
   }
 
+  // --- motion::TargetApproach (target_approach.cpp) ----------------------------------
+
+  /** MotorFeedforward::volts(): kS takes the velocity's sign, or the acceleration's from rest. */
+  function motorVolts(model, velocity, acceleration = 0.0) {
+    const sign = (x) => (x > 0 ? 1 : (x < 0 ? -1 : 0));
+    const direction = velocity !== 0 ? sign(velocity) : sign(acceleration);
+    return model.kS * direction + model.kV * velocity + model.kA * acceleration;
+  }
+
+  /** approachSpeedInPerS(): the fastest the robot may go this far from the end and still stop there. */
+  function approachSpeedInPerS(remainingIn, cruiseInPerS, decelInPerS2) {
+    if (!(remainingIn > 0)) return 0.0;
+    const cruise = Math.max(cruiseInPerS, 0.0);
+    if (!(decelInPerS2 > 0)) return cruise;
+    return Math.min(cruise, Math.sqrt(2.0 * decelInPerS2 * remainingIn));
+  }
+
+  // the heading error at which TargetApproach adds the turn model's whole kS
+  const kTurnFrictionRampDeg = 1.5;
+
+  /** ApproachConfig's defaults. */
+  function approachConfig(c = {}) {
+    return Object.assign({ cruiseInPerS: 15.0, accelInPerS2: 60.0, decelInPerS2: 60.0, endShortIn: 0.0,
+      endThresholdIn: 0.5, steerMinIn: 6.0, maxLagIn: 2.0, timeoutMs: 3000, maxVolts: 12.0 }, c);
+  }
+
+  class TargetApproach {
+    constructor(forward, turn) {
+      this.forward = forward;
+      this.turn = turn;
+    }
+
+    begin(config, startSpeedInPerS, nowMs) {
+      this.config = approachConfig(config);
+      this.tracker = new ExitTracker(0, this.config.timeoutMs, nowMs);
+      this.reason = 'running';
+      this.speedRefInPerS = Math.max(startSpeedInPerS, 0.0);
+      this.lagIn = 0.0;
+      this.aimDeg = 0.0;
+      this.aimed = false;
+      this.started = false;
+      this.lastMs = nowMs;
+      this.finalErrorIn = 0.0;
+      this.forward.reset();
+      this.turn.reset();
+    }
+
+    update(pose, velocity, target, forwardModel, turnModel, nowMs) {
+      const c = this.config;
+      const dtS = this.started ? (nowMs - this.lastMs) / 1000.0 : 0.0;
+      this.started = true;
+      this.lastMs = nowMs;
+      const h = pose.headingDeg * kDegToRad;
+      const speedInPerS = velocity.xInPerS * Math.sin(h) + velocity.yInPerS * Math.cos(h);
+      const dx = target.xIn - pose.xIn;
+      const dy = target.yIn - pose.yIn;
+      const tick = { distanceIn: Math.hypot(dx, dy), steering: false };
+      tick.remainingIn = tick.distanceIn - c.endShortIn;
+      if (!this.aimed || tick.distanceIn > c.steerMinIn) {
+        let aim = Math.atan2(dx, dy) / kDegToRad;
+        if (aim < 0) aim += 360.0;
+        this.aimDeg = aim;
+        this.aimed = true;
+        tick.steering = true;
+      }
+      tick.aimDeg = this.aimDeg;
+      tick.headingErrorDeg = L.wrapDegrees180(this.aimDeg - pose.headingDeg);
+
+      const goal = approachSpeedInPerS(tick.remainingIn, c.cruiseInPerS, c.decelInPerS2);
+      const before = this.speedRefInPerS;
+      if (dtS > 0) {
+        this.speedRefInPerS = goal > this.speedRefInPerS
+          ? Math.min(goal, this.speedRefInPerS + c.accelInPerS2 * dtS)
+          : Math.max(goal, this.speedRefInPerS - c.decelInPerS2 * dtS);
+        this.lagIn = Math.min(Math.max(this.lagIn + (this.speedRefInPerS - speedInPerS) * dtS, -c.maxLagIn), c.maxLagIn);
+      }
+      tick.speedRefInPerS = this.speedRefInPerS;
+      tick.accelRefInPerS2 = dtS > 0 ? (this.speedRefInPerS - before) / dtS : 0.0;
+      tick.lagIn = this.lagIn;
+      // PID.updateWithRate()'s explicit dt; 0 falls back to the nominal 10ms, as on the robot
+      tick.forwardVolts = motorVolts(forwardModel, this.speedRefInPerS, tick.accelRefInPerS2) +
+        this.forward.updateWithRate(this.lagIn, 0.0, this.speedRefInPerS - speedInPerS, dtS);
+      // the turn's static friction toward the target, eased in over kTurnFrictionRampDeg
+      const friction = turnModel.kS * Math.min(Math.max(tick.headingErrorDeg / kTurnFrictionRampDeg, -1), 1);
+      tick.turnVolts = friction + this.turn.updateWithRate(tick.headingErrorDeg, 0.0, -velocity.headingDegPerS, dtS);
+
+      this.finalErrorIn = Math.abs(tick.remainingIn);
+      this.reason = this.tracker.update(tick.remainingIn <= c.endThresholdIn, nowMs);
+      return tick;
+    }
+
+    result() {
+      return { reason: this.reason, finalError: this.finalErrorIn, elapsedMs: this.tracker.elapsedMs };
+    }
+  }
+
   class Drivetrain {
     constructor(world, imu, odometry, gains, clock) {
       this.world = world;
@@ -677,6 +832,8 @@
       };
       // setAxisModels(): the sim's are the world's own, as if Auto-Tune measured them perfectly
       this.axisModels = null;
+      // the point motions' push floors (kPushFloorVolts), the robot program's
+      this.floors = Object.assign({}, kPushFloorVolts);
       this.applied = { forward: 0, strafe: 0, turn: 0 };
       // trajectoryProgress(), and the number of the followTrajectory() it's from
       this.progress = { running: false, section: 0, distanceIn: 0, timeS: 0, paused: false, piece: 0 };
@@ -756,13 +913,17 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
+      // whether the push floor is off, see floorOff()
+      let reached = false;
       for (;;) {
         const pose = this.odometry.getPose();
         const dxIn = xIn - pose.xIn;
         const dyIn = yIn - pose.yIn;
         const distanceIn = Math.hypot(dxIn, dyIn);
-        const outputVolts = this.drivePID.update(distanceIn, 0.0);
+        reached = floorOff(reached, distanceIn, exit.errorThreshold);
         const local = toLocalFrame(dxIn, dyIn, pose.headingDeg);
+        const outputVolts = atLeast(this.drivePID.update(distanceIn, 0.0), distanceIn,
+          translationFloor(local.forwardIn, local.lateralIn, this.floors), reached);
         const scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
         const turnOutput = this.turnPID.update(L.wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
         this.driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
@@ -785,16 +946,22 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
+      // whether position's and heading's push floors are off, see floorOff()
+      let positionReached = false;
+      let headingReached = false;
       for (;;) {
         const pose = this.odometry.getPose();
         const dxIn = xIn - pose.xIn;
         const dyIn = yIn - pose.yIn;
         const distanceIn = Math.hypot(dxIn, dyIn);
-        const outputVolts = this.drivePID.update(distanceIn, 0.0);
+        positionReached = floorOff(positionReached, distanceIn, exit.positionErrorThresholdIn);
         const local = toLocalFrame(dxIn, dyIn, pose.headingDeg);
+        const outputVolts = atLeast(this.drivePID.update(distanceIn, 0.0), distanceIn,
+          translationFloor(local.forwardIn, local.lateralIn, this.floors), positionReached);
         const scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
         const headingError = L.wrapDegrees180(headingDeg - pose.headingDeg);
-        const turnOutput = this.turnPID.update(headingError, 0.0);
+        headingReached = floorOff(headingReached, headingError, exit.headingErrorThresholdDeg);
+        const turnOutput = atLeast(this.turnPID.update(headingError, 0.0), headingError, this.floors.turn, headingReached);
         this.driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
         const within = distanceIn <= exit.positionErrorThresholdIn &&
           Math.abs(headingError) <= exit.headingErrorThresholdDeg;
@@ -817,9 +984,12 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorDeg = 0;
+      // whether the push floor is off, see floorOff()
+      let reached = false;
       for (;;) {
         const error = turn.errorDeg(this.imu.getHeadingDeg());
-        const output = this.turnPID.update(error, 0.0);
+        reached = floorOff(reached, error, exit.errorThreshold);
+        const output = atLeast(this.turnPID.update(error, 0.0), error, this.floors.turn, reached);
         this.driveAxes(0.0, 0.0, output, exit.maxVolts);
         finalErrorDeg = Math.abs(error);
         reason = tracker.update(Math.abs(error) <= exit.errorThreshold, this.clock());
@@ -844,10 +1014,13 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
+      // whether the push floor is off, see floorOff()
+      let reached = false;
       for (;;) {
         const traveledIn = this.world.forwardEncoderIn - startIn;
         const error = inches - traveledIn;
-        const output = this.drivePID.update(inches, traveledIn);
+        reached = floorOff(reached, error, exit.errorThreshold);
+        const output = atLeast(this.drivePID.update(inches, traveledIn), error, this.floors.forward, reached);
         const correction = kHeadingCorrectionKP *
           L.wrapDegrees180(startHeadingDeg - this.imu.getCumulativeHeadingDeg());
         this.driveAxes(output, 0.0, correction, exit.maxVolts);
@@ -913,6 +1086,7 @@
       // simulator's recorder does it from these
       if (this.trajectoryObserver) this.trajectoryObserver.onTrajectoryStart(trajectory, follower.config);
       this.target = { kind: 'trajectory', trajectory, reference: null };
+      let handedOff = false;
       for (;;) {
         const snapshot = this.odometry.snapshot();
         const tick = follower.update(snapshot.pose, snapshot.rawVelocity, this.clock());
@@ -932,13 +1106,64 @@
         this.target.reference = tick.reference;
         if (this.trajectoryObserver) this.trajectoryObserver.onTrackingTick(tick);
         if (follower.reason !== 'running') break;
+        // TrajectoryFollowConfig::until: handed off, still moving, the volts above left on
+        if (config.until && config.until()) {
+          handedOff = true;
+          break;
+        }
+        yield;
+      }
+      if (!handedOff) this.stop();
+      this.target = null;
+      const result = follower.result();
+      if (handedOff) {
+        result.reason = 'settled';
+        this.progress = Object.assign({}, this.progress, { running: false });
+      }
+      if (this.trajectoryObserver && this.trajectoryObserver.onTrajectoryEnd) this.trajectoryObserver.onTrajectoryEnd(result);
+      return result;
+    }
+
+    /**
+     * approach(target, config, refine): HolonomicDrivetrain::approach(). Onto `target` ({ xIn, yIn })
+     * facing it, from the speed the robot has; refine(pose, target), if given, may move the target
+     * every tick (vision.js's PinSight). this.approachTicks, if it's an array, gets every tick.
+     */
+    *approach(target, config = {}, refine = null) {
+      const models = this.axisModels;
+      if (!models || !(models.forward.kV > 0 && models.forward.kA > 0)) {
+        return { reason: 'aborted', finalError: 0, elapsedMs: 0 };
+      }
+      config = approachConfig(config);
+      config.maxVolts = Math.min(Math.max(config.maxVolts, 0.0), kFullScaleVolts);
+      const first = this.odometry.snapshot();
+      const h = first.pose.headingDeg * kDegToRad;
+      const startInPerS = first.rawVelocity.xInPerS * Math.sin(h) + first.rawVelocity.yInPerS * Math.cos(h);
+      const controller = new TargetApproach(this.trackingPIDs.forward, this.trackingPIDs.turn);
+      controller.begin(config, startInPerS, this.clock());
+      target = { xIn: target.xIn, yIn: target.yIn };
+      // for the visualizer: the target, as the camera moves it
+      this.target = { kind: 'approach', xIn: target.xIn, yIn: target.yIn };
+      for (;;) {
+        const snapshot = this.odometry.snapshot();
+        if (refine) refine(snapshot.pose, target);
+        const tick = controller.update(snapshot.pose, snapshot.rawVelocity, target, models.forward, models.turn,
+          this.clock());
+        this.driveAxes(tick.forwardVolts, 0.0, tick.turnVolts, config.maxVolts);
+        this.target.xIn = target.xIn;
+        this.target.yIn = target.yIn;
+        if (Array.isArray(this.approachTicks)) {
+          const a = snapshot.pose.headingDeg * kDegToRad;
+          const speedInPerS = snapshot.rawVelocity.xInPerS * Math.sin(a) + snapshot.rawVelocity.yInPerS * Math.cos(a);
+          this.approachTicks.push(Object.assign({ tMs: this.clock(), pose: snapshot.pose, speedInPerS,
+            targetXIn: target.xIn, targetYIn: target.yIn }, tick));
+        }
+        if (controller.reason !== 'running') break;
         yield;
       }
       this.stop();
       this.target = null;
-      const result = follower.result();
-      if (this.trajectoryObserver && this.trajectoryObserver.onTrajectoryEnd) this.trajectoryObserver.onTrajectoryEnd(result);
-      return result;
+      return controller.result();
     }
   }
 
@@ -1016,9 +1241,14 @@
     findLookaheadPoint,
     reachedFinalApproach,
     HAND_GAINS,
+    kPushFloorVolts,
     RESPONSE_SPECS,
     autoTuneGains,
     TrajectoryFollower,
+    motorVolts,
+    approachSpeedInPerS,
+    approachConfig,
+    TargetApproach,
     Drivetrain,
     Robot,
   };

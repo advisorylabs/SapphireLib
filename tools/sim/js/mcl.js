@@ -215,6 +215,7 @@
         { x1In: maxXIn, y1In: maxYIn, x2In: minXIn, y2In: maxYIn },
         { x1In: minXIn, y1In: maxYIn, x2In: minXIn, y2In: minYIn },
       ];
+      this.blindStretches = [];
     }
 
     static centered(sizeIn = kVrcFieldSizeIn) {
@@ -225,6 +226,7 @@
     clone() {
       const copy = new FieldMap(this.minXIn, this.minYIn, this.maxXIn, this.maxYIn);
       copy.segments = this.segments.map((s) => Object.assign({}, s));
+      copy.blindStretches = this.blindStretches.map((s) => Object.assign({}, s));
       return copy;
     }
 
@@ -255,6 +257,57 @@
         if (t >= 0.0 && u >= 0.0 && u <= 1.0 && t < nearest) nearest = t;
       }
       return nearest;
+    }
+
+    /** field_map.cpp's addBlindStretch(): a stretch of wall readings aren't trusted on (a Toggle). */
+    addBlindStretch(stretch) {
+      this.blindStretches.push(Object.assign({}, stretch));
+    }
+
+    /**
+     * field_map.cpp's landsOnBlindStretch(): the center ray meets the walls within the cone's
+     * half-width at that range of a blind stretch
+     */
+    landsOnBlindStretch(xIn, yIn, dirX, dirY, halfAngleDeg) {
+      if (this.blindStretches.length === 0) return false;
+      const { wall, distanceIn: wallIn } = this.wallHit(xIn, yIn, dirX, dirY);
+      if (wall < 0) return false;
+      const hitX = xIn + wallIn * dirX;
+      const hitY = yIn + wallIn * dirY;
+      const reachIn = halfAngleDeg > 0 ? wallIn * Math.tan(Math.min(halfAngleDeg, 80) * kDegToRad) : 0;
+      for (const s of this.blindStretches) {
+        const ex = s.x2In - s.x1In;
+        const ey = s.y2In - s.y1In;
+        const lengthSquared = ex * ex + ey * ey;
+        const t = lengthSquared > 0 ? Math.min(1, Math.max(0, ((hitX - s.x1In) * ex + (hitY - s.y1In) * ey) / lengthSquared)) : 0;
+        if (Math.hypot(hitX - (s.x1In + t * ex), hitY - (s.y1In + t * ey)) <= reachIn) return true;
+      }
+      return false;
+    }
+
+    /**
+     * field_map.cpp's wallHit(): which wall a ray meets first, nothing added counted: { wall,
+     * distanceIn }, wall 0 near, 1 right, 2 far, 3 left, -1 none
+     */
+    wallHit(xIn, yIn, dirX, dirY) {
+      let nearest = Infinity;
+      let wall = -1;
+      for (let i = 0; i < 4; ++i) {
+        const s = this.segments[i];
+        const ex = s.x2In - s.x1In;
+        const ey = s.y2In - s.y1In;
+        const denom = dirX * ey - dirY * ex;
+        if (Math.abs(denom) < kParallelEpsilon) continue;
+        const wx = s.x1In - xIn;
+        const wy = s.y1In - yIn;
+        const t = (wx * ey - wy * ex) / denom;
+        const u = (wx * dirY - wy * dirX) / denom;
+        if (t >= 0.0 && u >= 0.0 && u <= 1.0 && t < nearest) {
+          nearest = t;
+          wall = i;
+        }
+      }
+      return { wall, distanceIn: nearest };
     }
 
     castRayAtHeadingIn(xIn, yIn, headingDeg) {
@@ -750,7 +803,7 @@
       const sensorCount = Math.min(readings.length, this.sensors.length);
       for (let s = 0; s < sensorCount; ++s) {
         const check = { used: readings[s].valid, measuredIn: 0, expectedIn: 0, sigmaIn: 0,
-          residualSigmas: 0, agrees: false };
+          residualSigmas: 0, agrees: false, measuresX: false, measuresY: false };
         if (check.used) {
           const ray = sensorRay(xIn, yIn, headingDeg, this.sensors[s]);
           check.measuredIn = readings[s].distanceIn;
@@ -759,6 +812,15 @@
           check.residualSigmas = (check.measuredIn - check.expectedIn) / check.sigmaIn;
           check.agrees = Math.abs(check.residualSigmas) <= agreementSigmas;
           if (check.agrees) ++agreeing;
+          // which way it pins the robot down (particle_filter.cpp's SensorCheck::measuresX)
+          const hit = this.map.wallHit(ray.xIn, ray.yIn, ray.dirX, ray.dirY);
+          if (check.expectedIn < hit.distanceIn || hit.wall < 0) {
+            check.measuresX = Math.abs(ray.dirX) >= Math.abs(ray.dirY);
+            check.measuresY = !check.measuresX;
+          } else {
+            check.measuresX = hit.wall === 1 || hit.wall === 3;
+            check.measuresY = hit.wall === 0 || hit.wall === 2;
+          }
         }
         checks.push(check);
       }

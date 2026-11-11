@@ -31,10 +31,13 @@
  * robot is measured: the lift's model is Auto-Tune's (kS 0.71, kV 0.0096, kA
  * 0.0004, kG 1.08, from the comment on kLiftGains), but without the motors'
  * current limits; the pistons take kPistonMs to move; the claw holds a
- * Pin kClawReachIn ahead of the tracking center, where the Triple Pin
- * routine's grab of its second Pin put it (moveToPose(-27.5, -20, 133) for
- * the Pin at (-23.5, -23.5)); and its distance sensor looks forward from
- * kClawSensorForwardIn ahead of the tracking center, where a Pin a little
+ * Pin kClawReachIn ahead of the tracking center with the lift down, a Pin
+ * seated in the goal aligner (the front edge 8.35in ahead, the aligner's back
+ * 3.5in behind that, and the Pin's middle 0.8in past it), and
+ * kClawReachUpIn ahead with it up, over a Goal seated in the aligner (its
+ * middle 2.8in past the aligner's back), with nothing in between; and its
+ * distance sensor looks forward from kClawSensorForwardIn ahead of the
+ * tracking center (moved with the claw, from 1.9in at 5.3in), where a Pin a little
  * behind the jaws' middle reads kGrabMm, measuring every kClawSensorPeriodMs
  * and kClawSensorDelayMs late, as world.js's distance sensors do.
  *
@@ -99,8 +102,9 @@
   const kLiftModel = { kS: 0.71, kV: 0.0096, kA: 0.0004, kG: 1.08 };
   const kLiftTopDeg = 1550.0;
   const kPistonMs = 60;
-  const kClawReachIn = 5.3;
-  const kClawSensorForwardIn = 1.9;
+  const kClawReachIn = 5.65;
+  const kClawReachUpIn = 7.65;
+  const kClawSensorForwardIn = 2.25;
   const kClawSensorPeriodMs = 33;
   const kClawSensorDelayMs = 15;
   // autoClaw's rule, in clawtiming.js's terms
@@ -188,6 +192,8 @@
       jawsClosed: preload,
       extended: false,
       autoClawArmed: false,
+      // when the claw last opened, for setAutoClaw() turning on long after (macros.cpp)
+      clawOpenedMs: 0,
       // fixedMm: setAutoClaw()'s distance, or null for the lead
       autoClaw: { on: false, grabMs: null, fixedMm: null },
       lastClawPollMs: -kAutonClawPollMs,
@@ -205,12 +211,13 @@
     const levelNumber = (entry = state.level) => (entry === 0 ? 0 : ladder().firstLevel + entry - 1);
 
     // where the claw holds a Pin, and the robot's forward and right, from where the robot really is
-    // (or was: `t` a pose from world.pastTruth())
+    // (or was: `t` a pose from world.pastTruth()): further out with the lift up
     function clawFrame(t = world.truth) {
       const a = t.headingDeg * L.kDegToRad;
       const forward = [Math.sin(a), Math.cos(a)];
       const right = [Math.cos(a), -Math.sin(a)];
-      return { t, forward, right, xIn: t.xIn + kClawReachIn * forward[0], yIn: t.yIn + kClawReachIn * forward[1] };
+      const reach = state.liftDeg > kLiftUpDeg ? kClawReachUpIn : kClawReachIn;
+      return { t, forward, right, xIn: t.xIn + reach * forward[0], yIn: t.yIn + reach * forward[1] };
     }
 
     const held = () => pins.find((p) => p.state === 'held') || null;
@@ -440,6 +447,7 @@
       setClawClosed(closed) {
         if (state.clawClosed && !closed) {
           state.autoClawArmed = false;
+          state.clawOpenedMs = now();
           clawLoaded.set(pieceInClaw(clawSensorMm()), now());
           state.autoClaw.grabMs = null;
         }
@@ -460,6 +468,12 @@
         if (state.autoClaw.on) return;
         state.autoClaw.on = true;
         state.autoClaw.grabMs = null;
+        // armed at once if the claw opened kAutoClawClearMs or more ago and reads empty now, as
+        // macros.cpp's: nothing watched the sensor while the mode was off
+        const nowMs = now();
+        const loaded = pieceInClaw(readClawSensor(nowMs));
+        clawLoaded.set(loaded, nowMs);
+        if (!state.clawClosed && !loaded && nowMs - state.clawOpenedMs >= kAutoClawClearMs) state.autoClawArmed = true;
         auton.setSpeedLimit(kClawSpeedVolts);
         log('autoClaw on');
       },
@@ -534,6 +548,7 @@
     LADDER,
     startingPins,
     kClawReachIn,
+    kClawReachUpIn,
     kClawSensorForwardIn,
     kPieceDetectMm,
     kGrabMm,

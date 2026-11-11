@@ -25,14 +25,12 @@ inline constexpr std::uint32_t kDriverLoopMs = 20;
 sapphirelib::input::Controller& controller();
 
 /// One tick of driving from the sticks, and the controller screen's line 1
-/// (the drive mode). opcontrol() skips it while the auto cycle (A, see
+/// (DRIVE, or PRACTICE: SLOW while practice mode cuts the power). opcontrol() skips it while the auto cycle (A, see
 /// autocycle.hpp) or a GUI routine (see screenBusy()) is driving the chassis,
 /// so the two never fight over the motors.
 ///
 /// Holonomic split arcade, robot-centric: left stick Y drives forward and
 /// back, left stick X strafes, right stick X turns.
-///   - B inverts: front and back swap, so forward and strafe flip and turning
-///     stays the same. Stays on until pressed again, restarts included.
 ///   - The higher the lift, the slower the drive: no wheel gets more than
 ///     macros::driveMaxVolts(), 12V with the lift down and 7V at its full
 ///     height, and 5.75V while clawSpeed is on (R1+R2, see macros.hpp). Past

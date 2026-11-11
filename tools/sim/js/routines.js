@@ -20,13 +20,14 @@
  */
 (function (factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory(require('./trajectory.js'), require('./auton.js'), require('./macros.js'), require('./mcl.js'));
+    module.exports = factory(require('./trajectory.js'), require('./auton.js'), require('./macros.js'), require('./mcl.js'),
+      require('./field.js'));
   } else {
     const root = typeof self !== 'undefined' ? self : this;
     root.SIM = root.SIM || {};
-    root.SIM.routines = factory(root.SIM.trajectory, root.SIM.auton, root.SIM.macros, root.SIM.mcl);
+    root.SIM.routines = factory(root.SIM.trajectory, root.SIM.auton, root.SIM.macros, root.SIM.mcl, root.SIM.field);
   }
-})(function (T, A, M, L) {
+})(function (T, A, M, L, F) {
   'use strict';
 
   // A trajectory chain, the way autons.cpp would hold one (the Paths tab writes these): full speed
@@ -55,142 +56,118 @@
     homeFromSwerve: [{ waypoints: [{ xIn: -40, yIn: -20 }, { xIn: -48, yIn: -60, headingDeg: 0 }] }],
   };
 
-  // --- Triple Pin on trajectories: autons.cpp's triplePinPaths() -----------------------------------
+  // --- Triple Pin on points: autons.cpp's triplePinPoints() ----------------------------------------
   //
   // Three Pins stacked on the alliance Goal by the left wall, at (-47.09, -23.55), "the goal": the
-  // preload at L1, the Pin standing at (-23.55, -23.55) at L2, and the one at (-47.09, -47.09) at
-  // L3. Each drive is a trajectory of its own, as the Paths tab writes one: Paths → Paste C++ reads
-  // all of autons.cpp's at once, a path each. They're split where the robot has to stop: on the
-  // goal while the lift dips and the claw opens, and at each Pin, where the claw shuts.
+  // preload at L1 from the north, the Pin standing at (-23.55, -23.55) at L2 from the east, and the
+  // one at (-47.09, -47.09) at L3 from the south. Every drive is a turn to face where it goes and a
+  // straight drive there (turnToPoint(), moveToPoint()), as autons.cpp's triplePin() drives, so each
+  // stop is a point to change in TRIPLE_PIN (autons.cpp's triplePinPoints() has the same numbers).
+  // The goal and the two Pins are where field.js has them (the manual's Appendix A): ontoGoal() and
+  // ontoPin() take one and work out where the robot stops for it, facing it.
   //
-  // The claw holds a Pin 5.3in ahead of the tracking center (macros.js's kClawReachIn, from where
-  // the old routine's moveToPose() grabbed its second Pin), so the robot stops 5.3in short of the
-  // goal's middle, facing it, settling to within half an inch (kScoreFollow) rather than
-  // followTrajectory()'s inch. At a Pin it aims an inch past the claw's middle, 4.3in short, the
-  // back of the claw stopping the Pin: autoClaw shuts the claw when its sensor reads 125mm, the Pin
-  // 5.7in ahead, and a robot aiming at 5.3in that settles short of it, or was bumped an inch back,
-  // never gets there. Every approach ends with a short straight run at no more than 24 in/s
-  // forward (kSlow): a Pin goes into the claw, and the goal into the front of the robot, square,
-  // and autoClaw's sensor has time to see the Pin before the robot is on it.
+  // The goal aligner in the front of the robot is what a Goal or a Pin stops against: its back is
+  // kAlignerDepthIn (3.5in) behind the front edge, kFrontIn (8.35in) ahead of the tracking center,
+  // so a seated Goal's middle is kGoalSeatIn (7.65in) ahead and a seated Pin's kPinSeatIn (5.65in),
+  // half of each one's width past the aligner's back. The claw holds a Pin there (macros.js's
+  // kClawReachIn) and lets go over a seated Goal (kClawReachUpIn).
   //
-  // The wall resets: at every stop where a sensor sees a clear stretch of wall and something that
-  // needs the pose follows. field.js's wallResetCheck() says where, with config.hpp's sensors
-  // (ROBOT_SENSOR_MOUNTS, which the routine runs with) on Override's field, and test/sim.test.js
-  // checks each one an inch and 3 degrees either way. A reset can't tell a Cup, a Pin or a Goal in
-  // its beam's cone from the wall, and the localizer's own checks (devices.cpp: 18in clear of the
-  // corners, at most 8in) let a reading a couple of inches short through. Stop by stop:
-  //   start, after the rams       none: the back sensor is on the Toggle, the side ones within
-  //                               the corners' 18in. x is the wall's it's pinned against
-  //   above the goal, and on it   none: the right sensor's cone takes in the Cups and the Pin
-  //   from the north              along the left wall; the front one sees the goal
-  //   at and above the second Pin none: the two Goals block the near and left walls
-  //   on the goal from the east   resetLeft() would read the near wall, 42in off, but a reset on
-  //                               the goal can't fix where the robot already stopped, and the
-  //                               back-off after it would steer the correction out sideways with
-  //                               the claw still around the stack
-  //   east of the third Pin       y off the near wall, 18in, while the robot runs west onto the
-  //                               Pin, which needs y right to land in the claw. Not x: the front
-  //                               sensor's beam is along the run
-  //   on the third Pin            x off the left wall, 28in, and y again, still. For the drive
-  //                               back to the goal
-  // So nothing corrects the pose between the start and the second score: that stretch rides on
-  // the start's y and odometry. The localizer stays off (setMcl(false)), as triplePin() has it.
-  // If the back sensor's 3in at the start turns out to be its mount rather than the Toggle, the
-  // Toggles are fine to reset off, and the start and the stop above the goal get one each.
+  // No wall resets, and the localizer's corrections off (setMcl(false)): odometry alone carries the
+  // routine from the rams at the start.
   //
-  // Each reset is one reading, and one reading is noisy: in the simulator's default noise (half
-  // the V5 spec) a reset at 28in is +-0.7in, enough by itself to miss the goal. So the routine
-  // averages kResetReadings of each (averagedResets()), which halves it, for kResetGapMs a reading.
-  // The sensors' real noise, from a log in the Tune tab, says how many it needs.
-  const kSlow = { voltageBudget: 10, forward: { maxVelocity: 24 } };
-  const kScoreFollow = { positionErrorThresholdIn: 0.5 };
-  const kResetReadings = 4;
-  const kResetGapMs = 40; // the sensors read about every 33ms
+  // a seated Goal's middle and a seated Pin's, ahead of the tracking center: the front edge is
+  // kFrontIn ahead, the goal aligner's back kAlignerDepthIn behind that, and a Goal (5.61in across
+  // the flats) or a Pin (1.6in across) stops against it with its middle half its width further on
+  // (autons.cpp's kGoalSeatIn and kPinSeatIn)
+  const kFrontIn = 8.35;
+  const kAlignerDepthIn = 3.5;
+  // the robot: 13.75in wide and 17in long (the user, 2026-11-10), its front edge kFrontIn ahead of
+  // the tracking center, so its back 8.65in behind it
+  const kRobotWidthIn = 13.75;
+  const kRobotLengthIn = 17.0;
+  const kGoalSeatIn = kFrontIn - kAlignerDepthIn + 5.61 / 2; // 7.65
+  const kPinSeatIn = kFrontIn - kAlignerDepthIn + 1.6 / 2; // 5.65
+  // Every turn chains (exits within 5 degrees, still turning, no settle): settling each one to 2
+  // degrees cost 1.4s over the routine and put the last score past 14.5s. What a turn leaves, the
+  // drive after it takes out: ontoGoal()'s and ontoPin()'s approaches keep turning to face their
+  // target as they go (autons.cpp's kTurn)
+  const kTurn = { chain: true };
+  // ontoGoal(): an approach facing the goal's middle, at kGoalApproach.cruiseInPerS, ending
+  // kGoalShortIn short of where the goal seats; then on at no more than 6V until the goal stops the
+  // robot and the timeout ends the press. A moveToPoint() there holds the heading the turn left it
+  // on, a few degrees off, and the goal landed 1 to 3in off the aligner's middle. Ending further
+  // than kGoalPressReachIn from its end means something stopped the robot well short of the goal:
+  // no press and no score
+  const kGoalShortIn = 1.0;
+  const kGoalApproach = { cruiseInPerS: 30.0, accelInPerS2: 120.0, decelInPerS2: 120.0,
+    endShortIn: kGoalSeatIn + kGoalShortIn, steerMinIn: kGoalSeatIn + 3.0, maxLagIn: 2.0, timeoutMs: 1500 };
+  const kGoalPressReachIn = 8.0;
+  const kGoalPressIn = 3.0;
+  // a score's claw opens once the lift reaches the dip or this long into it, as R2's
+  // (macros.cpp's kScoreReleaseMs)
+  const kScoreReleaseMs = 100;
+  // how far off the goal the robot backs before the lift comes down: the claw clear of the stack
+  const kLiftClearIn = 3.5;
+  // the drives to the stops, where the robot turns for its next run: chained, ending the first tick
+  // within 1in, still rolling, not settling 200ms (1.1s over the routine, the same scores). With the
+  // robot's models and gains it stops within 0.5in of every stop (autons.cpp's kStop)
+  const kStop = { chain: true, exitError: 1.0 };
+  // The last third of each run onto a Pin at autoClaw speed (autons.cpp's kAutoClawFromRun and the
+  // rest): a moveToPoint() for two thirds of the way (chained: it hands off within 3in of there,
+  // slowing as it comes), then autoClaw on, whose speed limit holds the approach that drives the
+  // rest: facing the Pin at a steady kPinApproach.cruiseInPerS, through to kPinPastIn past where it
+  // seats, so autoClaw's lead (which assumes the speed holds) times the grab right. autoClaw off
+  // again once the claw has the Pin: its speed limit would hold the turn after it to 5V
+  const kAutoClawFromRun = 2 / 3;
+  const kPinPastIn = 3.0;
+  const kPinApproach = { cruiseInPerS: 18.0, accelInPerS2: 60.0, decelInPerS2: 80.0, endShortIn: kPinSeatIn - kPinPastIn,
+    steerMinIn: kPinSeatIn + 2.0, maxLagIn: 2.0, timeoutMs: 2500 };
+  // a Pin the approach stopped short of: the rest of the way straight ahead, at autoClaw's 5V, until
+  // the claw shuts, stopping kPinCreepAfterGrabMs after it does (autons.cpp's kPinCreepIn and the
+  // rest)
+  const kPinCreepIn = 2.5;
+  const kPinCreepMs = 600;
+  const kPinCreepAfterGrabMs = 125;
+
+  // autons.cpp's triplePinPoints(), point for point
   const TRIPLE_PIN = {
     start: { xIn: -60.6, yIn: -5, headingDeg: 90 },
-    // start → the goal from the north, facing it (180): the preload, at L1
-    toGoal: [
-      { waypoints: [{ xIn: -60.6, yIn: -5, headingDeg: 90 }, { xIn: -52, yIn: -7 }, { xIn: -47.09, yIn: -12.25, headingDeg: 180 }],
-        stopAtEnd: true },
-      { waypoints: [{ xIn: -47.09, yIn: -18.25 }], constraints: kSlow },
-    ],
-    // straight back off the goal (point 1, where the lift goes down), then along the north side
-    // to the second Pin, and down onto it from the north
-    toSecondPin: [
-      { waypoints: [{ xIn: -47.09, yIn: -18.25, headingDeg: 180 }, { xIn: -47.09, yIn: -12.25 }], stopAtEnd: true },
-      { waypoints: [{ xIn: -35, yIn: -11 }, { xIn: -23.55, yIn: -12.25 }], stopAtEnd: true },
-      { waypoints: [{ xIn: -23.55, yIn: -19.25 }], constraints: kSlow },
-    ],
-    // the second Pin → the goal from the east (270), turning on the way: at L2
-    secondToGoal: [
-      { waypoints: [{ xIn: -23.55, yIn: -19.25, headingDeg: 180 }, { xIn: -30, yIn: -21 }, { xIn: -35.3, yIn: -23.55, headingDeg: 270 }],
-        stopAtEnd: true },
-      { waypoints: [{ xIn: -41.79, yIn: -23.55 }], constraints: kSlow },
-    ],
-    // back off east (point 1, the lift down), down the gap between the two Goals to a stop east of
-    // the third Pin (point 3, the y reset), and west onto it
-    toThirdPin: [
-      { waypoints: [{ xIn: -41.79, yIn: -23.55, headingDeg: 270 }, { xIn: -35.3, yIn: -23.55 }], stopAtEnd: true },
-      { waypoints: [{ xIn: -35.3, yIn: -35 }, { xIn: -37.5, yIn: -47.09 }], stopAtEnd: true },
-      { waypoints: [{ xIn: -42.79, yIn: -47.09 }], constraints: kSlow },
-    ],
-    // the third Pin → the goal from the east again: at L3
-    thirdToGoal: [
-      { waypoints: [{ xIn: -42.79, yIn: -47.09, headingDeg: 270 }, { xIn: -36, yIn: -40 }, { xIn: -35.3, yIn: -23.55 }],
-        stopAtEnd: true },
-      { waypoints: [{ xIn: -41.79, yIn: -23.55 }], constraints: kSlow },
-    ],
-    // off the goal, so driver control starts clear of it, the lift going down 3in out
-    offGoal: [
-      { waypoints: [{ xIn: -41.79, yIn: -23.55, headingDeg: 270 }, { xIn: -35.79, yIn: -23.55 }] },
-    ],
+    // the field's (field.js, the manual's Appendix A)
+    goal: { xIn: -47.09, yIn: -23.55 },
+    secondPin: { xIn: -23.55, yIn: -23.55 },
+    thirdPin: { xIn: -47.09, yIn: -47.09 },
+    // the stops between, where it turns, each on the line it gets there along, so it stops on the
+    // point and not beside it. aboveGoal: straight out from the wall (no turn against it), near the
+    // line the old trajectories ran onto the goal along (170). afterL1: level with y = 0, straight
+    // back off the goal: on the line from the goal's middle out through aboveGoal. afterSecondPin:
+    // 8.3in back off the second Pin, up the line it ran in along from afterL1. afterL2: straight back
+    // off the goal, on the line from its middle out through afterSecondPin, far enough out that the
+    // third Pin's run passes the goal 3in clear. belowGoal: the old trajectories' stop 16in below
+    // the goal, facing north
+    aboveGoal: { xIn: -50, yIn: -5 },
+    afterL1: { xIn: -50.8, yIn: 0 },
+    afterSecondPin: { xIn: -29.8, yIn: -18.1 },
+    afterL2: { xIn: -27.1, yIn: -17.2 },
+    belowGoal: { xIn: -47.09, yIn: -39.55 },
+    // and where it ended, backed off the goal for driver control
+    afterL3: { xIn: -47.09, yIn: -35.5 },
   };
-  const TRIPLE_PIN_LEGS = ['toGoal', 'toSecondPin', 'secondToGoal', 'toThirdPin', 'thirdToGoal', 'offGoal'];
 
-  // config.hpp's distance sensors (kFrontSensorForwardIn and the rest): the ones the Triple Pin
-  // routine runs with (its `world`), since its resets were chosen for them. The simulator's other
-  // routines have world.js's, a few inches from these.
+  // config.hpp's distance sensors (kFrontSensorForwardIn and the rest): the robot's own, for the
+  // routine's `world` (MCL is off, so only the page's localizer readout uses them). The simulator's
+  // other routines have world.js's, a few inches from these.
   const ROBOT_SENSOR_MOUNTS = [
     { forwardIn: 0.59, rightIn: 3.99, facingDeg: 0 },
     { forwardIn: -0.22, rightIn: 4.82, facingDeg: 90 },
     { forwardIn: -1.86, rightIn: -4.49, facingDeg: 180 },
     { forwardIn: -0.85, rightIn: -4.88, facingDeg: 270 },
   ];
-  // auton::use()'s in devices.cpp
-  const ROBOT_WALL_RESET = { cornerMarginIn: 18.0, maxJumpIn: 8.0 };
 
-  /**
-   * Wall resets averaged over several readings, with the auton functions as they are, as
-   * autons.cpp's averagedResets(): resetFront() and the rest each set x or y from one reading
-   * alone, so `readings` of them kResetGapMs apart, averaged, average the readings. Each is carried
-   * forward to now by what odometry has moved since, so the robot may move across the beams
-   * meanwhile, not along them. `walls` is [[reset, 'x' | 'y'], ...], all read every round; a
-   * reading a reset skips is left out. Returns how many took.
-   */
-  function* averagedResets(a, walls, readings = kResetReadings) {
-    const at = (axis) => a.pose()[axis === 'x' ? 'xIn' : 'yIn'];
-    const sums = walls.map(() => ({ total: 0, count: 0, last: 0 }));
-    let took = 0;
-    for (let i = 0; i < readings; ++i) {
-      if (i > 0) yield* a.delay(kResetGapMs);
-      walls.forEach(([reset, axis], k) => {
-        const s = sums[k];
-        s.total += s.count * (at(axis) - s.last);
-        if (reset()) {
-          s.total += at(axis);
-          s.count++;
-          took++;
-        }
-        s.last = at(axis);
-      });
-    }
-    const p = Object.assign({}, a.pose());
-    walls.forEach(([, axis], k) => {
-      const s = sums[k];
-      if (s.count) p[axis === 'x' ? 'xIn' : 'yIn'] = (s.total + s.count * (at(axis) - s.last)) / s.count;
-    });
-    a.setPose(p.xIn, p.yIn, p.headingDeg);
-    return took;
+  // `inches` short of `target` on the line from `from` to it
+  function shortOf(from, target, inches) {
+    const d = Math.hypot(target.xIn - from.xIn, target.yIn - from.yIn);
+    const k = d > 0 ? Math.max(d - inches, 0) / d : 0;
+    return { xIn: from.xIn + (target.xIn - from.xIn) * k, yIn: from.yIn + (target.yIn - from.yIn) * k };
   }
 
   /**
@@ -198,66 +175,163 @@
    * simulated robot's x against the wall is its own: world.js collides it as a circle as wide as
    * its longer side.
    */
-  function* triplePinPaths(robot) {
-    const a = A.create(robot, { wallReset: ROBOT_WALL_RESET });
-    const m = M.create(robot, a);
+  function* triplePinPoints(robot) {
+    const a = A.create(robot);
+    const m = M.create(robot, a, { field: F.override(robot.world.settings.fieldSizeIn) });
     const goal = m.Goal.alliance;
-    const s = TRIPLE_PIN.start;
-    a.setPose(s.xIn, s.yIn, s.headingDeg);
+    const P = TRIPLE_PIN;
+    a.setPose(P.start.xIn, P.start.yIn, P.start.headingDeg);
+    // odometry alone: the localizer's corrections off for the whole routine
     a.setMcl(false);
-    // planned now, a few ms each on the robot, rather than once moving
-    for (const leg of TRIPLE_PIN_LEGS) if (!a.planTrajectory(TRIPLE_PIN[leg])) return;
     m.setLiftLevel(goal, 1);
-    // the Toggle, twice, on the drive encoders: out, and back harder than it went, until the wall
-    // stops it
+    // the Toggle, twice, on the drive encoders, as autons.cpp's triplePin() rams it: out until
+    // within 5in of the 10, and back harder than it went until the 600ms runs out against the wall
     for (let i = 0; i < 2; ++i) {
-      yield* a.drive(10, { chain: true, exitError: 1 });
-      yield* a.drive(-14, { timeoutMs: 750 });
+      yield* a.drive(10, { chain: true, exitError: 5 });
+      yield* a.drive(-14, { timeoutMs: 600 });
     }
     const w = robot.world.settings;
     const here = a.pose();
     a.setPose(-w.fieldSizeIn / 2 + Math.max(w.robotWidthIn, w.robotLengthIn) / 2, here.yIn, here.headingDeg);
 
-    // 1: the preload, at L1
-    if ((yield* a.followTrajectory(TRIPLE_PIN.toGoal, kScoreFollow)).reason !== 'settled') return;
+    // 1: straight out from the wall to above the goal (no turn pinned against the wall: a back
+    // corner would swing into it), and the preload onto it from the north (170) at L1
+    yield* a.moveToPoint(P.aboveGoal.xIn, P.aboveGoal.yIn);
+    if (!(yield* ontoGoal(a, P.goal))) return;
     yield* score(a, m);
 
-    // 2: the second Pin, picked up by autoClaw on the way in, and onto the goal at L2
-    a.runAsync(function* () { yield* a.followTrajectory(TRIPLE_PIN.toSecondPin); });
-    if (!(yield* a.waitUntilWaypoint(1))) return;
-    m.setLiftLevel(goal, 0); // backed off the goal: down, as R2 waits to
-    m.setAutoClaw(true);
-    yield* a.waitForMotion();
-    if (!m.clawClosed()) return; // missed it: stop here
+    // 2: back off the goal to its stop, the second Pin (125), back off the Pin to its stop, then
+    // onto the goal from the east (260) at L2
+    yield* offGoalTo(a, m, P.afterL1);
+    if (!(yield* ontoPin(a, m, P.secondPin))) return; // missed it: stop here
     m.setLiftLevel(goal, 2);
-    yield* a.followTrajectory(TRIPLE_PIN.secondToGoal, kScoreFollow);
+    yield* a.drive(-behindIn(a, P.afterSecondPin), kStop);
+    if (!(yield* ontoGoal(a, P.goal))) return;
     yield* score(a, m);
 
-    // 3: the third Pin, and onto the goal at L3
-    a.runAsync(function* () { yield* a.followTrajectory(TRIPLE_PIN.toThirdPin); });
-    if (!(yield* a.waitUntilWaypoint(1))) return;
-    m.setLiftLevel(goal, 0);
-    m.setAutoClaw(true);
-    if (!(yield* a.waitUntilWaypoint(3))) return;
-    yield* averagedResets(a, [[a.resetLeft, 'y']]); // east of the Pin: y, running west onto it
-    yield* a.waitForMotion();
-    if (!m.clawClosed()) return;
-    yield* averagedResets(a, [[a.resetFront, 'x'], [a.resetLeft, 'y']]); // on it, still: for the drive back
+    // 3: back off the goal to its stop, the third Pin (215), then to below the goal and onto it from
+    // the south at L3
+    yield* offGoalTo(a, m, P.afterL2);
+    if (!(yield* ontoPin(a, m, P.thirdPin))) return;
     m.setLiftLevel(goal, 3);
-    yield* a.followTrajectory(TRIPLE_PIN.thirdToGoal, kScoreFollow);
+    yield* driveTo(a, P.belowGoal);
+    if (!(yield* ontoGoal(a, P.goal))) return;
     yield* score(a, m);
 
-    a.runAsync(function* () { yield* a.followTrajectory(TRIPLE_PIN.offGoal); });
-    yield* a.waitUntilTraveled(3);
-    m.setLiftLevel(goal, 0);
+    // back off the goal, so driver control starts clear of it
+    yield* offGoalTo(a, m, P.afterL3, {}); // settled, not chained: the routine's last motion
+  }
+
+  // autons.cpp's ontoGoal(): turn to face the goal's middle, the approach on to just short of where
+  // it seats in the aligner, then on at no more than 6V until the goal stops the robot and the
+  // timeout ends the press. False, without the press, if something stopped it well short
+  function* ontoGoal(a, goal) {
+    yield* a.turnToPoint(goal.xIn, goal.yIn, kTurn);
+    const result = yield* a.approach(goal.xIn, goal.yIn, kGoalApproach);
+    if (result.finalError > kGoalPressReachIn) return false;
+    yield* a.drive(kGoalPressIn, { timeoutMs: 300, maxVolts: 6 });
+    return true;
+  }
+
+  // autons.cpp's behindIn(): how far behind the robot `point` is, along its heading (backTo() is
+  // a drive back that far)
+  function behindIn(a, point) {
+    const here = a.pose();
+    const r = here.headingDeg * Math.PI / 180;
+    return -((point.xIn - here.xIn) * Math.sin(r) + (point.yIn - here.yIn) * Math.cos(r));
+  }
+
+  // autons.cpp's driveTo(): turn to face `point`, then straight there
+  function* driveTo(a, point) {
+    yield* a.turnToPoint(point.xIn, point.yIn, kTurn);
+    yield* a.moveToPoint(point.xIn, point.yIn, kStop);
+  }
+
+  // autons.cpp's offGoalTo(): straight back off the goal, holding the heading, until level with
+  // `point`, the lift down once the claw has cleared the stack. Along the heading, not to the
+  // point: each stop is on the line straight back from the goal through where it came onto it
+  function* offGoalTo(a, m, point, options = kStop) {
+    const backIn = behindIn(a, point);
+    a.runAsync(function* () { yield* a.drive(-backIn, options); });
+    yield* a.waitUntilTraveled(kLiftClearIn);
+    m.setLiftLevel(m.Goal.alliance, 0);
     yield* a.waitForMotion();
   }
 
-  // R2's score from autonomous: up at its level, the dip, and let go
+  // autons.cpp's ontoPin(): turn to face the Pin, a moveToPoint() for two thirds of the way to
+  // where it seats, then autoClaw on and the approach at its speed for the last third
+  // (kPinApproach). The robot stops kPinCreepAfterGrabMs after the claw shuts; an approach that ends
+  // with the claw still open creeps on until it shuts. autoClaw off at the end. False if the claw
+  // never shuts
+  function* ontoPin(a, m, pin) {
+    yield* a.turnToPoint(pin.xIn, pin.yIn, kTurn);
+    const here = a.pose();
+    const runIn = Math.max(Math.hypot(pin.xIn - here.xIn, pin.yIn - here.yIn) - kPinSeatIn, 0);
+    const handoff = shortOf(here, pin, kPinSeatIn + runIn * (1 - kAutoClawFromRun));
+    yield* a.moveToPoint(handoff.xIn, handoff.yIn, { chain: true });
+    m.setAutoClaw(true); // before the approach starts, so its speed limit holds it
+    a.runAsync(function* () { yield* a.approach(pin.xIn, pin.yIn, kPinApproach); });
+    yield* untilGrabbed(a, m);
+    if (!m.clawClosed()) {
+      a.runAsync(function* () { yield* a.drive(kPinCreepIn, { timeoutMs: kPinCreepMs }); });
+      yield* untilGrabbed(a, m);
+    }
+    m.setAutoClaw(false); // full speed for what comes next
+    return m.clawClosed();
+  }
+
+  // the running motion until the claw shuts (and kPinCreepAfterGrabMs on, then stopped) or it ends
+  function* untilGrabbed(a, m) {
+    yield* a.waitUntil(() => m.clawClosed() || !a.isMotionRunning(), 0);
+    if (m.clawClosed()) {
+      yield* a.delay(kPinCreepAfterGrabMs); // the jaws shut on it before the robot stops
+      a.cancelMotion();
+    }
+    yield* a.waitForMotion();
+  }
+
+  /**
+   * What the robot's distance sensors see, as the world's elements, every one in the localizer's
+   * map as devices.cpp's fieldMap() has it: the Loaders; the center goal, tall enough to be seen
+   * itself; the Pin in each medium goal and each Midfield Cup (the goals and Cups below the
+   * sensors, but the Pins in them not); and the stack on the goal the routine scores on. Solid only
+   * the Loaders: the robot never reaches the rest, and goalStopIn stops it on the goal.
+   */
+  function robotSeen() {
+    const field = F.override();
+    const T = field.tilePitchIn;
+    const square = (name, xIn, yIn, acrossIn) => ({ name, minXIn: xIn - acrossIn / 2, minYIn: yIn - acrossIn / 2,
+      maxXIn: xIn + acrossIn / 2, maxYIn: yIn + acrossIn / 2, inWorld: true, inMap: true, solid: false, field: true });
+    const seen = F.obstacleBoxes(field).filter((e) => /loader/.test(e.name))
+      .map((e) => Object.assign(e, { inWorld: true, inMap: true, field: true }));
+    seen.push(square('center goal', 0, 0, 5.61));
+    for (const [x, y] of [[-1, 2], [-2, 1], [2, -1], [1, -2]]) seen.push(square('medium goal pin', x * T, y * T, field.pinIn));
+    for (const [x, y] of [[-1, 0], [0, -1], [0, 1], [1, 0]]) seen.push(square('midfield cup and pin', x * T, y * T, field.cupIn));
+    seen.push(square('the stack', -2 * T, -T, field.pinIn));
+    return seen;
+  }
+
+  /**
+   * The Toggles, on top of the middle of every wall: they read the wall 3 to 4in long (SL000040 head
+   * on, SL000070's back sensor 4in long at a slant), so 3.3in further back here, and they're
+   * devices.cpp's blind stretches.
+   */
+  function toggleRecesses() {
+    const field = F.override();
+    const h = field.halfIn;
+    return field.toggles.map((t) => {
+      const along = t.lengthIn / 2;
+      return t.angleDeg === 90
+        ? { x1In: t.xIn, y1In: t.yIn - along, x2In: t.xIn, y2In: t.yIn + along, depthIn: 3.3, inMap: true }
+        : { x1In: t.xIn - along, y1In: t.yIn, x2In: t.xIn + along, y2In: t.yIn, depthIn: 3.3, inMap: true };
+    }).map((r) => Object.assign(r, { x1In: Math.max(-h, Math.min(h, r.x1In)), x2In: Math.max(-h, Math.min(h, r.x2In)) }));
+  }
+
+  // R2's score from autonomous: up at its level, the dip, and let go as R2 does (kScoreReleaseMs)
   function* score(a, m) {
     yield* m.waitForLift(1500);
     m.setLiftDeg(m.liftScoreDeg());
-    yield* m.waitForLift(1000);
+    yield* m.waitForLift(kScoreReleaseMs);
     m.setClawClosed(false);
     yield* a.delay(100); // the claw open before backing off
   }
@@ -376,21 +450,36 @@
     },
     {
       id: 'triplePin',
-      name: 'Triple Pin (paths)',
-      description: 'autons.cpp\'s triplePinPaths(): three Pins stacked on the alliance Goal by the left wall, every ' +
-        'drive a trajectory, with the lift, the claw and autoClaw, and averaged wall resets where a sensor sees clean ' +
-        'wall, with the robot\'s own sensors (config.hpp). MCL off, as on the robot. Hover the result for each reset.',
+      name: 'Triple Pin (points)',
+      description: 'autons.cpp\'s triplePinPoints(): three Pins stacked on the alliance Goal by the left wall, every ' +
+        'drive a turn to face a point and a straight drive to it (turnToPoint(), moveToPoint()), with the lift, the ' +
+        'claw and autoClaw, the last third onto each Pin at autoClaw speed. Odometry alone: no wall resets, MCL off, ' +
+        'as on the robot.',
       start: TRIPLE_PIN.start,
-      // the robot's own distance sensors (config.hpp), which its resets were chosen for
-      world: { sensors: ROBOT_SENSOR_MOUNTS.map((m) => L.mount(m.forwardIn, m.rightIn, m.facingDeg)) },
-      // it turns the localizer off itself, and doesn't end where it started
+      // the robot's own distance sensors (config.hpp), and the Goals, which stop the robot as it
+      // presses one into the goal aligner (kGoalSeatIn). What the sensors see is what the robot's
+      // do (robotSeen()), and the localizer's map is devices.cpp's fieldMap(), Toggles and all
+      world: {
+        // the robot's own size (kRobotWidthIn x kRobotLengthIn)
+        robotWidthIn: kRobotWidthIn,
+        robotLengthIn: kRobotLengthIn,
+        sensors: ROBOT_SENSOR_MOUNTS.map((m) => L.mount(m.forwardIn, m.rightIn, m.facingDeg)),
+        goals: F.override().goals.map((g) => ({ xIn: g.xIn, yIn: g.yIn })),
+        goalStopIn: kGoalSeatIn,
+        elements: robotSeen(),
+        recesses: toggleRecesses(),
+      },
+      // devices.cpp's localizer: tune.cpp's correction rate, and its 33ms period
+      localizer: { config: { maxCorrectionRateInPerS: 18.0 }, periodMs: 33 },
+      // it doesn't end where it started
       correctsWithMcl: false,
-      run: triplePinPaths,
+      run: triplePinPoints,
     },
   ];
 
   return {
     ROUTINES, TOUR_CHAIN, BRANCH, planBranch,
-    TRIPLE_PIN, TRIPLE_PIN_LEGS, ROBOT_SENSOR_MOUNTS, ROBOT_WALL_RESET, averagedResets,
+    TRIPLE_PIN, kGoalSeatIn, kPinSeatIn, kFrontIn, kRobotWidthIn, kRobotLengthIn, ROBOT_SENSOR_MOUNTS,
+    kAutoClawFromRun, kPinApproach, kPinPastIn, kGoalApproach,
   };
 });

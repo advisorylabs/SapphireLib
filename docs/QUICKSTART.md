@@ -68,6 +68,7 @@ above need no prefixes.
 | Strafe sideways (holonomic) | `strafe(12);` (negative = left) |
 | Follow a curvy path through points | `followPath({{0, 0}, {0, 24}, {24, 48}});` |
 | Drive a path drawn in the simulator, planned and fast | `followTrajectory(kRush);` ([Trajectories](#trajectories)) |
+| Drive onto something a sensor sees, facing it, at a steady speed through it | `approach(x, y, config, refine);` ([Onto what a camera sees](#onto-what-a-camera-sees)) |
 | Run a mechanism partway through a motion | `runAsync()` and the waits ([Background motions](#background-motions)) |
 | Fix x or y off a wall | `resetBack();` and friends ([Localization](#localization-mcl-and-wall-resets)) |
 | Know where the robot is | `pose()` (`.xIn`, `.yIn`, `.headingDeg`) |
@@ -203,6 +204,30 @@ keeps the plan. Planning takes a few milliseconds: `planTrajectory(kRush)` at th
 routine gets it done before the robot moves. Without measured models it can't plan: it returns
 `aborted`, and the terminal says why. **Paste C++** reads the path and the routine's actions back into
 the tab.
+
+## Onto what a camera sees
+
+A trajectory drives to where odometry says something is. `approach()` drives at a target point
+instead, turning to face it as it goes, at one steady speed (`cruiseInPerS`) through it to an end a
+little past it (`endShortIn`, negative for past the target), and a sensor may move the point every
+tick (`refine`). It never strafes. It takes over at the speed the robot already has, so a trajectory
+can hand off to it part way without stopping, with `TrajectoryFollowConfig::until`:
+
+```cpp
+runAsync([] {
+    sapphirelib::motion::TrajectoryFollowConfig follow;
+    follow.until = [] { return pose().yIn > -30; };   // the plan this far...
+    followTrajectory(kToPin, follow);
+    approach(-27, -27, {.cruiseInPerS = 18, .endShortIn = 2.65}, myCameraRefiner); // ...the camera's
+});
+```
+
+`src/robot/vision.hpp`'s `steerBy()` is such a refiner for 96671H's AI Vision sensor, moving the
+target onto the yellow Pin it sees. The Triple Pin no longer uses it: its runs onto the Pins hand
+their last third to `approach()` with no refiner, started just after `setAutoClaw()` so autoClaw's
+speed limit holds it (`ontoPin()` in `src/robot/autons.cpp`).
+`sapphirelib/motion/target_approach.hpp` has the camera math for a
+refiner of your own (`cameraBearingDeg()`, `onCameraRay()`).
 
 ## Localization: MCL and wall resets
 
@@ -365,6 +390,7 @@ All in `sapphirelib::auton` (`#include "sapphirelib/auton/auton.hpp"`).
 | `followPath(points, pathOptions)` | `MotionResult` |
 | `followTrajectory(sections, followConfig)` | `MotionResult` (holonomic) |
 | `planTrajectory(sections)` | `bool`: planned |
+| `approach(x, y, approachConfig, refine)` | `MotionResult` (holonomic) |
 | `setSpeedLimit(volts)` | caps every motion from the next one on (not trajectories); 12 is none |
 | `speedLimit()` | `double` |
 | `runAsync(function)` | |

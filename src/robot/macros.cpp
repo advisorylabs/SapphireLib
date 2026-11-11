@@ -33,7 +33,9 @@
 #include "pros/error.h"
 #include "pros/misc.hpp"
 #include "pros/motors.hpp"
+#include "pros/optical.hpp"
 #include "pros/rtos.hpp"
+#include "robot/alliance.hpp"
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
 #include "robot/driver.hpp"
@@ -97,8 +99,8 @@ constexpr std::int32_t kPieceDetectMm = 125;
 // to, and on 60mm standing still. kClawLeadMs is the simulator's sensor
 // latency (15ms) and piston (60ms). TODO: measure kGrabMm, then tune
 // kClawLeadMs at speed.
-constexpr std::int32_t kGrabMm = 60;
-constexpr double kClawLeadMs = 75.0;
+constexpr std::int32_t kGrabMm = 35;
+constexpr double kClawLeadMs = 125.0;
 // Never fires on a reading further out than this, however fast the robot
 // goes, so driving at a wall or a goal with the claw open doesn't close it
 // half a field away. 250mm covers kGrabMm plus the lead at full speed.
@@ -148,7 +150,7 @@ constexpr double kBottomClosedLiftDeg = 75.0;
 // are shut on the pin before it leaves the floor. Only the claw closing
 // starts the wait: a lift coming down with the claw long since closed stops
 // at kBottomClosedLiftDeg without one.
-constexpr std::uint32_t kGrabLiftDelayMs = 65;
+constexpr std::uint32_t kGrabLiftDelayMs = 45;
 
 // --- Timing ---
 // L1/L2 held: one level on the press, another after the delay, then one every
@@ -255,6 +257,44 @@ constexpr const char* kClawSpeedOffRumble = "..";
 // reads the claw's sensor this often while it's on.
 constexpr std::uint32_t kAutonClawPollMs = 10;
 
+// --- Side toggles (Y, and each side's auto toggle) ---
+// Each side's toggle, while Y or setExtended() holds it out, fires on its own
+// when its distance sensor reads under kToggleTriggerMm and its optical sensor
+// sees a color that isn't our alliance's (alliance.hpp): yellow or blue on
+// red, red or yellow on blue, to flip it round to ours. In for kToggleInMs,
+// then back out for kToggleOutMs, and only after that can it fire again, so
+// one still showing the wrong color fires it again. Driver control runs them
+// every tick (20ms), so the times go in 20ms steps. While Y has a toggle in it
+// stays in, and doesn't fire.
+// TODO: tune both times on the robot.
+constexpr std::int32_t kToggleTriggerMm = 65;
+constexpr std::uint32_t kToggleInMs = 250;
+constexpr std::uint32_t kToggleOutMs = 250;
+// Each color the opticals tell apart, as optical sensor hues in degrees
+// (0-360). A range whose start is past its end wraps through 0, as red does.
+// A hue in none of them is no color. LEFT's toggle readouts show what each
+// optical reads, and which color that is (macros.hpp).
+struct HueRange {
+    double fromDeg;
+    double toDeg;
+    constexpr bool contains(double hueDeg) const {
+        return fromDeg <= toDeg ? hueDeg >= fromDeg && hueDeg <= toDeg
+                                : hueDeg >= fromDeg || hueDeg <= toDeg;
+    }
+};
+constexpr HueRange kRedHues{330.0, 30.0}; // either side of 0
+constexpr HueRange kYellowHues{35.0, 150.0}; // and the green yellow sometimes reads as
+constexpr HueRange kBlueHues{180.0, 260.0};
+// Grey (the tiles, the walls) has no real hue, and reads as any of them, so
+// below this saturation (0-1) the optical sees no color at all. 0 lets any
+// hue through.
+constexpr double kToggleMinSaturation = 0.2;
+// Each optical's own LED, in percent, so it reads the same under any field
+// lights, and how long it collects light per reading: PROS's default 100ms
+// would lag a passing robot by up to 100ms.
+constexpr std::uint8_t kToggleOpticalLedPct = 100;
+constexpr double kToggleOpticalIntegrationMs = 20.0;
+
 // --- Lift Auto-Tune and Run Test (the PID page's Lift entry) ---
 // Auto-Tune drives the lift up and down between these two heights, stopping
 // each segment once it passes one, so keep both well inside the lift's real
@@ -307,8 +347,60 @@ constexpr int kBottomLevel = 0; // on the bottom switch, where autoClaw picks up
 // autoClaw opens the claw on a pin instead of closing it, so make it true
 // again.
 Piston claw(ports::kClawPiston, /*extendedAtStart=*/false);
-Piston sidePiston(ports::kSidePiston, /*extendedAtStart=*/false);
 pros::Distance clawSensor(ports::kClawDistance);
+
+// The colors the side toggles' opticals tell apart (kRedHues and the rest).
+enum class ToggleColor : std::uint8_t { red, yellow, blue };
+
+// One side's toggle: its piston, out while Y or setExtended() has it out but
+// for its auto pulse, and the sensors that fire the pulse (kToggleTriggerMm).
+//
+// Extended is out. Both toggles' valves are plumbed so the port's low state
+// pushes them out, hence extendedIsLow: the air lines were swapped from the
+// other way round, where without it Y, setExtended() and the auto pulse all
+// went backward. So until the program sets the port (before initialize(), or
+// if the brain drops what the constructor sent), a toggle sits out, not in;
+// resendPistons() pulls them in. If the air lines are ever swapped back, make
+// extendedIsLow false again.
+struct SideToggle {
+    SideToggle(char sideLetter, std::uint8_t pistonPort, std::uint8_t opticalPort,
+               std::uint8_t distancePort)
+        : letter(sideLetter),
+          piston(pistonPort, /*extendedAtStart=*/false, /*extendedIsLow=*/true),
+          optical(opticalPort), distance(distancePort) {}
+
+    char letter; // 'L' or 'R', for LEFT's readout and the logs
+    Piston piston;
+    // Held out by Y (both sides) or setExtended(), and only then does its
+    // auto pulse run, pulling it in. In from the start, until driver
+    // control's start pushes it out (main.cpp).
+    bool out = false;
+    pros::Optical optical;
+    // The localizer reads the same sensor (config.hpp): reading a sensor
+    // from two places is fine.
+    pros::Distance distance;
+    // When its running auto pulse started: in for kToggleInMs, then out for
+    // kToggleOutMs. None while it's ready to fire.
+    std::optional<std::uint32_t> pulseStartMs;
+    // This tick's readings, for LEFT's readout: hue in degrees and saturation
+    // 0-1 (PROS_ERR_F, infinity, unplugged), the color that is (none for
+    // grey, or a hue between the ranges), distance in mm (PROS_ERR unplugged,
+    // 9999 seeing nothing), and whether they'd fire it.
+    double hueDeg = 0.0;
+    double saturation = 0.0;
+    std::optional<ToggleColor> color;
+    std::int32_t mm = PROS_ERR;
+    bool sees = false;
+};
+
+// Left (H) first: it's the old side piston, the "mech" log's "extender".
+std::array<SideToggle, 2> sideToggles{{
+    {'L', ports::kLeftTogglePiston, ports::kLeftToggleOptical, ports::kLeftToggleDistance},
+    {'R', ports::kRightTogglePiston, ports::kRightToggleOptical, ports::kRightToggleDistance},
+}};
+
+// The toggle setExtended(Side, bool) and extended(Side) mean.
+SideToggle& sideToggle(Side side) { return sideToggles[side == Side::left ? 0 : 1]; }
 pros::adi::DigitalIn bottomSwitch(ports::kLiftBottomSwitch);
 
 // The lift's position: the median of its motors' encoders, in motor degrees.
@@ -356,10 +448,14 @@ double liftPositionDeg() {
 }
 
 // What LEFT cycles the controller's bottom line through: the lift, the claw's
-// sensor (kClawReadout), then each lift motor in turn, A first.
+// sensor (kClawReadout), then each lift motor in turn, A first, then each side
+// toggle's sensors, left first.
 constexpr int kClawReadout = 1;
 constexpr int kFirstMotorReadout = 2;
-constexpr int kReadoutCount = kFirstMotorReadout + static_cast<int>(ports::kLiftMotors.size());
+constexpr int kFirstToggleReadout =
+    kFirstMotorReadout + static_cast<int>(ports::kLiftMotors.size());
+constexpr int kReadoutCount =
+    kFirstToggleReadout + static_cast<int>(std::tuple_size<decltype(sideToggles)>::value);
 
 // A press of R1 or R2 waiting out kRPairWindowMs: which, and since when.
 struct WaitingPress {
@@ -372,7 +468,6 @@ struct State {
     // autoClaw closes it. Open from the start, until autonomous closes it on
     // the preload (grabPreload()) or the driver does.
     bool clawClosed = false;
-    bool sideOut = false;   // the side piston, Y's alone
     bool clawSpeed = false; // the drive capped at kClawSpeedVolts, see there
     // When a grab at the bottom closed the claw with clawSpeed on, which ends
     // it kClawSpeedOffDelayMs later. Dropped if the claw opens first, or
@@ -385,6 +480,9 @@ struct State {
     // kAutoClawClearMs, so opening the claw to drop a pin doesn't snap it
     // shut on the same one.
     bool autoClawArmed = false;
+    // When the claw last opened, for setAutoClaw() turning on long after (see
+    // there). 0 until it has.
+    std::uint32_t clawOpenedMs = 0;
     // The claw piston has been closed for kGrabLiftDelayMs, as of this tick's
     // start: until then, a grab at the bottom leaves the lift down.
     bool clawGripping = false;
@@ -421,6 +519,63 @@ struct State {
 };
 
 State state;
+
+// The color an optical reading is: its hue in one of kRedHues, kYellowHues
+// or kBlueHues, saturated enough to be a color at all. None for grey, a hue
+// between the ranges, or PROS_ERR_F (infinity) from an unplugged optical.
+std::optional<ToggleColor> toggleColor(double hueDeg, double saturation) {
+    if (!std::isfinite(hueDeg) || !std::isfinite(saturation)) return std::nullopt;
+    if (saturation < kToggleMinSaturation) return std::nullopt;
+    if (kRedHues.contains(hueDeg)) return ToggleColor::red;
+    if (kYellowHues.contains(hueDeg)) return ToggleColor::yellow;
+    if (kBlueHues.contains(hueDeg)) return ToggleColor::blue;
+    return std::nullopt;
+}
+
+char colorLetter(std::optional<ToggleColor> color) {
+    if (!color) return '-';
+    switch (*color) {
+    case ToggleColor::red: return 'R';
+    case ToggleColor::yellow: return 'Y';
+    case ToggleColor::blue: return 'B';
+    }
+    return '-';
+}
+
+// Whether a side's sensors want its toggle fired: its distance sensor reads
+// under kToggleTriggerMm, and its optical sees a color other than `ours`.
+// Reads both, and keeps the readings for LEFT's readout.
+bool toggleSees(SideToggle& side, ToggleColor ours) {
+    side.mm = side.distance.get_distance();
+    side.hueDeg = side.optical.get_hue();
+    side.saturation = side.optical.get_saturation();
+    side.color = toggleColor(side.hueDeg, side.saturation);
+    // PROS_ERR (INT32_MAX) from an unplugged distance sensor is never close.
+    const bool close = side.mm >= 0 && side.mm < kToggleTriggerMm;
+    side.sees = close && side.color && *side.color != ours;
+    return side.sees;
+}
+
+// One tick of a side's toggle: out while Y or setExtended() has it out, but
+// in for the first kToggleInMs of its auto pulse. A pulse starts once the last
+// one's kToggleInMs + kToggleOutMs are over and the sensors see a color other
+// than `ours`, and only while the toggle is held out.
+void updateToggle(SideToggle& side, ToggleColor ours, std::uint32_t now) {
+    const bool sees = toggleSees(side, ours);
+    if (side.pulseStartMs &&
+        sapphirelib::elapsedMs(*side.pulseStartMs, now) >= kToggleInMs + kToggleOutMs) {
+        side.pulseStartMs.reset();
+    }
+    if (!side.pulseStartMs && sees && side.out) {
+        side.pulseStartMs = now;
+        sapphirelib::telemetry::event("macro", "side_toggle,side=%c,color=%c,hue=%.0f,sat=%.2f,mm=%d",
+                                      side.letter, colorLetter(side.color), side.hueDeg,
+                                      side.saturation, static_cast<int>(side.mm));
+    }
+    const bool pulseIn =
+        side.pulseStartMs && sapphirelib::elapsedMs(*side.pulseStartMs, now) < kToggleInMs;
+    side.piston.set(side.out && !pulseIn, now);
+}
 
 // Debug mode as asked for by setDebug(), from any task. update() copies it
 // into state.debug once a tick, so a whole tick runs in one mode.
@@ -846,9 +1001,13 @@ void showStatus(Controller& controller, bool atBottom, std::int32_t pieceMm) {
     if (state.debug) {
         // No level to show: the lift is L1/L2's. Each piston, to check it
         // moves the way the line says.
-        // "DBG SHUT SD:OUT" just fits the 15 columns.
-        screen.setLine(0, "DBG %s SD:%s", state.clawClosed ? "SHUT" : "OPEN",
-                       state.sideOut ? "OUT" : "IN");
+        // "DBG SHUT SD:OUT" just fits the 15 columns. The side toggles as Y
+        // or setExtended() hold them: OUT or IN together, or "SD:L" while
+        // only the left one is out.
+        const bool leftOut = sideToggle(Side::left).out;
+        const bool rightOut = sideToggle(Side::right).out;
+        const char* sides = leftOut == rightOut ? (leftOut ? "OUT" : "IN") : (leftOut ? "L" : "R");
+        screen.setLine(0, "DBG %s SD:%s", state.clawClosed ? "SHUT" : "OPEN", sides);
     } else if (state.nextLevel && *state.nextLevel > ladder.level()) {
         // Where L1 jumps to (levelUp()), in the goal's own level numbers:
         // "ALLIANCE BTM>L6" just fits the 15 columns.
@@ -899,6 +1058,26 @@ void showStatus(Controller& controller, bool atBottom, std::int32_t pieceMm) {
                 screen.setLine(2, "CLAW %smm", reading);
             }
         }
+    } else if (state.readout >= kFirstToggleReadout) {
+        // One side toggle's sensors, for tuning kRedHues and the rest:
+        // "LY* 48 62%   40" is the left one, the color its optical sees (R, Y,
+        // B, or - for none), '*' while they'd fire it, the optical's hue
+        // (degrees) and saturation (99% at most, to fit), and its distance
+        // sensor (mm).
+        const SideToggle& side =
+            sideToggles[static_cast<std::size_t>(state.readout - kFirstToggleReadout)];
+        char mm[8] = "----"; // the distance sensor unplugged
+        if (side.mm != PROS_ERR) {
+            std::snprintf(mm, sizeof(mm), "%4d",
+                          static_cast<int>(std::min<std::int32_t>(side.mm, 9999)));
+        }
+        if (!std::isfinite(side.hueDeg)) {
+            screen.setLine(2, "%c NO OPTIC %4s", side.letter, mm);
+        } else {
+            screen.setLine(2, "%c%c%c%3.0f %2.0f%% %4s", side.letter, colorLetter(side.color),
+                           side.sees ? '*' : ' ', side.hueDeg,
+                           std::clamp(side.saturation * 100.0, 0.0, 99.0), mm);
+        }
     } else {
         // One lift motor (A, then B, C... on each LEFT): the volts it's
         // actually applying, its current draw, and its temperature. A motor
@@ -924,6 +1103,12 @@ void initialize() {
     // Only matters when the lift falls back to brake(), with no encoders, or
     // after stop().
     lift.motors().set_brake_mode_all(pros::v5::MotorBrake::hold);
+    // The side toggles' opticals: their own light, and quick readings (see
+    // kToggleOpticalLedPct).
+    for (SideToggle& side : sideToggles) {
+        side.optical.set_led_pwm(kToggleOpticalLedPct);
+        side.optical.set_integration_time(kToggleOpticalIntegrationMs);
+    }
 }
 
 void update(Controller& controller) {
@@ -998,8 +1183,19 @@ void update(Controller& controller) {
         state.levelBeforePress.reset();
     }
 
-    // The side piston is Y's alone: in every mode, and through a score.
-    if (controller.pressed(Button::y)) state.sideOut = !state.sideOut;
+    // Y moves both side toggles together, in every mode and through a score:
+    // out if both are in, else both in (autonomous can leave just one out).
+    // Each one out also pulses in on its own when its sensors see the wrong
+    // color (below). Y ends a running pulse, so pushing them out again
+    // during one isn't held up by it.
+    if (controller.pressed(Button::y)) {
+        const bool out = std::none_of(sideToggles.begin(), sideToggles.end(),
+                                      [](const SideToggle& side) { return side.out; });
+        for (SideToggle& side : sideToggles) {
+            side.out = out;
+            side.pulseStartMs.reset();
+        }
+    }
     // R1 and R2 this tick, on their own or as the pair (kRPairWindowMs). The
     // pair is clawSpeed's toggle, autoClaw with it, in every mode and through
     // a score too, though a grab at the bottom also ends it (below).
@@ -1093,6 +1289,7 @@ void update(Controller& controller) {
     // empty that long stays armed, so it closes on the next pin.
     if (wasClosed && !state.clawClosed) {
         state.autoClawArmed = clawLoaded.falseFor(kAutoClawClearMs, now);
+        state.clawOpenedMs = now;
         // A grab let go of before clawSpeed ended leaves it on.
         state.clawSpeedGrabMs.reset();
     }
@@ -1107,7 +1304,15 @@ void update(Controller& controller) {
     }
 
     claw.set(state.clawClosed, now);
-    sidePiston.set(state.sideOut, now);
+    // Y's state, or each side's auto pulse (kToggleTriggerMm), in every mode:
+    // a pulse flips whatever isn't our alliance's color (alliance.hpp).
+    const ToggleColor ours = alliance() == Alliance::red ? ToggleColor::red : ToggleColor::blue;
+    for (SideToggle& side : sideToggles) updateToggle(side, ours, now);
+    // Every valve's level again, every tick: set() writes only on a change, so a port the brain
+    // took low (SL000066: both side toggles, held out, dropped as a routine ended and stayed in)
+    // would stay low. This way it's back within a tick, whatever dropped it.
+    claw.resend();
+    for (SideToggle& side : sideToggles) side.piston.resend();
 
     // What the lift should do this tick. Its own task (startLift()) does it.
     if (state.debug) {
@@ -1144,12 +1349,13 @@ void update(Controller& controller) {
         // (the lift's own rows are in "lift"/"lift.act"). get_distance()
         // reads PROS_ERR unplugged, which is logged as a gap.
         const std::optional<Phase> phase = sequence.current();
-        mechLog->record({claw.extended() ? 1.0 : 0.0, sidePiston.extended() ? 1.0 : 0.0,
+        mechLog->record({claw.extended() ? 1.0 : 0.0, sideToggles[0].piston.extended() ? 1.0 : 0.0,
                          pieceMm == PROS_ERR ? std::numeric_limits<double>::quiet_NaN()
                                              : static_cast<double>(pieceMm),
                          static_cast<double>(ladder.level()), static_cast<double>(ladder.tableIndex()),
                          phase ? static_cast<double>(*phase) : -1.0, atBottom ? 1.0 : 0.0,
-                         inPerS(aim.approachMmPerMs)});
+                         inPerS(aim.approachMmPerMs),
+                         sideToggles[1].piston.extended() ? 1.0 : 0.0});
     }
 }
 
@@ -1180,17 +1386,20 @@ void attachTelemetry(sapphirelib::telemetry::Logger& logger) {
     lift.setStepListener([channel = &act](const PositionStep& step) {
         channel->record({step.target, step.position, step.volts, static_cast<double>(step.law)});
     });
-    // The claw, side piston and lift state machine, every opcontrol tick: the
-    // claw piston (1 closed) and the side piston (1 out; still "extender" in
-    // the logs, which the analyzer and older logs go by), the claw's distance
-    // reading (mm), the lift's level (0 the bottom; its entry in the goal's
-    // table, so MEDIUM's L2 logs 1) and goal (0 ALLIANCE, 1 MEDIUM, 2
-    // CENTER), the running score step (-1 none; else Phase's order:
-    // scoreDescend, scoreRelease), the bottom switch (1 pressed), and how fast
-    // the robot drives its claw onto what's in front of it (in/s, autoClaw's
-    // speed): with piece_mm, what autoClaw's lead is tuned from.
+    // The claw, side toggles and lift state machine, every opcontrol tick: the
+    // claw piston (1 closed) and the left side toggle (1 out; "extender", as
+    // the analyzer and older logs, from before the right one, go by), the
+    // claw's distance reading (mm), the lift's level (0 the bottom; its entry
+    // in the goal's table, so MEDIUM's L2 logs 1) and goal (0 ALLIANCE, 1
+    // MEDIUM, 2 CENTER), the running score step (-1 none; else Phase's order:
+    // scoreDescend, scoreRelease), the bottom switch (1 pressed), how fast the
+    // robot drives its claw onto what's in front of it (in/s, autoClaw's
+    // speed: with piece_mm, what autoClaw's lead is tuned from), and the
+    // right side toggle (1 out), last so the others keep their columns.
     mechLog = &logger.channel(
-        "mech", {"claw", "extender", "piece_mm", "level", "mode", "phase", "bottom", "approach_ips"},
+        "mech",
+        {"claw", "extender", "piece_mm", "level", "mode", "phase", "bottom", "approach_ips",
+         "extender_r"},
         {.capacity = 128, .decimals = 2});
 }
 
@@ -1209,6 +1418,7 @@ void setClawClosed(bool closed) {
     // taken now rather than whenever one was last taken.
     if (state.clawClosed && !closed) {
         state.autoClawArmed = false;
+        state.clawOpenedMs = now;
         clawLoaded.set(pieceInClaw(clawSensor.get_distance()), now);
         // A grab let go of before setAutoClaw()'s delay leaves it on.
         autonClaw.grabMs.reset();
@@ -1224,9 +1434,18 @@ void resendPistons() {
     // setAutoClaw()'s task moves the claw too.
     std::lock_guard<pros::Mutex> lock(autonClawMutex());
     claw.resend();
-    sidePiston.resend();
-    sapphirelib::telemetry::event("macro", "pistons_resent,claw=%d,side=%d",
-                                  claw.extended() ? 1 : 0, sidePiston.extended() ? 1 : 0);
+    // An auto pulse cut off by a disable would leave its toggle in, with
+    // nothing running update() to push it back out: back to where Y or
+    // setExtended() holds it.
+    const std::uint32_t now = sapphirelib::millis();
+    for (SideToggle& side : sideToggles) {
+        side.pulseStartMs.reset();
+        side.piston.set(side.out, now);
+        side.piston.resend();
+    }
+    sapphirelib::telemetry::event("macro", "pistons_resent,claw=%d,side_l=%d,side_r=%d",
+                                  claw.extended() ? 1 : 0, sideToggle(Side::left).out ? 1 : 0,
+                                  sideToggle(Side::right).out ? 1 : 0);
 }
 
 void grabPreload() {
@@ -1271,6 +1490,21 @@ void setAutoClaw(bool on, std::optional<std::int32_t> grabMm) {
     if (autonClaw.on) return;
     autonClaw.on = true;
     autonClaw.grabMs.reset();
+    // Armed at once if the claw opened kAutoClawClearMs or more ago and reads
+    // empty now: nothing watched the sensor while the mode was off, so
+    // otherwise it would only arm kAutoClawClearMs from here, and a routine
+    // that turns it on late in a run onto a Pin (autons.cpp's ontoPin(), the
+    // last third) could reach the Pin first. Whatever the claw let go of that
+    // long ago has been driven away from.
+    {
+        const std::uint32_t now = sapphirelib::millis();
+        const bool loaded = pieceInClaw(readClawSensor(now));
+        clawLoaded.set(loaded, now);
+        if (!state.clawClosed && !loaded &&
+            sapphirelib::elapsedMs(state.clawOpenedMs, now) >= kAutoClawClearMs) {
+            state.autoClawArmed = true;
+        }
+    }
     sapphirelib::auton::setSpeedLimit(kClawSpeedVolts);
     // grab_mm=0: on the lead
     sapphirelib::telemetry::event("macro", "auto_claw,on=1,grab_mm=%d",
@@ -1283,13 +1517,22 @@ bool autoClaw() {
 }
 
 void setExtended(bool out) {
-    state.sideOut = out;
-    sidePiston.set(out, sapphirelib::millis());
-    // "extender" as the "mech" channel's column is, see attachTelemetry().
-    sapphirelib::telemetry::event("macro", "extender,out=%d", out ? 1 : 0);
+    setExtended(Side::left, out);
+    setExtended(Side::right, out);
 }
 
-bool extended() { return state.sideOut; }
+void setExtended(Side which, bool out) {
+    SideToggle& side = sideToggle(which);
+    side.out = out;
+    side.pulseStartMs.reset();
+    side.piston.set(out, sapphirelib::millis());
+    // "extender" as the "mech" channel's column is, see attachTelemetry().
+    sapphirelib::telemetry::event("macro", "extender,side=%c,out=%d", side.letter, out ? 1 : 0);
+}
+
+bool extended() { return extended(Side::left) || extended(Side::right); }
+
+bool extended(Side which) { return sideToggle(which).out; }
 
 void setLiftLevel(Goal goal, int level) {
     const double levelDegBefore = ladder.levelPosition();

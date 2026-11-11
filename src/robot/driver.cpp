@@ -1,8 +1,8 @@
 /**
  * \file driver.cpp
  *
- * Driver control: stick shaping, split arcade driving with its invert mode,
- * the X+UP testing shortcut, and the LED buttons (X, UP, DOWN). The claw,
+ * Driver control: stick shaping, split arcade driving, the X+UP testing
+ * shortcut, and the LED buttons (X, UP, DOWN). The claw,
  * lift, and side piston buttons are in macros.cpp.
  *
  * Team 96671H: Hitmen
@@ -42,9 +42,6 @@ constexpr double kJoystickCurve = 0.3; // 0 = linear, 1 = full cubic
 // static initialization is safe.
 Controller master(pros::E_CONTROLLER_MASTER, {.resumeGapMs = 100, .screenIntervalMs = 60});
 
-// B: front and back swapped. Kept across restarts, like the controller.
-bool inverted = false;
-
 double stick(const Controller& controller, Axis axis) {
     return sapphirelib::curveJoystick(controller.axis(axis), kJoystickCurve);
 }
@@ -74,16 +71,12 @@ bool practiceCutsPower(Controller& controller) {
 }
 
 // Holonomic split arcade: the left stick drives and strafes, the right stick
-// turns. Robot-centric, so inverting can swap front and back: forward and
-// right both flip, while turning doesn't, since clockwise is clockwise
-// whichever end leads.
+// turns. Robot-centric.
 //
 // axis() reads 0 while the controller is disconnected, so a dropped
 // controller stops the chassis instead of leaving it on its last reading.
 void driveArcade(const Controller& controller, double maxVolts) {
-    const double direction = inverted ? -1.0 : 1.0;
-    drivetrain().holonomic(direction * stick(controller, Axis::leftY),
-                           direction * stick(controller, Axis::leftX),
+    drivetrain().holonomic(stick(controller, Axis::leftY), stick(controller, Axis::leftX),
                            stick(controller, Axis::rightX), maxVolts);
 }
 
@@ -101,13 +94,10 @@ bool tappedAlone(const Controller& controller, Button button, Button other, bool
     return controller.released(button) && !spoiled;
 }
 
-// Controller line 1 (macros.cpp has 0 and 2): which way is forward.
+// Controller line 1 (macros.cpp has 0 and 2): the drive's state. Written
+// every tick, so it also replaces the auto cycle's leg label once it ends.
 void showDriveMode(Controller& controller) {
-    if (practiceCut) {
-        controller.screen().setLine(1, "PRACTICE: SLOW");
-    } else {
-        controller.screen().setLine(1, "DRIVE %s", inverted ? "INVERTED" : "NORMAL");
-    }
+    controller.screen().setLine(1, practiceCut ? "PRACTICE: SLOW" : "DRIVE");
 }
 
 } // namespace
@@ -119,8 +109,6 @@ void setPracticeMode(bool on) { practice.store(on); }
 bool practiceMode() { return practice.load(); }
 
 void drive(Controller& controller) {
-    if (controller.pressed(Button::b)) inverted = !inverted;
-
     if (practiceCutsPower(controller)) {
         // Zero volts, so the drive coasts, as with the power off.
         drivetrain().holonomicVolts(0.0, 0.0, 0.0);

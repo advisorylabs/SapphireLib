@@ -154,6 +154,55 @@ double FieldMap::castBeamIn(double xIn, double yIn, double dirX, double dirY,
                     castConeIn(xIn, yIn, dirX, dirY, halfAngleDeg));
 }
 
+void FieldMap::addBlindStretch(Segment stretch) { blindStretches_.push_back(stretch); }
+
+bool FieldMap::landsOnBlindStretch(double xIn, double yIn, double dirX, double dirY,
+                                   double halfAngleDeg) const {
+    if (blindStretches_.empty()) return false;
+    // where the center ray meets the walls
+    double wallIn = kInfinity;
+    if (wallHit(xIn, yIn, dirX, dirY, &wallIn) < 0) return false;
+    const double hitX = xIn + wallIn * dirX;
+    const double hitY = yIn + wallIn * dirY;
+    // the cone's half-width there, across the beam
+    const double reachIn = wallIn * coneSlope(halfAngleDeg);
+    for (const Segment& s : blindStretches_) {
+        const double ex = s.x2In - s.x1In;
+        const double ey = s.y2In - s.y1In;
+        const double inverse = inverseLengthSquared(s);
+        const double t = std::clamp(((hitX - s.x1In) * ex + (hitY - s.y1In) * ey) * inverse, 0.0, 1.0);
+        const double dx = hitX - (s.x1In + t * ex);
+        const double dy = hitY - (s.y1In + t * ey);
+        if (std::sqrt(dx * dx + dy * dy) <= reachIn) return true;
+    }
+    return false;
+}
+
+int FieldMap::wallHit(double xIn, double yIn, double dirX, double dirY, double* distanceIn) const {
+    double nearest = kInfinity;
+    int wall = -1;
+    // the walls are the first four segments
+    for (std::size_t i = 0; i < kPerimeterSegments && i < segments_.size(); ++i) {
+        const Segment& s = segments_[i];
+        const double ex = s.x2In - s.x1In;
+        const double ey = s.y2In - s.y1In;
+        const double denom = dirX * ey - dirY * ex;
+        if (std::fabs(denom) < kParallelEpsilon) continue;
+        const double wx = s.x1In - xIn;
+        const double wy = s.y1In - yIn;
+        const double t = (wx * ey - wy * ex) / denom;
+        const double u = (wx * dirY - wy * dirX) / denom;
+        if (t >= 0.0 && u >= 0.0 && u <= 1.0 && t < nearest) {
+            nearest = t;
+            wall = static_cast<int>(i);
+        }
+    }
+    if (distanceIn != nullptr) *distanceIn = nearest;
+    return wall;
+}
+
+const std::vector<Segment>& FieldMap::blindStretches() const { return blindStretches_; }
+
 bool FieldMap::contains(double xIn, double yIn) const {
     return xIn >= minXIn_ && xIn <= maxXIn_ && yIn >= minYIn_ && yIn <= maxYIn_;
 }

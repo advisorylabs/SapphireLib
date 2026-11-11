@@ -50,6 +50,12 @@ only corrects odometry when all of these hold:
   `agreementSigmas` (3σ). A sensor blocked by a defender disagrees; the walls the others see still
   agree.
 
+And it corrects only along an axis some agreeing reading measures (`SensorCheck::measuresX` and
+`measuresY`): a reading off the left or right wall pins down x at any slant, and one off the near or
+far wall y. Two sensors both on the left wall say nothing about y, and with nothing holding it the
+particles' y wanders; an axis nothing measures keeps the correction it had. In 96671H's SL000070 two
+readings off the left wall alone moved the pose 3.8in in y.
+
 The correction is an offset: odometry's pose becomes its raw pose plus that offset
 (`Odometry::setPositionCorrection()`), and the offset *eases in*, at most `maxCorrectionRateInPerS`
 (4 in/s), rather than jumping. A jump in the pose is a spike in every motion's derivative term: an
@@ -124,6 +130,18 @@ The exception is a fixed thing the sensors read *instead of* a wall from a commo
 few inches nearer: that isn't an outlier, it's a believable wall in the wrong place, and the
 localizer moves the robot to match. Override's loaders do this from beside them, so 96671H's map
 (`fieldMap()` in `devices.cpp`) has all four, at their real size.
+
+**Blind stretches.** A part of the wall that reads somewhere other than where the wall is, a few
+inches off, is a believable wall in the wrong place too, and adding a segment can't push the wall
+further away. `FieldMap::addBlindStretch()` marks it instead, and the localizer leaves out any
+reading whose beam lands on one (within the cone's half-width of it where the center ray meets the
+wall, from where odometry has the robot). Override's Toggles read the wall 3 to 4in long, so
+96671H's map has all four.
+
+**Turning corrections back on.** With `setMcl(false)` the particles keep weighing readings, and
+whatever misled them is where `setMcl(true)` takes odometry the moment it's on. `setMclFromHere()`
+(`MonteCarloLocalizer::restartHere()`) starts them over around odometry's pose first, for when
+odometry is the better guess at that moment.
 
 **The beam's cone.** A distance sensor's beam is a cone, not a ray, and it reads the nearest thing
 anywhere in it. The walls are read along each beam's center ray (how short of it one reads at a
@@ -297,6 +315,25 @@ the wall. Every reset logs an `mcl,wallreset` event saying what it did or why it
 
 Only the four perimeter walls count, whatever else the map has. Reset with the robot still and
 square to a clear stretch of wall; the **Wall Reset Test** routine checks it against one wall.
+
+### Onto a game element by camera
+
+Odometry, resets and all, still drifts between resets, and a routine that drives to where odometry
+puts a game element misses it by however far that is: the Triple Pin's second Pin by about 3.5in
+in SL000060-71, the third by more. A run onto a Pin need not trust it for the last of the way. Part
+way in, the trajectory can hand off, still moving (`TrajectoryFollowConfig::until`), to
+`auton::approach()`, which turns the robot to face its target and drives at it at a steady speed to
+a little past it, and the AI Vision sensor moves that target onto the yellow/yellow Pin it sees,
+frame by frame (`src/robot/vision.hpp`). The sensor's own AI model of the game elements says which
+detection is a yellow/yellow Pin, so a Red/Yellow or Blue/Yellow Pin, or a Cup, is never taken for it. The robot turns to keep the Pin in the middle of the image; it never
+strafes for it. The camera fixes the Pin's direction, not its distance, and none of it corrects
+the pose: the target stays in odometry's frame, so the scores after a grab still ride on odometry
+and the resets.
+
+96671H's Triple Pin no longer steers by camera: each run onto a Pin is a turn and a `moveToPoint()`
+for two thirds of the way, then autoClaw on and an `approach()` with no refiner for the last third,
+aimed where the field has the Pin, at autoClaw speed, with a creep on for a Pin further than the plan
+had it (`ontoPin()` in `src/robot/autons.cpp`).
 
 ## What it won't do
 

@@ -148,12 +148,12 @@ test('a wall reset square to a clear stretch of wall reads the wall, and says wh
 
 test('a wall reset is skipped where its cone takes in a Goal, a Cup or a Pin', () => {
   // on the left red Goal from the north: the right sensor's cone takes in the Cups by the left wall
-  const cup = F.wallResetCheck(field, { xIn: -47.09, yIn: -18.25, headingDeg: 180 }, kRight);
+  const cup = F.wallResetCheck(field, { xIn: -47.09, yIn: -16.55, headingDeg: 180 }, kRight);
   assert.ok(!cup.ok);
   assert.equal(cup.sees, 'cup');
   assert.ok(cup.shortIn > 1 && cup.shortIn < 4, `${cup.shortIn}`);
   // and the front one sees the Goal it's on
-  assert.match(F.wallResetCheck(field, { xIn: -41.79, yIn: -23.55, headingDeg: 270 }, kFront).why, /red goal \(left\)/);
+  assert.match(F.wallResetCheck(field, { xIn: -40.09, yIn: -23.55, headingDeg: 270 }, kFront).why, /red goal \(left\)/);
   // a standing Pin in the cone, until it's picked up
   const spot = { xIn: -47.09, yIn: -28.85, headingDeg: 0 };
   assert.match(F.wallResetCheck(field, spot, kBack, { objects: pinsGone([-T, -T]) }).why, /pin/);

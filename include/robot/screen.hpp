@@ -35,7 +35,8 @@ void buildScreen();
 void runSelectedAuton();
 
 /// While the robot is disabled: the controller's LEFT and RIGHT step through
-/// the routines, and its screen shows the one picked. Never returns: call it
+/// the routines, UP or DOWN flips the alliance (alliance.hpp, red to start),
+/// and its screen shows both. Never returns: call it
 /// last in disabled() and competition_initialize(), whose tasks end when the
 /// robot is enabled.
 void pickAutonWithController();

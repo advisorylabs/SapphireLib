@@ -163,6 +163,13 @@ struct SensorCheck {
     double residualSigmas = 0.0;
     /** whether the residual is within the agreement threshold */
     bool agrees = false;
+    /**
+     * which way the reading pins the robot down: a wall along the center ray only one way (the
+     * left and right walls x, the near and far ones y, at any slant), and something added to the
+     * map nearer than the wall the way the beam mostly points
+     */
+    bool measuresX = false;
+    bool measuresY = false;
 };
 
 /**

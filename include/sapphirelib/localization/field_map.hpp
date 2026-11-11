@@ -143,6 +143,51 @@ public:
     double castBeamIn(double xIn, double yIn, double dirX, double dirY, double halfAngleDeg) const;
 
     /**
+     * @brief Mark a stretch of the perimeter that a distance sensor can't be trusted on
+     *
+     * For a part of the wall that doesn't read where the wall is, which the localizer would
+     * otherwise take for the wall a few inches from where it is: Override's Toggles, on top of
+     * the middle of every wall, read the wall 3 to 4in long (96671H's SL000040 and SL000070), a
+     * believable wall in the wrong place rather than an outlier. MonteCarloLocalizer leaves out
+     * any reading whose beam lands on one (landsOnBlindStretch()). Not a segment: nothing is cast
+     * against it
+     *
+     * @param stretch the stretch of wall, in field coordinates
+     */
+    void addBlindStretch(Segment stretch);
+
+    /**
+     * @brief Whether a beam lands on a blind stretch (addBlindStretch()): its center ray reaches
+     * the walls within the cone's half-width at that range of one, so some of its cone is on it
+     *
+     * @param xIn the sensor face's x, in inches
+     * @param yIn the sensor face's y, in inches
+     * @param dirX the beam's direction x. (dirX, dirY) must be a unit vector
+     * @param dirY the beam's direction y
+     * @param halfAngleDeg the cone's half angle, in degrees (BeamModel::coneHalfAngleDeg)
+     * @return true if any blind stretch is in the beam's cone where it meets the walls; false
+     * with none added
+     */
+    bool landsOnBlindStretch(double xIn, double yIn, double dirX, double dirY,
+                             double halfAngleDeg) const;
+
+    /**
+     * @brief Which wall a ray meets first, not counting anything added to the map
+     *
+     * @param xIn ray start x, in inches
+     * @param yIn ray start y, in inches
+     * @param dirX ray direction x. (dirX, dirY) must be a unit vector
+     * @param dirY ray direction y
+     * @param distanceIn if not null, set to the distance to that wall, in inches (infinity if none)
+     * @return int the wall's index in segments(): 0 the near wall, 1 the right one, 2 the far one,
+     * 3 the left one. -1 if the ray meets none
+     */
+    int wallHit(double xIn, double yIn, double dirX, double dirY, double* distanceIn = nullptr) const;
+
+    /** @brief Get every blind stretch (addBlindStretch()) */
+    const std::vector<Segment>& blindStretches() const;
+
+    /**
      * @brief Whether a point is inside the perimeter walls
      */
     bool contains(double xIn, double yIn) const;
@@ -167,6 +212,7 @@ private:
     double maxXIn_;
     double maxYIn_;
     std::vector<Segment> segments_;
+    std::vector<Segment> blindStretches_;
 };
 
 /**

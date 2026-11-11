@@ -169,8 +169,16 @@ E,<t_us>,motion,continue,followTrajectory,piece=<n>,sections=<n>,samples=<n>,len
 E,<t_us>,motion,nocontinue,followTrajectory,piece=<n>,why=<none|mismatched>
 ```
 
+and one that hands off early, still moving (`TrajectoryFollowConfig::until`, to an `approach()`,
+say), logs where on its plan it did, just before its `end`
+(`reason=settled`):
+
+```
+E,<t_us>,motion,handoff,followTrajectory,distance_in=<in along the plan>
+```
+
 `kind` is one of `driveDistance`, `turnToHeading`, `moveToPoint`, `moveToPose`, `followPath`,
-`followTrajectory`. Floats are written `%.3f`, milliseconds as integers.
+`followTrajectory`, `approach`. Floats are written `%.3f`, milliseconds as integers.
 
 | kind | start keys |
 |---|---|
@@ -180,6 +188,7 @@ E,<t_us>,motion,nocontinue,followTrajectory,piece=<n>,why=<none|mismatched>
 | `moveToPose` | `x,y,heading_deg,pos_threshold,heading_threshold,settle_ms,timeout_ms` (a tank drivetrain adds `direction`, as for `moveToPoint`) |
 | `followPath` | `waypoints,lookahead_in,cruise_v,timeout_ms` |
 | `followTrajectory` | `sections,samples,length_in,duration_ms,overtime_ms` (`duration_ms` is the plan's; the motion can run `overtime_ms` past it). A chain's are its first trajectory's |
+| `approach` | `x,y,cruise_ips,start_ips,end_short_in,timeout_ms`: the target as it starts (a camera may move it after), the speed it holds through it and the speed it took over at (in/s), and how far short of the target it ends (negative past it). Its `error` is the distance to that end |
 
 - Units: inches and degrees. `threshold` is the exit tolerance (inches for drive/point motions,
   degrees for turns); `settle_ms` is how long the error must stay inside it; a `timeout_ms` of 0
@@ -213,6 +222,7 @@ Which pid channels a motion drives (see the channel table below):
 | `moveToPoint`, `moveToPose` | `drive` (distance to the target) and `turn` (heading hold, or steering on a tank) |
 | `followPath` | `turn` while pursuing; then `drive` and `turn` for the final approach |
 | `followTrajectory` | `trackFwd`, `trackStrafe`, `trackTurn` (each with the robot-frame error as the target and 0 as the measurement; the D term is the measured velocity error, not a difference), plus `traj` every tick and a `traj.plan` burst as it starts, and another at each `continue` |
+| `approach` | `trackFwd` (how far the robot lags its speed reference, in; D on the speed error) and `trackTurn` (heading error to the target, deg; D on the robot's turn rate); with a camera steering it, `vision` every frame |
 
 ### Device events
 
@@ -255,8 +265,29 @@ E,<t_us>,tune,wheel,<Vertical|Horizontal|Drive>,diameter_in=<in>
 
 ### Other tags
 
+- `vision`: 96671H's AI Vision sensor (`src/robot/vision.cpp`), which finds the Pins with its own AI
+  model of the game elements. Its per-run events come from a run steering by it (`PinSight`), and
+  no routine does now (the Triple Pin's runs onto the Pins end in an `approach()` without a camera).
+  `no_sensor,port=<n>` at startup with nothing answering on its port;
+  `class,id=<n>,name=<name>` for every class the model names, the first time it names any (the
+  yellow/yellow Pin's is in there; usually at startup, before a recording a button starts, so only
+  in a file whose recording was already running); `pin_class,id=<n>,name=<name>,modes=<bits>` at
+  the start of each run onto a Pin, for the class it looks for, and what the sensor was detecting
+  then (1 AprilTags, 2 colors, 4 the AI model's objects; the run turns 4 on if it was off); `no_pin_class,port=<n>` once per run onto a Pin
+  when the sensor answers but names no class as the yellow/yellow Pin, followed by a `class` event
+  for every class it does name, and `no_frame,port=<n>` when it doesn't answer at all (both steer
+  by odometry);
+  `lock,px=<column>,bearing_deg=<deg>,off_deg=<deg>,range_in=<in>,h_px=<px>,min_h_px=<px>,score=<n>`
+  when a run onto a Pin first sees it (or sees it again after losing it): the detection's column
+  and bearing off the camera's axis, how far that is from where odometry had the Pin (`off_deg`),
+  the target's distance, the detection's height against the least a Pin that far off may be, and
+  the model's score for it.
+
 - `auton`: `start,<routine name>` / `end,<routine name>` around each autonomous routine (a routine
-  the competition switch cuts short has no `end`).
+  the competition switch cuts short has no `end`). The Triple Pin's runs onto the Pins each log
+  `pin_run,grabbed=<0|1>,x=<in>,y=<in>,to_seat_in=<in>` as the run ends: whether the claw had
+  the Pin, where odometry had the robot, and how much further it was to where the plan seats the
+  Pin in the aligner (negative: past it). A run that ends with the claw open creeps on after it.
 - `autocycle`: 96671H's auto cycle (`src/robot/autocycle.cpp`, A in driver control).
   `start,was_x=<in>,was_y=<in>,was_heading_deg=<deg>,claw=<0|1>` as A starts it, with where odometry
   had the robot just before the start spot's `setPose()`; `grabbed,trip=<n>` once the claw has been
@@ -310,15 +341,18 @@ E,<t_us>,tune,wheel,<Vertical|Horizontal|Drive>,diameter_in=<in>
   `lift_memory,level=<entry>` when a score sets the level L1 goes to next (the goal table's entry,
   as `mech`'s `level` logs it), or `level=0` when L1+L2 or RIGHT forgets it;
   `claw,closed=<0|1>` and
-  `extender,out=<0|1>` (the side piston) when an autonomous routine moves one (driver control's are in the `mech`
-  channel instead); `lift_level,mode=<goal>,level=<entry>` when an autonomous routine sends the lift
+  `extender,side=<L|R>,out=<0|1>` (a side toggle; older logs have `extender,out=<0|1>`) when an
+  autonomous routine moves one (driver control's are in the `mech` channel instead);
+  `side_toggle,side=<L|R>,color=<R|Y|B>,hue=<deg>,sat=<0-1>,mm=<mm>` when a side toggle's sensors
+  fire its auto pulse in driver control (a color that isn't the alliance's), with what its optical
+  and distance sensor read; `lift_level,mode=<goal>,level=<entry>` when an autonomous routine sends the lift
   to a level (`mech`'s `mode` and `level`), and `lift_deg,deg=<deg>` when it sends it to a height
   in motor degrees.
 - Suggested for team code: `mark` (a driver's "that looked wrong" button).
 
 ## Channels on 96671H's robot
 
-Wired in `src/robot/telemetry.cpp`, `src/robot/macros.cpp` and `src/robot/tuning.cpp`. The
+Wired in `src/robot/telemetry.cpp`, `src/robot/macros.cpp`, `src/robot/vision.cpp` and `src/robot/tuning.cpp`. The
 `#chan` lines in each file are the authority (decimals, and columns, may change); these are the
 names to match on.
 
@@ -334,7 +368,7 @@ names to match on.
 | `traj` | samples | `ref_t,ref_x,ref_y,ref_hdg,ref_vf,ref_vs,ref_w,ff_f,ff_s,ff_t,lag,paused,sec` | Every tick of `followTrajectory()`: the plan's clock (s; it stops while `paused`, so it can trail the time since the start), the reference pose (in, in, °), its velocity in the robot frame at the planned heading (in/s ahead, in/s right, °/s), the feedforward volts per axis (0 once the plan has ended and the robot is settling), how far the robot was behind the reference along the path (in; the plan waits while this is over `maxLagIn`), 1/0 for whether the plan waited this tick, and the section. The robot's own pose at the same moment is `odom`'s. |
 | `odom` | samples | `x,y,heading,raw_x,raw_y` | Odometry pose (inches, inches, degrees 0–360) every 10 ms while enabled. The corrected pose, the one every motion drives by: raw odometry plus whatever correction the localizer has eased in (see `mcl`). `raw_x,raw_y` are raw odometry's position from the same snapshot, before any correction: what fitting the chassis from a log should differentiate, since a correction easing in (up to `maxCorrectionRateInPerS`) moves `x,y` without the motors doing anything. Older logs have only `x,y,heading`. |
 | `mcl` | samples | `x,y,spread,neff,used,agree,correcting,corr_x,corr_y,us,raw_x,raw_y` | The Monte Carlo localizer, one row per update (every 33 ms on 96671H) while enabled, recorded by the localizer's own task ([`docs/LOCALIZATION.md`](LOCALIZATION.md)): its estimate (inches), the particles' RMS spread around it (inches), the effective particle count, how many of the four distance sensors gave a usable reading and how many of those agree with the walls, 1/0 for whether that update set odometry's correction, the correction odometry is easing toward (inches), how long the update took (`us`, microseconds of wall time: an upper bound on its CPU), and raw odometry's position (inches) before any correction. The correction is how far raw odometry had drifted; `x,y` minus `raw_x,raw_y` is the same thing, for every update rather than only correcting ones. |
-| `mcl.beams` | samples | `m0,e0,v0,m1,e1,v1,m2,e2,v2,m3,e3,v3` | Each distance sensor in that update, in the order the localizer was given them (96671H: front, right, back, left): `m` the reading in inches after latency compensation (`nan` when unusable: nothing in range, low confidence, dropped, or skipped mid-spin), `e` what the map says it should read from the estimate (inches, the walls along the beam's center ray and anything added to the map anywhere in its cone, `FieldMap::castBeamIn()`; `inf` when the beam would see nothing in range), and `v` how fast the sensor was closing on what it points at (in/s, by odometry). `m - e` is the reading's error against the map. The simulator's Tune tab calibrates the localizer's world from these (sensor noise, blocked and missing readings, the latency left uncompensated, mount errors and the tracking wheels' scale): [`docs/TUNING.md`](TUNING.md). Four sensors fill 12 of a row's 13 columns. |
+| `mcl.beams` | samples | `m0,e0,v0,m1,e1,v1,m2,e2,v2,m3,e3,v3` | Each distance sensor in that update, in the order the localizer was given them (96671H: front, right, back, left): `m` the reading in inches after latency compensation (`nan` when unusable: nothing in range, low confidence, dropped, skipped mid-spin, or landing on a blind stretch of wall, `FieldMap::addBlindStretch()`), `e` what the map says it should read from the estimate (inches, the walls along the beam's center ray and anything added to the map anywhere in its cone, `FieldMap::castBeamIn()`; `inf` when the beam would see nothing in range), and `v` how fast the sensor was closing on what it points at (in/s, by odometry). `m - e` is the reading's error against the map. The simulator's Tune tab calibrates the localizer's world from these (sensor noise, blocked and missing readings, the latency left uncompensated, mount errors and the tracking wheels' scale): [`docs/TUNING.md`](TUNING.md). Four sensors fill 12 of a row's 13 columns. |
 | `mcl.state` | samples | `sxx,syy,sxy,fit,fit_ratio,recovered,resampled,blocked,hdg` | The rest of each update, for the analyzer's replay: the particles' weighted covariance (`sxx`, `syy` variances and `sxy` covariance, in²: the uncertainty ellipse), recovery's fit (`fit`, how well the particles explain the readings as a share of a perfect fit per reading, 0 to 1) and its fast average over its slow one (`fit_ratio`: recovery starts below `filter.recovery.triggerRatio`), how many particles recovery replaced, 1/0 for whether the update resampled, why it didn't correct odometry (`blocked`, bits below; 0 when it did), and the heading the beams were cast at (`hdg`, degrees: odometry's, wound back by `sensorLatencyMs` of turning). |
 | `mcl.pts` | samples | `dx0,dy0,...,dx5,dy5` | A sample of the particle cloud: every 5th update, 24 particles picked by weight (`sampleParticles()`, systematic), as four rows of six (x, y) offsets from that update's estimate, in inches. The four rows of one sample are recorded within microseconds of each other; group rows less than 10 ms apart. Add the `mcl` row's `x,y` for field positions. |
 | `chassis` | samples | `fwd_v,strafe_v,turn_v` | The volts the drivetrain last commanded on each axis, before each motor's ±12 V clamp, every 10 ms while enabled. A snapshot, possibly one tick torn across the three fields; `strafe_v` is always 0 on a tank. |
@@ -343,7 +377,8 @@ names to match on.
 | `driver` | samples | `lx,ly,rx,ry,buttons,connected` | The controller, every opcontrol tick (20 ms): sticks in −1…1, the held buttons as a bitmask (bit *i* = `input::Button` *i*: L1, L2, R1, R2, Up, Down, Left, Right, X, B, Y, A), and 1/0 for whether the controller is connected. |
 | `lift` | pid | pid columns | The lift's position PID. |
 | `lift.act` | samples | `target,pos,volts,law` | Every lift update, every 20 ms in every mode (the lift's own task; older logs only have rows from driver control): target and position in degrees (motor degrees from the lift motors' encoders, zeroed on the bottom switch; the rotation sensor's degrees in older logs; `pos` is `nan` if nothing answered), the volts the motors were actually sent (after gravity feedforward and the ±12 V clamp; 0 while braking; `nan` while Auto-Tune has the motors), and which branch of the control law ran (`law`, below). |
-| `mech` | samples | `claw,extender,piece_mm,level,mode,phase,bottom,approach_ips` | The macro system, every opcontrol tick: the claw piston (1 closed) and the side piston, `extender` (1 out), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 the bottom; its entry in the goal's table, not the L number the controller shows, so medium's and center's L2 logs 1) and goal (0 alliance, 1 medium, 2 center), the running score step (−1 none; else 0 scoreDescend, 1 scoreRelease), the lift's bottom switch (1 pressed), and how fast the robot drives its claw onto whatever is in front of it (in/s, odometry's, 0 backing away: autoClaw's speed). Logs from before autoClaw's lead end at `bottom`; some older ones end with `reach_mm`: how far out autoClaw would have closed on a pin at that tick's speed (mm). Logs from before the three-motor lift have `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed,top` instead: volts sent to the intake and roller claw, the claw piston (1 extended), the distance sensor, level (0 stowed) and goal, the sequence step (0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), whether the claw was deployed, and the top piston (1 extended; missing from logs older still). |
+| `mech` | samples | `claw,extender,piece_mm,level,mode,phase,bottom,approach_ips,extender_r` | The macro system, every opcontrol tick: the claw piston (1 closed) and the left side toggle, `extender` (1 out; the only side piston before the right one, `extender_r`, last), the claw's distance sensor (mm; `nan` if it didn't answer), the lift's preset level (0 the bottom; its entry in the goal's table, not the L number the controller shows, so medium's and center's L2 logs 1) and goal (0 alliance, 1 medium, 2 center), the running score step (−1 none; else 0 scoreDescend, 1 scoreRelease), the lift's bottom switch (1 pressed), how fast the robot drives its claw onto whatever is in front of it (in/s, odometry's, 0 backing away: autoClaw's speed), and the right side toggle (1 out). Logs from before the right side toggle end at `approach_ips`; logs from before autoClaw's lead end at `bottom`; some older ones end with `reach_mm`: how far out autoClaw would have closed on a pin at that tick's speed (mm). Logs from before the three-motor lift have `intake_v,claw_v,piston,piece_mm,level,mode,phase,deployed,top` instead: volts sent to the intake and roller claw, the claw piston (1 extended), the distance sensor, level (0 stowed) and goal, the sequence step (0 scoreDescend, 1 scoreOuttake, 2 dipLower, 3 dipBottom, 4 stowLower), whether the claw was deployed, and the top piston (1 extended; missing from logs older still). |
+| `vision` | samples | `seen,px,bearing,expect,pin_x,pin_y,blobs,pins,h_px,score,objects,classes` | Every new AI Vision frame while a run onto a Pin is steering by it (`src/robot/vision.cpp`, about 30 a second): whether it found the Pin (1) or not (0), the Pin's column (px from the image's left edge, −1 none) and bearing off the camera's axis (deg, positive right) (with `seen` 0, those and `h_px` and `score` are the tallest sure Pin the gates turned down, so where it was says why), the bearing it looked for it at (`expect`: where the last frame saw it, or the target before the first), the target before this frame moved it (`pin_x`, `pin_y`, odometry's frame), how many standing yellow/yellow Pins the AI model was sure of (`blobs`) and how many detections of that class at all (`pins`), and the Pin's height in the image (px) and the model's score for it; then how many detections of anything the frame had (`objects`) and which of the AI model's classes it saw (`classes`, bit n set for class n: 8 is class 3 alone). A frame counts as new when any detection in it changes, so a frame showing nothing at all is one row until something comes into view. |
 | `char.fwd`, `char.strafe`, `char.turn`, `char.lift` | samples | `volts,pos` | Auto-Tune characterization runs, one row per sample the runner takes. Declared in every file; rows appear only while Auto-Tune runs. See [Refitting an axis offline](#refitting-an-axis-offline-from-char-rows). |
 
 `mcl.state`'s `blocked` is `LocalizationStatus::blockedBy`, a sum of these bits; a reader should

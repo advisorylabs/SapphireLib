@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "robot/alliance.hpp"
 #include "robot/autons.hpp"
 #include "robot/config.hpp"
 #include "robot/devices.hpp"
@@ -241,6 +242,9 @@ void buildScreen() {
     checks.push_back(check("East distance sensor", ports::kDistanceRight, DeviceKind::distance));
     checks.push_back(check("South distance sensor", ports::kDistanceBack, DeviceKind::distance));
     checks.push_back(check("West distance sensor", ports::kDistanceLeft, DeviceKind::distance));
+    checks.push_back(check("Left toggle optical", ports::kLeftToggleOptical, DeviceKind::optical));
+    checks.push_back(check("Right toggle optical", ports::kRightToggleOptical, DeviceKind::optical));
+    checks.push_back(check("AI Vision sensor", ports::kVision, DeviceKind::aiVision));
     gui.addPage(std::make_unique<DiagnosticsPage>(std::move(checks), &gui));
 
     auto pidTunerPage = std::make_unique<PidTunerPage>();
@@ -314,9 +318,14 @@ void pickAutonWithController() {
         master.update();
         if (master.pressed(Button::left)) autonSelector->previous();
         if (master.pressed(Button::right)) autonSelector->next();
-        master.screen().setLine(0, "AUTON <- ->");
+        // UP or DOWN flips the alliance (alliance.hpp), for the side toggles.
+        // Only ever runs under competition control, which alliance() needs.
+        if (master.pressed(Button::up) || master.pressed(Button::down)) {
+            setAlliance(alliance() == Alliance::red ? Alliance::blue : Alliance::red);
+        }
+        master.screen().setLine(0, "AUTON <> ALLY^v");
         master.screen().setLine(1, "%s", autonSelector->selectedName().c_str());
-        master.screen().setLine(2, "%s", "");
+        master.screen().setLine(2, "%s ALLIANCE", allianceName(alliance()));
         master.flushScreen();
         pros::delay(kDriverLoopMs);
     }

@@ -49,8 +49,9 @@
  *              within 80ms of the first is clean; pressed later while the
  *              first is still held, it still toggles autoClaw, but the first
  *              has already acted on its own.
- *   Y          Push the side piston out, or pull it back in. Works at any
- *              time, a score included.
+ *   Y          Push both side toggles out, or pull them both back in (both in
+ *              if either was out). Works at any time, a score included. Each
+ *              one out also fires on its own (see Side toggles).
  *   RIGHT      Cycle goal (ALLIANCE, MEDIUM, CENTER), each with its own
  *              level heights and level count. The lift keeps its level (its
  *              L number), moving to the new goal's height for it: from
@@ -60,7 +61,26 @@
  *   LEFT       Cycle the controller's bottom line: lift position and target,
  *              the claw's sensor (CLAW: its reading, and how fast the robot
  *              drove onto the last pin autoClaw grabbed, in in/s), then each
- *              lift motor's volts, current, and temperature.
+ *              lift motor's volts, current, and temperature, then each side
+ *              toggle's sensors, left then right: "LY* 48 62%   40"
+ *              is the left optical seeing yellow (R, Y, B, or - for no
+ *              color), '*' while they'd fire it, the optical's hue (degrees)
+ *              and saturation, and the distance sensor (mm).
+ *
+ * Side toggles: two pistons, left (H) and right (G). Y moves both together.
+ * Each one out also fires on its own, in every mode, to flip what it's next
+ * to round to our alliance's color (alliance.hpp, picked on the controller
+ * before the match, red off the field): when its distance sensor (config.hpp:
+ * the localizer's west or east one) reads under 65mm and its optical (17
+ * left, 1 right) sees a color that isn't ours, yellow (or the green yellow
+ * sometimes reads as) or blue on red, red or yellow on blue, it goes in for
+ * 250ms, then back out for 250ms, and only then can it fire again; still
+ * seeing the wrong color, it does. A toggle Y has pulled in stays in and
+ * doesn't fire. The numbers and the colors' hue ranges are kToggle* and
+ * kRedHues and the rest in macros.cpp. Driver control only: autonomous moves
+ * them, together or one at a time, with setExtended(). Driver control starts
+ * with both out (main.cpp's opcontrol()), wherever autonomous left them, so
+ * both fire on their own from its start until Y pulls them in.
  *
  * autoClaw: only while clawSpeed is on (R1+R2). With the claw open and the
  * lift down at its bottom level, the claw closes on a pin by itself, early
@@ -71,7 +91,8 @@
  * or a score), autoClaw waits for the sensor to see the claw empty before it
  * closes again, so opening the claw to drop a pin doesn't snap it shut on
  * the same one. Opening an empty claw leaves autoClaw ready for the next
- * pin.
+ * pin. The AI Vision sensor (vision.hpp) plays no part in driver control's
+ * autoClaw: it sits idle outside autonomous's runs onto the Pins.
  *
  * Bottom lift: at the bottom level, the lift sits at 75 motor degrees
  * whenever the claw is closed, and all the way down whenever it's open. So a
@@ -215,8 +236,10 @@ void setClawClosed(bool closed);
 /// Whether the claw is closed, or about to be: what it was last told.
 bool clawClosed();
 
-/// Sets the claw's and side piston's ports up again and sends each valve the
-/// state the macros have it in. The pistons are built before initialize(),
+/// Sends each valve (the claw, both side toggles) the state the macros have it
+/// in, setting its port up again only if the brain doesn't have it as an
+/// output (Piston::resend()). update() also resends every valve every tick,
+/// so one the brain took low is back within a tick. The pistons are built before initialize(),
 /// and the brain can drop what they send then: a valve whose starting state
 /// is the port's high one would go to its low one once the 3-wire ports come
 /// up (the LEDs' setup, at the end of initialize()), while the macros still
@@ -259,6 +282,14 @@ void grabPreload();
 /// it, and one without it goes back to the lead. Ignored by
 /// setAutoClaw(false).
 ///
+/// Turned on with the claw open and empty, opened kAutoClawClearMs (400ms)
+/// or more ago, it's armed at once: a routine may turn it on just short of
+/// the Pin (autons.cpp's ontoPin() does, for the last third of the run).
+/// Its speed limit holds only motions that start after it, and never
+/// followTrajectory(), whose plan sets its own speeds: ontoPin() starts its
+/// approach() right after it, and turns it off again after the grab, so the
+/// turn after that isn't held to it.
+///
 /// It turns itself off kClawSpeedOffDelayMs after the grab, as clawSpeed
 /// does, so the motions after it are full speed again; the claw opening
 /// before then keeps it on. It also turns off with setAutoClaw(false), when
@@ -276,11 +307,26 @@ void setAutoClaw(bool on, std::optional<std::int32_t> grabMm = std::nullopt);
 /// Whether setAutoClaw()'s mode is on. Safe from any task.
 bool autoClaw();
 
-/// Pushes the side piston out (true) or pulls it in (false), as Y does.
+/// The two side toggles: left on H, right on G (config.hpp).
+enum class Side : std::uint8_t { left, right };
+
+/// Pushes both side toggles out (true) or pulls them in (false), as Y does.
+/// Their auto pulses don't run in autonomous (see Side toggles).
 void setExtended(bool out);
 
-/// Whether the side piston is out, or about to be: what it was last told.
+/// Pushes one side toggle out (true) or pulls it in (false), leaving the
+/// other where it is:
+///
+///   macros::setExtended(macros::Side::left, true);   // just the left one out
+///   macros::setExtended(macros::Side::right, false); // the right one in
+void setExtended(Side side, bool out);
+
+/// Whether either side toggle is out, or about to be: what Y or
+/// setExtended() last told them, not an auto pulse.
 bool extended();
+
+/// Whether one side toggle is out, or about to be, as extended() above.
+bool extended(Side side);
 
 // --- The lift, for autonomous ---
 //

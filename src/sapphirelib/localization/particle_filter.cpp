@@ -274,6 +274,16 @@ std::size_t ParticleFilter::checkSensors(double xIn, double yIn, double headingD
             check.residualSigmas = (check.measuredIn - check.expectedIn) / check.sigmaIn;
             check.agrees = std::fabs(check.residualSigmas) <= agreementSigmas;
             if (check.agrees) ++agreeing;
+            double wallIn = 0.0;
+            const int wall = map_.wallHit(ray.xIn, ray.yIn, ray.dirX, ray.dirY, &wallIn);
+            if (check.expectedIn < wallIn || wall < 0) {
+                // something added to the map, nearer than the wall
+                check.measuresX = std::fabs(ray.dirX) >= std::fabs(ray.dirY);
+                check.measuresY = !check.measuresX;
+            } else {
+                check.measuresX = wall == 1 || wall == 3;
+                check.measuresY = wall == 0 || wall == 2;
+            }
         }
         if (s < out.size()) out[s] = check;
     }
