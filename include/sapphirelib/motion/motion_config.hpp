@@ -54,6 +54,13 @@ struct PoseExitConditions {
      * motion to carry on from. See ExitConditions::chain. False by default
      */
     bool chain = false;
+
+    /**
+     * the least it drives toward the point with, in volts, until it's first within
+     * positionErrorThresholdIn. See ExitConditions::minVolts. The heading is left to its PID. 0 by
+     * default
+     */
+    double minVolts = 0.0;
 };
 
 /**

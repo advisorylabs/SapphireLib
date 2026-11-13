@@ -10,6 +10,7 @@
 #include "pros/rtos.hpp"
 #include "sapphirelib/gui/field_view_math.hpp"
 #include "sapphirelib/odom/odometry_math.hpp"
+#include "sapphirelib/telemetry/calibration_log.hpp"
 
 namespace sapphirelib::gui {
 
@@ -298,15 +299,22 @@ void OdometryPage::runCalibration() {
         }
         calibSetSpin_(0.0);
 
-        const double rotatedRadians =
-            (calibImu_->getCumulativeHeadingDeg() - startCumulativeDeg) * (kPi / 180.0);
+        const double rotatedDeg = calibImu_->getCumulativeHeadingDeg() - startCumulativeDeg;
+        const double rotatedRadians = rotatedDeg * (kPi / 180.0);
 
         odom::OdometryConfig config = odometry_.getConfig();
+        // to the SD card's calibration log in full, with what it measured from
+        telemetry::CalibrationRecord record("offsets");
+        record.add("turns", calibTurns_).add("spin_power", calibSpinPower_);
+        record.add("rotated_deg", rotatedDeg);
         if (calibVertical_) {
             const double wheelDistanceIn = calibVertical_->getDistanceIn() - startVerticalIn;
             const double offsetIn =
                 odom::calibrateTrackingWheelOffsetIn(wheelDistanceIn, rotatedRadians);
             calibVerticalOffsetIn_.store(offsetIn);
+            record.add("vertical_travel_in", wheelDistanceIn)
+                .add("vertical_offset_in", offsetIn)
+                .add("was_vertical_offset_in", config.verticalOffsetIn);
             config.verticalOffsetIn = offsetIn;
         }
         if (calibHorizontal_) {
@@ -314,10 +322,14 @@ void OdometryPage::runCalibration() {
             const double offsetIn =
                 odom::calibrateTrackingWheelOffsetIn(wheelDistanceIn, rotatedRadians);
             calibHorizontalOffsetIn_.store(offsetIn);
+            record.add("horizontal_travel_in", wheelDistanceIn)
+                .add("horizontal_offset_in", offsetIn)
+                .add("was_horizontal_offset_in", config.horizontalOffsetIn);
             config.horizontalOffsetIn = offsetIn;
         }
         // applied straight to the live odometry, so the offsets take effect right away
         odometry_.setConfig(config);
+        telemetry::saveCalibration(record);
 
         calibResultsReady_.store(true);
         calibrating_.store(false);

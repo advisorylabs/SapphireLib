@@ -110,6 +110,7 @@ odom::Pose pose();
  * moveToPoint(0, 24, {.chain = true});           // keep moving into the next motion...
  * moveToPoint(24, 48);                           // ...which ends stopped
  * moveToPoint(0, 0, {.reverse = true});          // back up to it (tank)
+ * moveToPoint(0, 24, {.chain = true, .minVolts = 6}); // reach the chain's exit at 6V or more
  * @endcode
  */
 struct Options {
@@ -140,6 +141,16 @@ struct Options {
      * uses 1in and 2 degrees, or 3in and 5 degrees when chaining
      */
     double exitError = 0.0;
+
+    /**
+     * the least motor voltage it drives (or turns) toward the target with, until it's first
+     * within exitError: for chain, so the motion doesn't slow down for a stop it won't make and
+     * the next one starts at this speed or more. It even overrides the PID's braking. Unchained,
+     * it overshoots by however far that speed carries it, then settles as usual. Held to maxVolts
+     * and setSpeedLimit(). moveToPose() holds its drive to it, not its turn to the heading. 0, the
+     * default, slows down as the PID does
+     */
+    double minVolts = 0.0;
 };
 
 /**
@@ -252,6 +263,10 @@ struct PathOptions {
 
     /** carry on from the end into the next motion, without stopping. False by default */
     bool chain = false;
+
+    /** the least voltage the final approach drives with until it's first within 1in (3in
+     * chaining). See Options::minVolts. 0 by default */
+    double minVolts = 0.0;
 };
 
 /**
@@ -417,6 +432,27 @@ bool resetLeft();
 
 /** @brief resetFront(), with the sensor facing right */
 bool resetRight();
+
+/**
+ * @brief resetFront() and the rest, trusting the readings `config` says to, rather than use()'s
+ * Settings::wallReset. For one spot a routine knows is clean: near a corner, say, where the margin
+ * that suits the rest of the field would skip it
+ *
+ * @b Example
+ * @code {.cpp}
+ * resetLeft({.cornerMarginIn = 10, .maxJumpIn = 60}); // y off the end wall, beside a loader
+ * @endcode
+ */
+bool resetFront(const localization::WallResetConfig& config);
+
+/** @brief resetBack(), trusting the readings `config` says to (see resetFront(config)) */
+bool resetBack(const localization::WallResetConfig& config);
+
+/** @brief resetLeft(), trusting the readings `config` says to (see resetFront(config)) */
+bool resetLeft(const localization::WallResetConfig& config);
+
+/** @brief resetRight(), trusting the readings `config` says to (see resetFront(config)) */
+bool resetRight(const localization::WallResetConfig& config);
 
 /**
  * @brief Turn the localizer's corrections on or off, e.g. off while pushing against a goal the

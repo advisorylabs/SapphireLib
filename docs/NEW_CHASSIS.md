@@ -21,6 +21,13 @@ Every on-robot calibration applies what it finds to the running program and **sa
 restart goes back to the code. So every step below ends with where to copy the numbers, then a
 rebuild, then a check that the code now does what the calibration did.
 
+The numbers to copy are on the SD card too: Calibrate Offsets, Calibrate Sensors, the Wheel's
+Apply and Auto-Tune each add their results to **`CALIB.TXT`** (in the `sl` folder, or the card's
+root without one) as they finish, recording or not. Every number in it is exact, all the digits
+the double has, where the screen rounds to two or three. Each record starts with an `@ t=` line
+(seconds since the program started), then a `kind,name=value,...` line per thing measured, with
+`was_*` the value it replaced. It only grows: delete it on a computer to start over.
+
 Contents: [Before you start](#before-you-start) · [1. Macros and lift heights](#1-macros-and-lift-heights) ·
 [2. Lift](#2-lift-auto-tune-then-hardcode) · [3. Odometry](#3-odometry) ·
 [4. Sensor mounts](#4-mcl-sensor-mounts-calibrate-sensors) · [5. Drive PIDs](#5-drive-pids-auto-tune-then-hardcode) ·

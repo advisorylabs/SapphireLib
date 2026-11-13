@@ -140,8 +140,8 @@ constexpr double kHorizontalWheelDiameterIn = 2.043;
 // phantom travel into the pose. TODO: check once on the robot: on the Odom
 // page, spin in place a few turns and watch x/y, which should barely move;
 // or run "Calibrate Offsets" and compare its signs with these.
-constexpr double kVerticalWheelOffsetIn = 0.00;
-constexpr double kHorizontalWheelOffsetIn = 0.82;
+constexpr double kVerticalWheelOffsetIn = -0.003365817853497911;
+constexpr double kHorizontalWheelOffsetIn = 0.613249175547692;
 
 // Where each localization distance sensor's face sits, measured from the
 // tracking center (see DistanceSensorMount): inches forward (negative is

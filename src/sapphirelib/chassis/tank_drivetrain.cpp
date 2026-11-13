@@ -47,6 +47,16 @@ SideVolts capSides(double leftVolts, double rightVolts, double maxVolts) {
     return {leftVolts * ceiling / largest, rightVolts * ceiling / largest};
 }
 
+// volts raised to at least minVolts toward the error, braking or not, until the motion has got
+// within its threshold (reached, as of the tick before: the tick it gets there still sends
+// minVolts, which a chained motion leaves running into the next). See ExitConditions::minVolts
+double keepSpeed(double volts, double error, double minVolts, bool reached) {
+    if (reached || !(minVolts > 0.0) || (volts * error > 0.0 && std::fabs(volts) >= minVolts)) {
+        return volts;
+    }
+    return std::copysign(minVolts, error);
+}
+
 // how long the error must stay within threshold: no time at all for a chained motion, which ends
 // on the first tick it's there (see ExitConditions::chain)
 template <class Exit> std::uint32_t settleMs(const Exit& exit) {
@@ -144,12 +154,16 @@ motion::MotionResult TankDrivetrain::driveDistance(double inches, ExitConditions
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
+    // whether it has been within its threshold yet, see keepSpeed()
+    bool reached = false;
 
     while (true) {
         const double traveledInches = degreesToInches(sideAverageDegrees() - startDegrees);
         const double error = inches - traveledInches;
 
-        const double output = drivePID_.update(inches, traveledInches);
+        const double output =
+            keepSpeed(drivePID_.update(inches, traveledInches), error, exit.minVolts, reached);
+        reached = reached || std::fabs(error) <= exit.errorThreshold;
 
         double correction = 0.0;
         if (config_.headingCorrectionKP != 0.0) {
@@ -193,13 +207,16 @@ motion::MotionResult TankDrivetrain::turnToHeading(double headingDeg, ExitCondit
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorDeg = 0.0;
+    // whether it has been within its threshold yet, see keepSpeed()
+    bool reached = false;
 
     while (true) {
         const double error = turn.errorDeg(imu_.getHeadingDeg());
 
         // the PID doesn't know heading wraps at 360, so pass the wrapped error as the target and 0
         // as the measurement. derivativeOnMeasurement must stay false for this
-        const double output = turnPID_.update(error, 0.0);
+        const double output = keepSpeed(turnPID_.update(error, 0.0), error, exit.minVolts, reached);
+        reached = reached || std::fabs(error) <= exit.errorThreshold;
 
         const SideVolts sides = capSides(output, -output, exit.maxVolts);
         setSideVoltages(sides.left, sides.right);
@@ -256,6 +273,8 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
     // whether a forced direction has given way to the shorter one (see kFreeSteerRadiusIn).
     // Latched until a bump takes it twice as far out, so it doesn't flap at the edge
     bool freeSteering = false;
+    // whether it has been within its threshold yet, see keepSpeed()
+    bool reached = false;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -280,7 +299,9 @@ motion::MotionResult TankDrivetrain::approachPoint(double xIn, double yIn,
         const double driveScale =
             forced ? std::max(0.0, std::cos(steer.headingErrorDeg * kDegToRad)) : 1.0;
         const double forwardOutput =
-            steer.direction * driveScale * drivePID_.update(distanceIn, 0.0);
+            steer.direction * driveScale *
+            keepSpeed(drivePID_.update(distanceIn, 0.0), distanceIn, exit.minVolts, reached);
+        reached = reached || distanceIn <= exit.errorThreshold;
         const double turnOutput = turnPID_.update(steer.headingErrorDeg, 0.0);
 
         const SideVolts sides =
@@ -328,6 +349,8 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
+    // whether the position has been within its threshold yet, see keepSpeed()
+    bool reached = false;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -339,7 +362,10 @@ motion::MotionResult TankDrivetrain::moveToPose(double xIn, double yIn, double h
         step = next;
 
         const double forwardOutput =
-            step.direction * step.driveScale * drivePID_.update(step.driveErrorIn, 0.0);
+            step.direction * step.driveScale *
+            keepSpeed(drivePID_.update(step.driveErrorIn, 0.0), step.driveErrorIn, exit.minVolts,
+                      reached);
+        reached = reached || step.distanceIn <= exit.positionErrorThresholdIn;
         const double turnOutput = turnPID_.update(step.turnErrorDeg, 0.0);
 
         const SideVolts sides =

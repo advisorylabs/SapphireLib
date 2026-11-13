@@ -42,7 +42,7 @@
   // a sensor counts as facing a side within this many degrees of it
   const kFacingToleranceDeg = 45.0;
 
-  /** auton.hpp's Options: { timeoutMs, maxVolts, chain, exitError }, all optional. */
+  /** auton.hpp's Options: { timeoutMs, maxVolts, chain, exitError, minVolts }, all optional. */
   function exitFor(options, error, chainError) {
     const exit = {
       errorThreshold: options.exitError > 0 ? options.exitError : (options.chain ? chainError : error),
@@ -87,11 +87,14 @@
 
     // a motion's top volts: its own, held to setSpeedLimit()'s
     const limitedVolts = (volts) => Math.min(volts, speedLimitVolts);
+    // a motion's least volts (Options::minVolts), held to its top volts. Unset or negative is none
+    const floorVolts = (volts, maxVolts) => (volts > 0.0 ? Math.min(volts, Math.max(maxVolts, 0.0)) : 0.0);
 
-    // exitFor(), with the speed limit
+    // exitFor(), with the speed limit, and Options::minVolts held to it
     function limitedExit(options, error, chainError) {
       const exit = exitFor(options, error, chainError);
       exit.maxVolts = limitedVolts(exit.maxVolts);
+      exit.minVolts = floorVolts(options.minVolts, exit.maxVolts);
       return exit;
     }
 
@@ -221,6 +224,7 @@
           maxVolts: limitedVolts(options.maxVolts === undefined ? 12.0 : options.maxVolts),
           chain: options.chain === true,
         };
+        exit.minVolts = floorVolts(options.minVolts, exit.maxVolts);
         if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
         return yield* dt.moveToPose(xIn, yIn, headingDeg, exit);
       },
@@ -233,7 +237,7 @@
           limitedExit(options, kExitIn, kChainExitIn));
       },
 
-      /** followPath(points, { timeoutMs, maxVolts, lookaheadIn, chain }): PathOptions. */
+      /** followPath(points, { timeoutMs, maxVolts, lookaheadIn, chain, minVolts }): PathOptions. */
       *followPath(points, options = {}) {
         yield* begin();
         const maxVolts = limitedVolts(options.maxVolts === undefined ? 8.0 : options.maxVolts);
@@ -241,7 +245,8 @@
           lookaheadIn: options.lookaheadIn === undefined ? 10.0 : options.lookaheadIn,
           cruiseVoltage: maxVolts,
           timeoutMs: options.timeoutMs === undefined ? 10000 : options.timeoutMs,
-          finalExit: { errorThreshold: options.chain ? kChainExitIn : kExitIn, maxVolts, chain: options.chain === true },
+          finalExit: { errorThreshold: options.chain ? kChainExitIn : kExitIn, maxVolts, chain: options.chain === true,
+            minVolts: floorVolts(options.minVolts, maxVolts) },
         });
       },
 

@@ -43,6 +43,11 @@ std::atomic<double> speedLimitVolts{kFullVolts};
 // a motion's top volts: its own, held to setSpeedLimit()'s
 double limitedVolts(double volts) { return std::min(volts, speedLimitVolts.load()); }
 
+// a motion's least volts (Options::minVolts), held to its top volts. NaN or negative is none
+double floorVolts(double volts, double maxVolts) {
+    return volts > 0.0 ? std::min(volts, std::max(maxVolts, 0.0)) : 0.0;
+}
+
 // what use() was given. Set once in initialize(), before any routine runs, so unsynchronized
 chassis::HolonomicDrivetrain* holonomic = nullptr;
 chassis::TankDrivetrain* tank = nullptr;
@@ -125,6 +130,7 @@ chassis::ExitConditions exitFor(const Options& options, double error, double cha
     if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
     exit.maxVolts = limitedVolts(options.maxVolts);
     exit.chain = options.chain;
+    exit.minVolts = floorVolts(options.minVolts, exit.maxVolts);
     return exit;
 }
 
@@ -239,7 +245,7 @@ template <class Done> bool waitWhileRunning(const char* kind, Done&& done) {
 
 // --- the wall resets ---
 
-bool resetFacing(double facingDeg, const char* kind) {
+bool resetFacing(double facingDeg, const localization::WallResetConfig& config, const char* kind) {
     if (localizer == nullptr) {
         SAPPHIRELIB_LOG_ERROR("auton", "%s: no localizer - pass one to auton::use()", kind);
         return false;
@@ -258,7 +264,7 @@ bool resetFacing(double facingDeg, const char* kind) {
         SAPPHIRELIB_LOG_ERROR("auton", "%s: no distance sensor faces that way", kind);
         return false;
     }
-    const localization::WallFix fix = localizer->resetFromWall(*sensor, settings.wallReset);
+    const localization::WallFix fix = localizer->resetFromWall(*sensor, config);
     if (fix.ok) {
         SAPPHIRELIB_LOG_INFO("auton", "%s: %c = %.1f (moved %.1fin)", kind,
                              fix.axis == localization::WallAxis::x ? 'x' : 'y', fix.valueIn,
@@ -357,6 +363,7 @@ motion::MotionResult moveToPose(double xIn, double yIn, double headingDeg, Optio
     if (options.timeoutMs > 0) exit.timeoutMs = options.timeoutMs;
     exit.maxVolts = limitedVolts(options.maxVolts);
     exit.chain = options.chain;
+    exit.minVolts = floorVolts(options.minVolts, exit.maxVolts);
     if (tank != nullptr) {
         return tank->moveToPose(xIn, yIn, headingDeg, *odometry, exit, directionFor(options));
     }
@@ -381,6 +388,7 @@ motion::MotionResult followPath(std::vector<motion::Waypoint> points, PathOption
     chassis::ExitConditions finalExit{options.chain ? kChainExitIn : kExitIn};
     finalExit.maxVolts = volts;
     finalExit.chain = options.chain;
+    finalExit.minVolts = floorVolts(options.minVolts, volts);
     const motion::PursuitConfig config{.lookaheadIn = options.lookaheadIn,
                                        .cruiseVoltage = volts,
                                        .finalExit = finalExit,
@@ -493,13 +501,29 @@ bool waitUntilWaypoint(std::size_t waypoint) {
     });
 }
 
-bool resetFront() { return resetFacing(0.0, "resetFront"); }
+bool resetFront() { return resetFacing(0.0, settings.wallReset, "resetFront"); }
 
-bool resetBack() { return resetFacing(180.0, "resetBack"); }
+bool resetBack() { return resetFacing(180.0, settings.wallReset, "resetBack"); }
 
-bool resetLeft() { return resetFacing(270.0, "resetLeft"); }
+bool resetLeft() { return resetFacing(270.0, settings.wallReset, "resetLeft"); }
 
-bool resetRight() { return resetFacing(90.0, "resetRight"); }
+bool resetRight() { return resetFacing(90.0, settings.wallReset, "resetRight"); }
+
+bool resetFront(const localization::WallResetConfig& config) {
+    return resetFacing(0.0, config, "resetFront");
+}
+
+bool resetBack(const localization::WallResetConfig& config) {
+    return resetFacing(180.0, config, "resetBack");
+}
+
+bool resetLeft(const localization::WallResetConfig& config) {
+    return resetFacing(270.0, config, "resetLeft");
+}
+
+bool resetRight(const localization::WallResetConfig& config) {
+    return resetFacing(90.0, config, "resetRight");
+}
 
 void setMcl(bool on) {
     if (localizer == nullptr) {

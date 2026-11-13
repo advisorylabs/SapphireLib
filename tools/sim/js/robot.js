@@ -69,6 +69,14 @@
     return Math.sign(error) * minVolts;
   }
 
+  // holonomic_drivetrain.cpp's keepSpeed(): volts raised to at least minVolts toward the error,
+  // braking or not, until the motion has been within its threshold as of the tick before
+  // (ExitConditions::minVolts)
+  function keepSpeed(volts, error, minVolts, reached) {
+    if (reached || !(minVolts > 0.0) || (volts * error > 0.0 && Math.abs(volts) >= minVolts)) return volts;
+    return (error < 0 ? -1 : 1) * minVolts;
+  }
+
   // holonomic_drivetrain.cpp's translationFloor(): the forward and sideways floors, blended by how
   // much of the way (forwardIn, lateralIn) is each
   function translationFloor(forwardIn, lateralIn, floors) {
@@ -913,8 +921,10 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
-      // whether the push floor is off, see floorOff()
+      // whether the push floor is off, see floorOff(); whether it has been within its threshold
+      // yet, see keepSpeed()
       let reached = false;
+      let everReached = false;
       for (;;) {
         const pose = this.odometry.getPose();
         const dxIn = xIn - pose.xIn;
@@ -922,8 +932,10 @@
         const distanceIn = Math.hypot(dxIn, dyIn);
         reached = floorOff(reached, distanceIn, exit.errorThreshold);
         const local = toLocalFrame(dxIn, dyIn, pose.headingDeg);
-        const outputVolts = atLeast(this.drivePID.update(distanceIn, 0.0), distanceIn,
-          translationFloor(local.forwardIn, local.lateralIn, this.floors), reached);
+        const outputVolts = keepSpeed(atLeast(this.drivePID.update(distanceIn, 0.0), distanceIn,
+          translationFloor(local.forwardIn, local.lateralIn, this.floors), reached),
+        distanceIn, exit.minVolts, everReached);
+        everReached = everReached || distanceIn <= exit.errorThreshold;
         const scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
         const turnOutput = this.turnPID.update(L.wrapDegrees180(holdHeadingDeg - pose.headingDeg), 0.0);
         this.driveAxes(local.forwardIn * scale, local.lateralIn * scale, turnOutput, exit.maxVolts);
@@ -939,16 +951,18 @@
 
     *moveToPose(xIn, yIn, headingDeg, exit = {}) {
       exit = Object.assign({ positionErrorThresholdIn: 1.0, headingErrorThresholdDeg: 2.0, settleTimeMs: 200,
-        timeoutMs: 4000, maxVolts: 12.0, chain: false }, exit);
+        timeoutMs: 4000, maxVolts: 12.0, chain: false, minVolts: 0.0 }, exit);
       this.drivePID.reset();
       this.turnPID.reset();
       this.target = { kind: 'pose', xIn, yIn, headingDeg };
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
-      // whether position's and heading's push floors are off, see floorOff()
+      // whether position's and heading's push floors are off, see floorOff(); whether the position
+      // has been within its threshold yet, see keepSpeed()
       let positionReached = false;
       let headingReached = false;
+      let positionEverReached = false;
       for (;;) {
         const pose = this.odometry.getPose();
         const dxIn = xIn - pose.xIn;
@@ -956,8 +970,10 @@
         const distanceIn = Math.hypot(dxIn, dyIn);
         positionReached = floorOff(positionReached, distanceIn, exit.positionErrorThresholdIn);
         const local = toLocalFrame(dxIn, dyIn, pose.headingDeg);
-        const outputVolts = atLeast(this.drivePID.update(distanceIn, 0.0), distanceIn,
-          translationFloor(local.forwardIn, local.lateralIn, this.floors), positionReached);
+        const outputVolts = keepSpeed(atLeast(this.drivePID.update(distanceIn, 0.0), distanceIn,
+          translationFloor(local.forwardIn, local.lateralIn, this.floors), positionReached),
+        distanceIn, exit.minVolts, positionEverReached);
+        positionEverReached = positionEverReached || distanceIn <= exit.positionErrorThresholdIn;
         const scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
         const headingError = L.wrapDegrees180(headingDeg - pose.headingDeg);
         headingReached = floorOff(headingReached, headingError, exit.headingErrorThresholdDeg);
@@ -984,12 +1000,16 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorDeg = 0;
-      // whether the push floor is off, see floorOff()
+      // whether the push floor is off, see floorOff(); whether it has been within its threshold
+      // yet, see keepSpeed()
       let reached = false;
+      let everReached = false;
       for (;;) {
         const error = turn.errorDeg(this.imu.getHeadingDeg());
         reached = floorOff(reached, error, exit.errorThreshold);
-        const output = atLeast(this.turnPID.update(error, 0.0), error, this.floors.turn, reached);
+        const output = keepSpeed(atLeast(this.turnPID.update(error, 0.0), error, this.floors.turn, reached),
+          error, exit.minVolts, everReached);
+        everReached = everReached || Math.abs(error) <= exit.errorThreshold;
         this.driveAxes(0.0, 0.0, output, exit.maxVolts);
         finalErrorDeg = Math.abs(error);
         reason = tracker.update(Math.abs(error) <= exit.errorThreshold, this.clock());
@@ -1014,13 +1034,17 @@
       const tracker = new ExitTracker(settleMs(exit), exit.timeoutMs, this.clock());
       let reason = 'running';
       let finalErrorIn = 0;
-      // whether the push floor is off, see floorOff()
+      // whether the push floor is off, see floorOff(); whether it has been within its threshold
+      // yet, see keepSpeed()
       let reached = false;
+      let everReached = false;
       for (;;) {
         const traveledIn = this.world.forwardEncoderIn - startIn;
         const error = inches - traveledIn;
         reached = floorOff(reached, error, exit.errorThreshold);
-        const output = atLeast(this.drivePID.update(inches, traveledIn), error, this.floors.forward, reached);
+        const output = keepSpeed(atLeast(this.drivePID.update(inches, traveledIn), error, this.floors.forward, reached),
+          error, exit.minVolts, everReached);
+        everReached = everReached || Math.abs(error) <= exit.errorThreshold;
         const correction = kHeadingCorrectionKP *
           L.wrapDegrees180(startHeadingDeg - this.imu.getCumulativeHeadingDeg());
         this.driveAxes(output, 0.0, correction, exit.maxVolts);
@@ -1169,7 +1193,7 @@
 
   function exitConditions(exit, defaultThreshold) {
     return Object.assign({ errorThreshold: defaultThreshold, settleTimeMs: 200, timeoutMs: 3000, maxVolts: 12.0,
-      chain: false }, exit);
+      chain: false, minVolts: 0.0 }, exit);
   }
 
   // a chained motion ends the first tick it's there, and leaves the motors running (ExitConditions::chain)

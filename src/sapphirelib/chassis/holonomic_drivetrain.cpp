@@ -85,6 +85,18 @@ double atLeast(double volts, double error, double minVolts, bool reached) {
     return std::copysign(minVolts, error);
 }
 
+// volts raised to at least minVolts toward the error, braking or not, until the motion has got
+// within its threshold (ExitConditions::minVolts). reached is as of the tick before, so the tick it
+// gets there still sends minVolts, which a chained motion leaves running into the next; and it
+// latches, unlike floorOff(), since a floor this high would kick a settling robot back and forth
+// across the target
+double keepSpeed(double volts, double error, double minVolts, bool reached) {
+    if (reached || !(minVolts > 0.0) || (volts * error > 0.0 && std::fabs(volts) >= minVolts)) {
+        return volts;
+    }
+    return std::copysign(minVolts, error);
+}
+
 // the floor for a translation toward (forwardIn, lateralIn) in the robot's frame: the forward and
 // sideways floors, blended by how much of the way is each
 double translationFloor(double forwardIn, double lateralIn, double minForwardVolts,
@@ -456,8 +468,10 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
-    // whether the push floor is off, see floorOff()
+    // whether the push floor is off, see floorOff(); whether the motion has been within its
+    // threshold yet, see keepSpeed()
     bool reached = false;
+    bool everReached = false;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -467,11 +481,13 @@ motion::MotionResult HolonomicDrivetrain::moveToPointHolding(double xIn, double 
         reached = floorOff(reached, distanceIn, exit.errorThreshold);
 
         const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
-        const double outputVolts = atLeast(
-            drivePID_.update(distanceIn, 0.0), distanceIn,
-            translationFloor(local.forwardIn, local.lateralIn, config_.minForwardVolts,
-                             config_.minStrafeVolts),
-            reached);
+        const double outputVolts =
+            keepSpeed(atLeast(drivePID_.update(distanceIn, 0.0), distanceIn,
+                              translationFloor(local.forwardIn, local.lateralIn,
+                                               config_.minForwardVolts, config_.minStrafeVolts),
+                              reached),
+                      distanceIn, exit.minVolts, everReached);
+        everReached = everReached || distanceIn <= exit.errorThreshold;
         const double scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
 
         // hold heading like moveToPose(), so the chassis doesn't yaw on the way
@@ -514,9 +530,11 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
-    // whether position's and heading's push floors are off, see floorOff()
+    // whether position's and heading's push floors are off, see floorOff(); whether the position
+    // has been within its threshold yet, see keepSpeed()
     bool positionReached = false;
     bool headingReached = false;
+    bool positionEverReached = false;
 
     while (true) {
         const odom::Pose pose = odometry.getPose();
@@ -526,11 +544,13 @@ motion::MotionResult HolonomicDrivetrain::moveToPose(double xIn, double yIn, dou
         positionReached = floorOff(positionReached, distanceIn, exit.positionErrorThresholdIn);
 
         const motion::LocalOffset local = motion::toLocalFrame(dxIn, dyIn, pose.headingDeg);
-        const double outputVolts = atLeast(
-            drivePID_.update(distanceIn, 0.0), distanceIn,
-            translationFloor(local.forwardIn, local.lateralIn, config_.minForwardVolts,
-                             config_.minStrafeVolts),
-            positionReached);
+        const double outputVolts =
+            keepSpeed(atLeast(drivePID_.update(distanceIn, 0.0), distanceIn,
+                              translationFloor(local.forwardIn, local.lateralIn,
+                                               config_.minForwardVolts, config_.minStrafeVolts),
+                              positionReached),
+                      distanceIn, exit.minVolts, positionEverReached);
+        positionEverReached = positionEverReached || distanceIn <= exit.positionErrorThresholdIn;
         const double scale = distanceIn > 1e-6 ? outputVolts / distanceIn : 0.0;
 
         const double headingError = wrapDegrees180(headingDeg - pose.headingDeg);
@@ -847,16 +867,20 @@ motion::MotionResult HolonomicDrivetrain::driveDistance(double inches, ExitCondi
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorIn = 0.0;
-    // whether the push floor is off, see floorOff()
+    // whether the push floor is off, see floorOff(); whether it has been within its threshold
+    // yet, see keepSpeed()
     bool reached = false;
+    bool everReached = false;
 
     while (true) {
         const double traveledInches = degreesToInches(cornerAverageDegrees() - startDegrees);
         const double error = inches - traveledInches;
         reached = floorOff(reached, error, exit.errorThreshold);
 
-        const double output = atLeast(drivePID_.update(inches, traveledInches), error,
-                                      config_.minForwardVolts, reached);
+        const double output = keepSpeed(atLeast(drivePID_.update(inches, traveledInches), error,
+                                                config_.minForwardVolts, reached),
+                                        error, exit.minVolts, everReached);
+        everReached = everReached || std::fabs(error) <= exit.errorThreshold;
 
         double correction = 0.0;
         if (config_.headingCorrectionKP != 0.0) {
@@ -901,8 +925,10 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
     motion::ExitTracker tracker(settleMs(exit), exit.timeoutMs, pros::millis());
     motion::ExitReason reason = motion::ExitReason::running;
     double finalErrorDeg = 0.0;
-    // whether the push floor is off, see floorOff()
+    // whether the push floor is off, see floorOff(); whether it has been within its threshold
+    // yet, see keepSpeed()
     bool reached = false;
+    bool everReached = false;
 
     while (true) {
         const double error = turn.errorDeg(imu_.getHeadingDeg());
@@ -911,7 +937,9 @@ motion::MotionResult HolonomicDrivetrain::turnToHeading(double headingDeg, ExitC
         // the PID doesn't know heading wraps at 360, so pass the wrapped error as the target and 0
         // as the measurement
         const double output =
-            atLeast(turnPID_.update(error, 0.0), error, config_.minTurnVolts, reached);
+            keepSpeed(atLeast(turnPID_.update(error, 0.0), error, config_.minTurnVolts, reached),
+                      error, exit.minVolts, everReached);
+        everReached = everReached || std::fabs(error) <= exit.errorThreshold;
 
         const WheelMix mix =
             capMix(mixHolonomic(/*throttle=*/0.0, /*strafe=*/0.0, output), exit.maxVolts);

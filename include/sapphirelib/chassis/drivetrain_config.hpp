@@ -162,6 +162,18 @@ struct ExitConditions {
      * default
      */
     bool chain = false;
+
+    /**
+     * the least the motion drives toward its target with, in volts, whatever the PID asks for,
+     * until the error first gets within errorThreshold: for a chained motion, so it reaches its
+     * exit at speed instead of slowing down for a stop it won't make, and the next motion carries
+     * on from there. It overrides the PID's braking too. Off for good once within errorThreshold:
+     * an unchained motion settles with its PID from there, after overshooting by however far that
+     * speed carries it. Held to maxVolts. driveDistance() and moveToPoint() drive at it (a
+     * holonomic moveToPoint() still holding its heading); turnToHeading() turns at it. 0 (the
+     * default) leaves it to the PID
+     */
+    double minVolts = 0.0;
 };
 
 } // namespace sapphirelib::chassis

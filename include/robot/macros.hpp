@@ -365,6 +365,11 @@ void setLiftLevel(Goal goal, int level);
 /// setLiftLevel() picked (the bottom if none did).
 void setLiftDeg(double deg);
 
+/// Where the level the last setLiftLevel() picked sits, in motor degrees up
+/// from the bottom switch (the bottom if none did): for a setLiftDeg() a set
+/// amount above or below it.
+double liftLevelDeg();
+
 /// Where R2's score dips to from the level the last setLiftLevel() picked,
 /// in motor degrees: 30 degrees past halfway to the level below, but never
 /// past it. At the bottom, the bottom. For setLiftDeg().
@@ -384,6 +389,13 @@ std::uint32_t scoreCount();
 /// branches on (autons.cpp's Branch routines). Reads the sensor, so it's
 /// current; safe from any task, including a trajectory's next.
 bool pinInClaw();
+
+/// What the claw's distance sensor reads, in mm: for a routine that wants a
+/// closer check than pinInClaw()'s (autons.cpp's fromLoader() wants a Pin
+/// within 50mm after a grab). 9999 when it sees nothing, and INT32_MAX
+/// (PROS_ERR) unplugged, so a "this close or closer" test fails on both.
+/// Reads the sensor, so it's current; safe from any task.
+std::int32_t clawSensorMm();
 
 /// Whether the lift is pressing its bottom switch. Reads the switch, so it's
 /// current; safe from any task.

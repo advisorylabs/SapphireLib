@@ -95,6 +95,84 @@ test('chaining ends a motion still moving, and the next starts from speed', () =
   assert.ok(Math.hypot(chained.world.truth.xIn - 24, chained.world.truth.yIn + 16) < 1);
 });
 
+test('minVolts: a chained motion reaches its exit at that speed, and hands it to the next', () => {
+  // the robot's speed just after the chained move ends, the least it drove with on the way in,
+  // and the volts it left running for the next motion
+  const square = (minVolts) => {
+    let speedInPerS = null;
+    let lowest = Infinity;
+    let leftRunning = null;
+    let first = false;
+    const sim = run(START, function* (a, s) {
+      a.setPose(0, -40, 0);
+      first = true;
+      yield* a.moveToPoint(0, -16, { chain: true, minVolts });
+      first = false;
+      leftRunning = Math.hypot(s.robot.drivetrain.applied.forward, s.robot.drivetrain.applied.strafe);
+      const from = Object.assign({}, s.world.truth);
+      const fromMs = s.world.timeMs;
+      yield* a.delay(10);
+      speedInPerS = Math.hypot(s.world.truth.xIn - from.xIn, s.world.truth.yIn - from.yIn) /
+        ((s.world.timeMs - fromMs) / 1000);
+      yield* a.moveToPoint(24, -16);
+    }, { during: (s) => {
+      // minVolts is the translation's: forward, and the little sideways that steers it in
+      const v = s.robot.drivetrain.applied;
+      if (first) lowest = Math.min(lowest, Math.hypot(v.forward, v.strafe));
+    } });
+    return { sim, speedInPerS, lowest, leftRunning };
+  };
+  const bare = square(0);
+  const kept = square(8);
+  assert.ok(kept.lowest >= 8 - 1e-9, `drove in at ${kept.lowest.toFixed(2)}V`);
+  assert.ok(kept.leftRunning >= 8 - 1e-9, `left ${kept.leftRunning.toFixed(2)}V running`);
+  assert.ok(bare.leftRunning < 8, `without it, the PID had slowed to ${bare.leftRunning.toFixed(2)}V`);
+  assert.ok(kept.speedInPerS > bare.speedInPerS + 5,
+    `${kept.speedInPerS.toFixed(1)} in/s with it vs ${bare.speedInPerS.toFixed(1)} without`);
+  // and the next motion still lands
+  assert.ok(Math.hypot(kept.sim.world.truth.xIn - 24, kept.sim.world.truth.yIn + 16) < 1);
+});
+
+test('minVolts is held to maxVolts and the speed limit, and an unchained motion still settles', () => {
+  let worst = 0;
+  const sim = run(START, function* (a) {
+    a.setPose(0, -40, 0);
+    yield* a.moveToPoint(0, -20, { maxVolts: 4, minVolts: 8, timeoutMs: 8000 });
+    a.setSpeedLimit(5);
+    yield* a.turnTo(90, { minVolts: 8 });
+    a.setSpeedLimit(12);
+  }, { during: (s) => {
+    const v = s.robot.drivetrain.applied;
+    worst = Math.max(worst, Math.abs(v.forward) + Math.abs(v.strafe) + Math.abs(v.turn));
+  } });
+  assert.ok(worst <= 5 + 1e-9, `a wheel got ${worst.toFixed(2)}V`);
+  // overshot at speed, then the PID brought it back
+  assert.ok(Math.hypot(sim.world.truth.xIn, sim.world.truth.yIn + 20) < 1,
+    `ended at (${sim.world.truth.xIn.toFixed(2)}, ${sim.world.truth.yIn.toFixed(2)})`);
+  assert.ok(Math.abs(sim.world.truth.headingDeg - 90) < 3, `heading ${sim.world.truth.headingDeg.toFixed(1)}`);
+});
+
+test('minVolts on turnTo() and drive(): each pushes with at least it until there', () => {
+  const lowest = { turn: Infinity, forward: Infinity };
+  let leg = null;
+  const sim = run(START, function* (a) {
+    a.setPose(0, -40, 0);
+    leg = 'turn';
+    yield* a.turnTo(90, { chain: true, minVolts: 6 });
+    leg = 'forward';
+    yield* a.drive(20, { chain: true, minVolts: 6 });
+    leg = null;
+    yield* a.drive(0);
+  }, { during: (s) => {
+    const v = s.robot.drivetrain.applied;
+    if (leg === 'turn') lowest.turn = Math.min(lowest.turn, Math.abs(v.turn));
+    if (leg === 'forward') lowest.forward = Math.min(lowest.forward, v.forward);
+  } });
+  assert.ok(lowest.turn >= 6 - 1e-9, `turned at ${lowest.turn.toFixed(2)}V`);
+  assert.ok(lowest.forward >= 6 - 1e-9, `drove at ${lowest.forward.toFixed(2)}V`);
+  assert.ok(sim.world.truth.xIn > 15, `drove on to x ${sim.world.truth.xIn.toFixed(2)}`);
+});
+
 test('turnTo() goes the way it\'s told', () => {
   const turn = (direction) => run(START, function* (a) {
     a.setPose(0, -40, 0);

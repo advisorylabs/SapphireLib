@@ -89,6 +89,7 @@ turnTo(90, {.exitError = 1});                // stop within 1 degree, not 2
 moveToPoint(0, 24, {.chain = true});         // keep moving into the next motion...
 moveToPoint(24, 48);                         // ...which ends stopped
 moveToPoint(0, 0, {.reverse = true});        // back up to it (tank)
+moveToPoint(0, 24, {.chain = true, .minVolts = 6}); // don't slow below 6V before handing off
 ```
 
 Options go in the order of the table below: `{.reverse = true, .timeoutMs = 1000}` works, but
@@ -101,13 +102,18 @@ Options go in the order of the table below: `{.reverse = true, .timeoutMs = 1000
 | `maxVolts` | 12 | Top motor voltage. Lower is gentler. The whole output scales down, so the robot still heads the same way |
 | `chain` | `false` | End as soon as it's close, without settling, and leave the motors running: the next motion starts at speed. Faster, a little less exact |
 | `exitError` | 1 in / 2 degrees (3 in / 5 degrees chaining) | How close counts as there |
+| `minVolts` | 0 | The least voltage it drives (or turns) toward the target with until it's first within `exitError`, even over the PID's braking. For `chain`: the motion reaches its exit at that speed or more instead of slowing for a stop it won't make, and leaves it running for the next motion. Held to `maxVolts` and `setSpeedLimit()`. `moveToPose()` holds its drive to it, not its turn to the heading |
 
 - **A lower `maxVolts` is slower**, so give it a longer `timeoutMs`: 4V can take twice as long as
   the default 3 seconds allows.
+- **`minVolts` without `chain` overshoots**: it arrives at that speed, carries on by however far
+  that takes to stop, then settles back with its PID. Use it unchained only when you mean to hit
+  something at speed.
 - **Never chain a routine's last motion.** Nothing after it would stop the robot. (The selector
   stops the drive when a routine returns, but don't count on it mid-routine.)
-- `followPath()` takes its own: `{.timeoutMs = 10000, .maxVolts = 8, .lookaheadIn = 10, .chain = false}`.
+- `followPath()` takes its own: `{.timeoutMs = 10000, .maxVolts = 8, .lookaheadIn = 10, .chain = false, .minVolts = 0}`.
   `maxVolts` is the speed it follows the path at; a bigger `lookaheadIn` is smoother but cuts corners.
+  `minVolts` holds up the final approach onto the last point, as for the other motions.
 
 Every motion returns a `MotionResult`: `.settled()` is true if it got there, `.reason` says why it
 ended (`settled`, `timedOut`, `aborted`, `interrupted`), `.finalError` how far off it was, and
@@ -257,11 +263,14 @@ wall it heads for and set the one coordinate across that wall. They return `true
 skip the reading (changing nothing, the terminal says why) when:
 
 - the beam meets the wall more than 30 degrees off square,
-- it lands within 18 in of a corner, where Override's loaders are,
-- it would move the robot more than 8 in, which is likelier a game element than the wall, or
+- it lands within 16 in of a corner, where Override's loaders are,
+- it would move the robot more than 60 in, which no drift explains, or
 - there's no reading, or no `setPose()` yet.
 
-The 18 in and the 8 in are set in [`devices.cpp`](../src/robot/devices.cpp), in `auton::use()`.
+The 16 in and the 60 in are set in [`devices.cpp`](../src/robot/devices.cpp), in `auton::use()`.
+For one spot you know is clean, pass your own instead, e.g.
+`resetLeft({.cornerMarginIn = 10, .maxJumpIn = 60});` (the Skills routine resets beside the loader
+that way).
 Reset when the robot is still and square to a clear wall, a few feet out: the middle of a wall is the
 cleanest. A reset starts MCL's particles over around the new spot too.
 
@@ -275,6 +284,7 @@ During autonomous the driver macros aren't running, so move things directly:
 | `macros::setExtended(true / false)` | push the side piston out or pull it in |
 | `macros::setLiftLevel(macros::Goal::alliance, 3)` | send the lift to a goal's level (`alliance`, `medium`, `center`), numbered as the controller shows them, 0 the bottom; returns at once |
 | `macros::setLiftDeg(deg)` | send the lift to any height, in motor degrees up from the bottom switch; returns at once |
+| `macros::liftLevelDeg()` | where the level `setLiftLevel()` last picked sits, for `setLiftDeg(macros::liftLevelDeg() + 40)` and the like |
 | `macros::liftScoreDeg()` | where R2's score dips to from the level `setLiftLevel()` last picked, for `setLiftDeg()` |
 | `macros::waitForLift(timeoutMs)` | wait for the lift to get where it was sent; false if it timed out |
 | `macros::pinInClaw()` | whether the claw's sensor sees a pin |

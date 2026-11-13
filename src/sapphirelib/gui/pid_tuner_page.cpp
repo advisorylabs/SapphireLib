@@ -8,11 +8,30 @@
 #include "pros/misc.hpp"
 #include "pros/rtos.hpp"
 #include "sapphirelib/odom/odometry_math.hpp"
+#include "sapphirelib/telemetry/calibration_log.hpp"
 #include "sapphirelib/tuning/characterization_math.hpp"
 
 namespace sapphirelib::gui {
 
 namespace {
+
+// one Auto-Tune axis's measurement, a line of the calibration log's record. kG only for a
+// mechanism; a drive axis has none
+void addAxisRecord(telemetry::CalibrationRecord& record, const std::string& name, bool mechanism,
+                   const tuning::MechanismCharacterization& result, double samplePeriodS) {
+    const tuning::MechanismModel& model = result.fit.model;
+    record.line("autotune.axis")
+        .add("name", name)
+        .add("ok", result.ok ? 1.0 : 0.0)
+        .add("kS", model.motion.kS)
+        .add("kV", model.motion.kV)
+        .add("kA", model.motion.kA);
+    if (mechanism) record.add("kG", model.kG);
+    record.add("r2", result.fit.rSquared)
+        .add("samples_used", static_cast<double>(result.fit.samplesUsed))
+        .add("delay_s", result.delayS)
+        .add("sample_period_s", samplePeriodS);
+}
 
 constexpr double kStepP = 0.05;
 constexpr double kStepI = 0.01;
@@ -371,13 +390,24 @@ void PidTunerPage::applyWheelSizes() {
     // changing Actual corrects the run's reading rather than compounding the last Apply
     const std::vector<CalibratedWheel>& wheels = wheelRuns_[wheelReadRun_].wheels;
     wheelAppliedIn_.assign(wheels.size(), std::nan(""));
+    // to the SD card's calibration log in full, with the tape and each wheel's reading
+    telemetry::CalibrationRecord record("wheels");
+    record.add("run", wheelReadRun_ == kForwardRun ? "forward" : "strafe")
+        .add("drive_in", wheelRuns_[wheelReadRun_].distanceIn)
+        .add("actual_in", actualIn_);
     for (std::size_t i = 0; i < wheels.size(); ++i) {
         const double diameterIn =
             odom::calibrateWheelDiameterIn(wheelDiameterAtRunIn_[i], wheelReadIn_[i], actualIn_);
+        record.line("wheels.wheel")
+            .add("name", wheels[i].name)
+            .add("read_in", wheelReadIn_[i])
+            .add("diameter_in", diameterIn)
+            .add("was_diameter_in", wheelDiameterAtRunIn_[i]);
         if (std::isnan(diameterIn)) continue;
         wheels[i].setDiameterIn(diameterIn);
         wheelAppliedIn_[i] = diameterIn;
     }
+    telemetry::saveCalibration(record);
     wheelApplied_ = true;
     appliedActualIn_ = actualIn_;
     refreshWheelLabels();
@@ -692,11 +722,21 @@ void PidTunerPage::runAutoTune() {
     pros::Task([this, group] {
         bool allMeasured = true;
         std::vector<std::function<void()>> finishes;
+        // to the SD card's calibration log in full: every axis this run measured (one that gave no
+        // usable model too, ok=0), then the gains designed from them
+        telemetry::CalibrationRecord record("autotune");
+        record.add("group", group.empty() ? "drive" : group);
+        bool anyMeasured = false;
         for (std::size_t i = 0; i < axes_.size(); ++i) {
             Axis& axis = *axes_[i];
             if (axis.group != group) continue;
             measuringAxis_.store(static_cast<int>(i));
-            if (!measureAxis(axis, finishes)) {
+            const bool measured = measureAxis(axis, finishes);
+            if (measured || !stopped_.load()) {
+                addAxisRecord(record, axis.name, axis.mechanism, axis.result, axis.samplePeriodS);
+                anyMeasured = true;
+            }
+            if (!measured) {
                 // stop here: the robot is probably set up wrong, which likely affects the next axis
                 // too (or someone tapped Stop). Nothing is applied, so every controller keeps its
                 // old gains
@@ -725,9 +765,22 @@ void PidTunerPage::runAutoTune() {
                 if (!entry->design.ok) continue;
                 entry->pid->setGains(entry->design.gains);
                 entry->designed = true;
+                const tuning::GainDesign& design = entry->design;
+                record.line("autotune.gains")
+                    .add("name", entry->name)
+                    .add("axis", entry->axis)
+                    .add("kP", design.gains.kP)
+                    .add("kI", design.gains.kI)
+                    .add("kD", design.gains.kD)
+                    .add("settle_s", design.settleTimeS)
+                    .add("natural_frequency", design.naturalFrequency)
+                    .add("phase_margin_deg", design.phaseMarginDeg)
+                    .add("limited_by_delay", design.limitedByDelay ? 1.0 : 0.0)
+                    .add("static_error_bound", design.staticErrorBound);
             }
             if (!entries_.empty()) setDisplayedGains(entries_[selectedIndex_]->pid->gains());
         }
+        if (anyMeasured) telemetry::saveCalibration(record);
         // stopped, failed, or finished: now the gains are set, every run that started finishes
         for (const auto& finish : finishes) finish();
 

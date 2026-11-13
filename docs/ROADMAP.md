@@ -760,9 +760,10 @@ first:
       delegating constructor first (non-breaking) and deprecate the positional one later.
 - [ ] Per-motion params and unified exit types: `chassis::ExitConditions` and
       `motion::PoseExitConditions` live in different namespaces, and `motion_config.hpp` and the
-      chassis headers include each other. Move the exit types to `motion/` (keeping an alias) and add
-      LemLib-style per-call params (`maxVolts`, `minVolts`, `earlyExitIn`, `reverse`): today the only
-      speed limit is each PID's shared `outputLimit`.
+      chassis headers include each other. Move the exit types to `motion/` (keeping an alias). The
+      LemLib-style per-call params are in: `maxVolts`, `exitError` (LemLib's `earlyExitRange`),
+      `reverse`, and `minVolts` (2026-11-11: `ExitConditions::minVolts` and
+      `PoseExitConditions::minVolts`, so a chained motion reaches its exit at speed).
 - [ ] Explicit `calibrate()`: move the IMU's blocking calibration out of the drivetrain constructor,
       so the chassis can be an ordinary global and the accessors become optional. It changes
       constructor semantics, so it goes with the config-struct change.

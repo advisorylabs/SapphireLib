@@ -8,6 +8,7 @@
 #include <mutex>
 #include <utility>
 
+#include "sapphirelib/telemetry/calibration_log.hpp"
 #include "sapphirelib/telemetry/event.hpp"
 #include "sapphirelib/util/angle.hpp"
 #include "sapphirelib/util/clock.hpp"
@@ -105,6 +106,53 @@ const char* sideOf(const DistanceSensorMount& mount) {
         if (std::fabs(wrapDegrees180(facing - 90.0 * side)) < 1.0) return sides[side];
     }
     return "angled";
+}
+
+// a sensor mount calibration, to the SD card's calibration log in full: what it found overall,
+// then a line per sensor, with the mount each replaced
+void saveMountCalibration(const MountCalibrationResult& result,
+                          const std::vector<DistanceSensorMount>& was,
+                          const std::vector<pros::Distance>& sensors,
+                          const MountCalibrationConfig& config) {
+    telemetry::CalibrationRecord record("mounts");
+    record.add("ok", result.ok ? 1.0 : 0.0);
+    if (!result.ok) record.add("error", result.error);
+    record.add("turns", config.turns)
+        .add("turn_rate_deg_per_s", config.turnRateDegPerS)
+        .add("box_width_in", config.boxWidthIn)
+        .add("box_depth_in", config.boxDepthIn)
+        .add("readings", static_cast<double>(result.readings))
+        .add("readings_used", static_cast<double>(result.readingsUsed))
+        .add("beam_shape", result.beamShape)
+        .add("spacing_from_mounts", result.spacingFromMounts ? 1.0 : 0.0)
+        .add("start_x_in", result.start.xIn)
+        .add("start_y_in", result.start.yIn)
+        .add("start_heading_deg", result.start.headingDeg);
+    for (std::size_t s = 0; s < result.sensors.size(); ++s) {
+        const SensorMountFit& sensor = result.sensors[s];
+        record.line("mounts.sensor")
+            .add("index", static_cast<double>(s))
+            .add("side", sideOf(sensor.mount))
+            .add("port", s < sensors.size() ? static_cast<double>(sensors[s].get_port()) : 0.0)
+            .add("status", mountFitStatusText(sensor.status))
+            .add("forward_in", sensor.mount.forwardIn)
+            .add("right_in", sensor.mount.rightIn)
+            .add("facing_deg", sensor.mount.facingDeg);
+        if (s < was.size()) {
+            record.add("was_forward_in", was[s].forwardIn).add("was_right_in", was[s].rightIn);
+        }
+        record.add("along_in", sensor.alongIn)
+            .add("lateral_in", sensor.lateralIn)
+            .add("along_change_in", sensor.alongChangeIn)
+            .add("lateral_change_in", sensor.lateralChangeIn)
+            .add("along_stderr_in", sensor.alongStderrIn)
+            .add("lateral_stderr_in", sensor.lateralStderrIn)
+            .add("lateral_fitted", sensor.lateralFitted ? 1.0 : 0.0)
+            .add("readings", static_cast<double>(sensor.readings))
+            .add("rms_error_in", sensor.rmsErrorIn)
+            .add("walls", static_cast<double>(sensor.walls));
+    }
+    telemetry::saveCalibration(record);
 }
 
 } // namespace
@@ -489,8 +537,10 @@ MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
 
     if (stuck) {
         result.error = "the spin didn't finish: blocked?";
+        result.readings = samples.size();
         SAPPHIRELIB_LOG_ERROR("mcl", "sensor mount calibration: %s", result.error);
         telemetry::event("mcl", "mount_calibration,failed,%s", result.error);
+        saveMountCalibration(result, mounts, sensors_, config);
         calibratingMounts_.store(false);
         return result;
     }
@@ -531,6 +581,7 @@ MonteCarloLocalizer::calibrateSensorMounts(std::function<void(double)> setSpin,
                          sensor.mount.forwardIn, sensor.mount.rightIn, sensor.mount.facingDeg,
                          sensor.alongStderrIn);
     }
+    saveMountCalibration(result, mounts, sensors_, config);
     calibratingMounts_.store(false);
     return result;
 }

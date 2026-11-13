@@ -1560,6 +1560,8 @@ void setLiftDeg(double deg) {
     sapphirelib::telemetry::event("macro", "lift_deg,deg=%.0f", deg);
 }
 
+double liftLevelDeg() { return ladder.levelPosition(); }
+
 double liftScoreDeg() { return scoreDipDeg(); }
 
 bool waitForLift(std::uint32_t timeoutMs) { return lift.waitUntilSettled(timeoutMs); }
@@ -1567,6 +1569,8 @@ bool waitForLift(std::uint32_t timeoutMs) { return lift.waitUntilSettled(timeout
 std::uint32_t scoreCount() { return scoresReleased.load(); }
 
 bool pinInClaw() { return pieceInClaw(clawSensor.get_distance()); }
+
+std::int32_t clawSensorMm() { return clawSensor.get_distance(); }
 
 bool liftAtBottom() { return switchPressed(); }
 

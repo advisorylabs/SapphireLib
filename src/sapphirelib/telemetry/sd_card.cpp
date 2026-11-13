@@ -93,4 +93,41 @@ bool writeCardFile(const char* path, std::string_view text, std::uint32_t waitMs
     return std::fclose(file) == 0 && ok;
 }
 
+bool appendCardFile(const char* path, std::string_view text, std::string_view newFileHeader,
+                    std::uint32_t waitMs) {
+    // one chunk of buffer, as writeCardFile()'s
+    const std::unique_ptr<char[]> buffer = std::make_unique<char[]>(kCardChunkBytes);
+    std::FILE* file = nullptr;
+    bool made = false;
+    {
+        const SdCardLock card(waitMs);
+        if (!card.held()) return false;
+        // whether it's there first: "w" would make a new one, but also empty one that "a" merely
+        // failed to open
+        std::FILE* existing = std::fopen(path, "r");
+        if (existing != nullptr) {
+            std::fclose(existing);
+            file = std::fopen(path, "a");
+        } else {
+            file = std::fopen(path, "w");
+            made = true;
+        }
+        if (file == nullptr) return false;
+        std::setvbuf(file, buffer.get(), _IOFBF, kCardChunkBytes);
+    }
+    std::string_view parts[] = {made ? newFileHeader : std::string_view(), text};
+    bool ok = true;
+    for (const std::string_view part : parts) {
+        for (std::size_t at = 0; ok && at < part.size(); at += kCardChunkBytes) {
+            const SdCardLock card(waitMs);
+            const std::size_t length = std::min(kCardChunkBytes, part.size() - at);
+            ok = card.held() && std::fwrite(part.data() + at, 1, length, file) == length &&
+                 std::fflush(file) == 0;
+        }
+    }
+    const SdCardLock card(waitMs);
+    if (!card.held()) return false; // leaked rather than closed unheld, as in readCardFile()
+    return std::fclose(file) == 0 && ok;
+}
+
 } // namespace sapphirelib::telemetry

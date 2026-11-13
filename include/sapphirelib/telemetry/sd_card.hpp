@@ -91,4 +91,20 @@ bool readCardFile(const char* path, std::string& text, std::size_t maxBytes, std
  */
 bool writeCardFile(const char* path, std::string_view text, std::uint32_t waitMs);
 
+/**
+ * @brief Add to the end of a file, a chunk at a time, holding the card (SdCardLock) for each, as
+ * writeCardFile() does. A file that isn't there yet is made, starting with newFileHeader
+ *
+ * A file that's there but won't open to add to is left alone, never replaced
+ *
+ * @param path the file, e.g. "/usd/sl/CALIB.TXT". The folder must exist
+ * @param text what to add
+ * @param newFileHeader what a new file starts with, before text. Empty for nothing
+ * @param waitMs the longest to wait for the card for any one chunk, in milliseconds
+ * @return true if every chunk was written and the file closed. False if the folder's missing (or
+ * there's no card), or the card stayed busy
+ */
+bool appendCardFile(const char* path, std::string_view text, std::string_view newFileHeader,
+                    std::uint32_t waitMs);
+
 } // namespace sapphirelib::telemetry
